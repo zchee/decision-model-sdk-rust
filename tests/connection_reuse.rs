@@ -68,6 +68,16 @@ fn client_for(server: &TestServer) -> Client {
     builder_for(server).build().expect("the client builds")
 }
 
+/// A client of `server`, trusting its certificate, under `Http2Only`, that
+/// makes one attempt per call.
+fn one_attempt_client_for(server: &TestServer) -> Client {
+    builder_for(server)
+        .http_version(HttpVersion::Http2Only)
+        .retry(RetryPolicy::default().max_retries(0))
+        .build()
+        .expect("the client builds")
+}
+
 /// A client of `base_url` that makes one attempt per call.
 fn one_attempt_client(base_url: &str, version: HttpVersion) -> Client {
     Client::builder()
@@ -216,6 +226,23 @@ async fn a_cold_fan_out_opens_one_connection() {
         "AC-P4 (b): 64 cold concurrent calls, {} connection(s)",
         server.accepted_connections()
     );
+}
+
+/// A cold burst of 64 calls that make one attempt each: every call succeeds,
+/// over one connection. It pins that no request waiting at the gate fails
+/// when the opener's connect succeeds. Under the default retry policy a
+/// waiter failed by mistake would be retried on the pool, which by then
+/// holds the connection, and the burst would still pass: here a retry cannot
+/// be what makes it pass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_burst_without_retries_succeeds_on_one_connection() {
+    let server = tls_server().await;
+    let client = one_attempt_client_for(&server);
+
+    concurrently(&client, &questions(), 64).await;
+    assert_eq!(server.request_count(), 64);
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
+    assert_all_http2(&server);
 }
 
 /// AC-P4 (c): after `warm_up`, 64 calls started together open no new
