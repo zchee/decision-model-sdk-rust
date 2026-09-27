@@ -10,6 +10,14 @@
 //! and an HTTP/2 connection is kept alive by a PING every 30 seconds, idle or
 //! not, so that a load balancer does not drop it between calls. Nagle's
 //! algorithm is off, because every request and response here is small.
+//!
+//! Under `Http2Only` every request of a client shares one connection. While
+//! the pool holds none - before the first request, or once the connection it
+//! held has closed - one request opens it and the others wait at a gate until
+//! hyper-util reports that connection, so a burst opens one connection. The
+//! gate does not see a connection that ends while requests are in flight:
+//! hyper-util replaces it on its own, and a burst at that moment can still
+//! open a second connection, which the pool closes at once.
 
 use std::{
     error::Error as StdError,
@@ -58,8 +66,13 @@ pub enum HttpVersion {
     /// HTTP/2 only: negotiated through TLS ALPN on `https`, and spoken with
     /// prior knowledge (h2c) on `http`.
     ///
-    /// Every request of a client shares one multiplexed connection, including
-    /// requests started together on a client that has no connection yet.
+    /// Every request of a client shares one multiplexed connection. While the
+    /// client has no connection - before its first request, or after the
+    /// server closed the connection while the client was idle - one request
+    /// opens it and the others started at the same time wait for it, so they
+    /// share it too. When a connection ends while requests are in flight,
+    /// hyper-util replaces it on its own, and a burst at that moment can still
+    /// open a second connection, which is closed at once.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.

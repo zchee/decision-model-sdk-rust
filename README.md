@@ -391,8 +391,12 @@ operating system's trust store through `rustls-platform-verifier` (plus any
 pings every 30 s.
 
 - For an `https` base URL the default is `HttpVersion::Http2Only`: all requests of a client share
-  one multiplexed HTTP/2 connection, including requests started together on a client that has no
-  connection yet (64 concurrent cold calls open exactly 1 connection in the test suite).
+  one multiplexed HTTP/2 connection. While a client has no connection - before its first request,
+  or after the server closed the connection while the client was idle - one request opens it and
+  the others started at the same time wait for it, so a burst opens one connection (64 concurrent
+  cold calls open exactly 1 connection in the test suite). One case is not covered: when a
+  connection ends while requests are in flight, hyper-util replaces it on its own, and a burst at
+  that moment can still open a second connection, which is closed at once.
   `HttpVersion::Auto` lets ALPN choose HTTP/1.1 or HTTP/2, for a proxy that speaks HTTP/1.1 only;
   a cold client under `Auto` may open one connection per request started at the same time. An
   `http` base URL uses `Auto` unless told otherwise.

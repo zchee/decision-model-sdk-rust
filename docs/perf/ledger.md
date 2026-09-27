@@ -585,6 +585,9 @@ binary (median 64, max 64, client_opened 64 in both). It depends on how far the 
 63 tasks are polled, which is a scheduling race. The decision does not rest on it: what matters is that A's median and
 maximum are 64 while B was 1/1/1 in both runs.
 
+B's 1/1/1 was 10 repetitions on an idle macOS machine, and it was not the whole picture: on Linux the same cold fan-out
+opened a second connection in up to 13.6 % of bursts, which S2c measures and explains.
+
 **Decision (plan section 5, S2b rule: "if `http2_only` yields 1 and `Auto` yields > 1, the default for `https` base
 URLs is `Http2Only`, with `Auto` as the documented knob"): the rule fires exactly. `Http2Only` is the default for
 `https` base URLs; `Auto` is the documented knob for HTTP/1.1-only proxies; `http://` base URLs always use `Auto`.**
@@ -593,6 +596,62 @@ Two details for Phase 2. Under `Auto` the pool does collapse to a single connect
 second later - so the cost is 64 TLS handshakes on the cold path, not 64 connections held. And AC-P4(c) is already
 visible here: after one warm-up request, 64 concurrent calls open zero new connections under either mode, which is why
 `warm_up()` is worth documenting before a fan-out even once `Http2Only` is the default.
+
+## S2c - the cold fan-out race
+
+`tests/connection_reuse.rs` `a_cold_fan_out_opens_one_connection` (64 calls started together on a client with no
+connection, HTTP/2 over TLS, `Http2Only`) failed CI twice on `ubuntu-26.04`, and never on macOS.
+Measured on 2026-09-28 by running the test's body in a loop, each iteration with a new server, a new client and a new
+4-worker runtime. Linux is a Docker Desktop linux/arm64 container on an Apple M3 Max host, with its CPUs limited by
+`--cpuset-cpus`; "8 processes" is eight such loops at once in that container.
+
+| system | CPUs | load | cold bursts | with 2 or more connections | rate |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Linux | 4 | idle | 3,000 | 4 | 0.13 % |
+| Linux | 4 | 8 processes | 4,000 | 420 | 10.5 % |
+| Linux | 4 | 3 bodies in one process, as libtest runs a binary's tests | 3,000 | 409 (7 of them with 3) | 13.6 % |
+| Linux, coverage-instrumented | 4 | idle | 2,000 | 89 | 4.45 % |
+| Linux | 2 | idle | 2,000 | 169 | 8.45 % |
+| macOS | 16 | idle | 3,000 | 0 | 0 |
+| macOS | 16 | 48 processes | 4,800 | 3 | 0.06 % |
+| Linux and macOS, warm pool (100 calls one after another, then 100 at once), every configuration above | | | 17,200 | 0 | 0 |
+| Linux, after the change, same configurations | | | not yet measured | | |
+
+hyper-util alone, without the SDK, did the same: 2 connector calls in 5 of 4,000 cold bursts on 4 idle Linux CPUs. The
+rate follows the machine's scheduling, not the code path: the retry policy made no measurable difference (33 against
+42 in 4,000 interleaved bursts each), and tracing raised it (16 against 6 in 4,000).
+
+**What the second connection was.** The client's own: from the next ephemeral port, a completed TLS handshake with
+ALPN `h2`, 0 requests, and closed by the client a median 48 µs (at most 2.1 ms, over 101 records) after its handshake.
+No call failed. hyper-util 0.1.20's pool lets one task at a time connect to an HTTP/2 host (`pool.rs` `connecting`),
+and each request polls its pool checkout and then its lazy connect in one `select` (`client.rs`
+`one_connection_for`). A task that registered as a waiter before the first connection was pooled, and whose connect
+was polled after `pooled` had released the connecting lock, found the lock free and connected again - in 13 of 16
+traces because its thread made no progress for 1.5 to 10.4 ms inside one poll, which is why contention raises the
+rate. The pool keeps one HTTP/2 connection per host (`put; existing idle HTTP/2 connection`), so it dropped the spare,
+but the server had counted it at `accept()`. The cost is one TCP and one TLS handshake.
+
+**What the change does.** Under `Http2Only` the transport now holds every request but one at a gate while its pool
+holds no connection, which it knows at the socket: no request was given a pooled connection since the last connect
+began, or no stream the connector made is still open. The one request (the opener) goes to hyper-util with
+`capture_connection` attached; hyper-util fills it after the new connection is in the pool, and the gate then releases
+every waiter at once, so each one's checkout finds the connection on its first poll and its connect is never started.
+An opener that fails or is dropped passes the turn to one waiter, and a call's deadline covers its wait. A request
+sent while the pool holds a connection pays two atomic loads; one sent while it does not pays a boxed future and a
+clone of the client. `Auto` is unchanged. Every call future over the default transport grew by 16 bytes (the gate's
+reference count in the transport and in its connector): 2,344 / 2,328 / 2,328 / 2,032 became 2,360 / 2,344 / 2,344 /
+2,048, measured on macOS arm64 in both profiles, inside the bounds of `tests/static_assertions.rs`.
+
+What it does not cover: a connection that ends while requests are in flight is replaced inside hyper-util, which
+resends a request that had not started (`retry_canceled_requests`) without passing the gate, so a burst at that
+moment can still open a second connection that is closed at once.
+
+A connection count had a second, rarer possible source: a stranger's request. Two tests of `tests/client.rs` sent calls
+to a port they had bound and released, and Linux hands a released port to the next `bind(0)` about once in 7,058 binds,
+so a test server started inside their retry window could count that request as a connection (seen 62 times in 18,272
+servers in a direct test, each a TLS handshake failed by a plaintext `GET /v1/models`). They now send to `127.0.0.1:1`,
+which no `bind(0)` hands out, and the test server records per connection the peer, the TLS outcome with the first bytes
+of a failed handshake, and the requests served, so a failed count says which of the two it was.
 
 ## S4 - the server's HTTP/2 SETTINGS
 
