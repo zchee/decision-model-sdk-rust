@@ -301,29 +301,25 @@ async fn a_burst_at_a_refusing_port_fails_every_call_and_ends() {
     assert_eq!(typesafe_sdk::__internals::open_streams(&client), 0);
 }
 
-/// Two calls at a server that accepts and never answers each time out at
-/// its own deadline. The first opens and holds the turn while its TLS
-/// handshake waits; the second waits at the gate, and its deadline runs
-/// while it waits. When the first is dropped at its deadline the second
-/// opens a connection of its own, and still ends at its own deadline, not
-/// the first's plus its own.
+/// A call waiting for a connect fails when the call that started it gives
+/// up before a connection exists. The first call opens, and its TLS handshake
+/// waits at a server that accepts and never answers; the second waits at the
+/// gate. When the first is dropped at its deadline, the second fails at once
+/// with a connection error that says so, well before its own deadline,
+/// instead of starting a connect of its own at a server that has just failed
+/// to answer one: the server accepts one connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn calls_at_a_silent_server_time_out_at_their_own_deadlines() {
+async fn a_waiting_call_fails_when_the_call_that_opened_gives_up() {
     const FIRST: Duration = Duration::from_millis(300);
     const SECOND: Duration = Duration::from_millis(1500);
 
     let server = SilentServer::start().await.expect("the silent server starts");
-    let client = Client::builder()
-        .api_key("test-key")
-        .base_url(format!("https://{}", server.addr()))
-        .retry(RetryPolicy::default().max_retries(0))
-        .build()
-        .expect("the client builds");
+    let client = one_attempt_client(&format!("https://{}", server.addr()), HttpVersion::Http2Only);
     let questions = questions();
+    let started = Instant::now();
     let timed = |deadline: Duration| {
         let (client, questions) = (client.clone(), questions.clone());
         tokio::spawn(async move {
-            let started = Instant::now();
             let error = client
                 .system_one("hello", &questions)
                 .timeout(deadline)
@@ -345,34 +341,33 @@ async fn calls_at_a_silent_server_time_out_at_their_own_deadlines() {
         .unwrap_or_else(|_| panic!("the first call did not connect within 5 s: {server:?}"));
     let second = timed(SECOND);
 
-    let (first, second) = tokio::time::timeout(Duration::from_secs(10), async {
-        (first.await.expect("the first task ran"), second.await.expect("the second task ran"))
-    })
-    .await
-    .expect("both calls ended within 10 s");
+    let ((first_ended, first), (second_ended, second)) =
+        tokio::time::timeout(Duration::from_secs(10), async {
+            (first.await.expect("the first task ran"), second.await.expect("the second task ran"))
+        })
+        .await
+        .expect("both calls ended within 10 s");
 
-    for ((elapsed, error), deadline) in [(&first, FIRST), (&second, SECOND)] {
-        assert!(
-            matches!(error.kind(), ErrorKind::Timeout { timeout } if *timeout == deadline),
-            "{deadline:?}: {error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            format!("Request timed out (timeout={}s).", deadline.as_secs_f64())
-        );
-        assert!(*elapsed >= deadline, "{deadline:?}: ended after {elapsed:?}");
-    }
-    // Had the second call's deadline started only when it left the gate, it
-    // would have ended after both deadlines.
     assert!(
-        second.0 < FIRST + SECOND,
-        "the second call ended after {:?}: its deadline did not cover its wait at the gate",
-        second.0
+        matches!(first.kind(), ErrorKind::Timeout { timeout } if *timeout == FIRST),
+        "the first call times out at its deadline: {first:?}"
+    );
+    assert!(first_ended >= FIRST, "the first call ended after {first_ended:?}");
+    assert!(matches!(second.kind(), ErrorKind::Connection), "{second:?}");
+    assert_eq!(
+        second.to_string(),
+        "Connection error: the connect this request waited for was given up: the request that \
+         started it was dropped before a connection existed"
+    );
+    assert!(
+        (FIRST..FIRST + Duration::from_millis(500)).contains(&second_ended),
+        "the second call ended {second_ended:?} after the start, not with the first at its \
+         deadline of {FIRST:?}; its own was {SECOND:?}"
     );
     assert_eq!(
         server.accepted_connections(),
-        2,
-        "the second call connected once the first gave its turn back: {server:?}"
+        1,
+        "the second call did not connect on its own: {server:?}"
     );
 }
 
