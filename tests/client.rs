@@ -24,8 +24,10 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use serde_json::json;
-use test_support::{Protocol, RecordedRequest, TestServer, json_response, raw_server};
-use tokio::{net::TcpListener, sync::Notify};
+use test_support::{
+    Protocol, RecordedRequest, RefusingPort, TestServer, json_response, raw_server,
+};
+use tokio::sync::Notify;
 use tower_service::Service;
 use typesafe_sdk::{
     ApiError, ApiErrorKind, Body, Choice, Client, ClientBuilder, Content, Error, ErrorKind, Noul,
@@ -534,12 +536,10 @@ async fn server_text_in_an_api_error_is_escaped_and_cut() {
 
 // ------------------------------------------------------ transport errors
 
-/// A base URL with nothing listening at it.
-async fn closed_port() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
-    let address = listener.local_addr().expect("its address");
-    drop(listener);
-    format!("http://{address}")
+/// A port at which every connection is refused, and which no test server of
+/// this run can be given.
+async fn refusing_port() -> RefusingPort {
+    RefusingPort::new().await.unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// Asserts that `error` is a connection error whose message is its cause's
@@ -573,7 +573,8 @@ async fn transport_errors_are_connection_errors_with_their_cause() {
     };
 
     // Nothing listening.
-    let error = client(&closed_port().await).models().list().send().await.expect_err("refused");
+    let refused = refusing_port().await;
+    let error = client(refused.base_url()).models().list().send().await.expect_err("refused");
     let message = connection_message(&error);
     assert!(message.starts_with("Connection error: client error (Connect): "), "{message}");
     let refused = cause::<std::io::Error>(&error).expect("an I/O error under it");
@@ -1954,7 +1955,7 @@ mod logging {
 
         // No response: a timeout, a refused connection, a body over the limit.
         let held = held(Protocol::Http1, br#"{"models":[]}"#).await;
-        let refused = closed_port().await;
+        let refused = refusing_port().await;
         let big = answering(Protocol::Http1, StatusCode::OK, vec![b' '; 4096]).await;
         let cases: [(ClientBuilder, &str, &str); 3] = [
             (
@@ -1965,9 +1966,9 @@ mod logging {
             (
                 ClientBuilder::new()
                     .api_key("test-key")
-                    .base_url(refused.as_str())
+                    .base_url(refused.base_url())
                     .retry(RetryPolicy::default().max_retries(0)),
-                refused.as_str(),
+                refused.base_url(),
                 "connection error",
             ),
             (
