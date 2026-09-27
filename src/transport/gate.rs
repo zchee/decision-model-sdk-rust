@@ -12,18 +12,26 @@
 //! the first connection is in the pool, where the checkout of each finds it
 //! on its first poll, so that its connect is never started.
 //!
+//! When the connect of the request that opens fails, every request waiting
+//! for it fails with it, as hyper-util fails the requests waiting for a
+//! connect it could not make, and none of them connects on its own. When the
+//! request that opens is dropped instead, one waiting request opens: a caller
+//! that gives up does not fail the others.
+//!
 //! What the gate does not see: a connection that ends while requests are in
 //! flight is replaced inside hyper-util, which resends a request that had
 //! not started, and a burst at that moment can still open a second
 //! connection that is closed at once.
 
 use std::{
+    error::Error as StdError,
+    fmt,
     future::{Future, poll_fn},
     io,
     pin::{Pin, pin},
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     task::{Context, Poll, ready},
 };
@@ -40,7 +48,10 @@ use hyper_util::client::legacy::{
 use tokio::sync::Notify;
 use tower_service::Service;
 
-use super::Body;
+use super::{Body, CONNECTION_PREFIX, connection_message};
+
+/// The bit of [`Gate::turns`] that says a request holds the turn to open.
+const HELD: u64 = 1;
 
 /// Whether the pool of one transport holds a connection, and which request
 /// may open one when it does not.
@@ -60,12 +71,14 @@ use super::Body;
 ///   the two whatever the ordering; a stronger one would not close that
 ///   window, which is the case the module comment says the gate does not
 ///   cover.
-/// - `opening` is handed from one request to the next like a lock: taken
-///   with an `Acquire` compare-exchange and given back with a `Release`
-///   store, so that the next opener sees what the last one did, its store to
-///   `pooled` included. A request that fails to take it reads nothing
-///   through it (`Relaxed`), and waits for `changed`, which orders what
-///   follows through its own lock.
+/// - `turns` is taken with an `Acquire` compare-exchange and given back with
+///   a `Release` store. What that buys: the last opener's store of `true` to
+///   `pooled` comes before the next opener's connect stores `false`, so that
+///   `pooled` cannot end `true` while the new connect is in flight. Every
+///   other access is `Relaxed`: a waiting request only compares the count it
+///   read with the turn of a failure, which it reads under `failed`'s lock
+///   after `changed` woke it, and `changed` orders that wake-up after the
+///   release that caused it.
 #[derive(Debug, Default)]
 pub(super) struct Gate {
     /// Streams the connector handed to hyper that are not dropped yet.
@@ -73,10 +86,36 @@ pub(super) struct Gate {
     /// Whether a request was given a pooled connection since the last
     /// connect began.
     pooled: AtomicBool,
-    /// Whether a request holds the turn to open a connection.
-    opening: AtomicBool,
+    /// [`HELD`] when a request holds the turn to open a connection; the bits
+    /// above it count the turns that have ended. Only the holder of the turn
+    /// gives it back, so only one request at a time changes the count.
+    turns: AtomicU64,
+    /// The last turn that ended in a failed connect, and its failure. Locked
+    /// only by an opener whose connect failed and by a waiting request that
+    /// was woken, never across an await.
+    failed: Mutex<Option<Failed>>,
     /// Notified when the opener gives its turn back.
     changed: Notify,
+}
+
+/// A turn that ended in a failed connect.
+#[derive(Debug)]
+struct Failed {
+    /// The number of turns that had ended once this one had.
+    turn: u64,
+    /// The opener's error, rendered as the transport renders the chain of
+    /// any error it fails with.
+    failure: Arc<str>,
+}
+
+/// What a request finds at the gate.
+enum Entry {
+    /// The pool holds a connection: go to it.
+    Pool,
+    /// The turn to open a connection.
+    Open(Opener),
+    /// The connect this request waited for failed.
+    Failed(WaitedConnectFailed),
 }
 
 impl Gate {
@@ -93,26 +132,52 @@ impl Gate {
         self.open.load(Ordering::Relaxed)
     }
 
-    /// Waits until a request may go: `None` once the gate is warm, or the
-    /// turn to open a connection when no other request holds it.
-    async fn enter(self: &Arc<Self>) -> Option<Opener> {
+    /// Waits until a request may go: to the pool once the gate is warm, or
+    /// with the turn to open a connection when no other request holds it.
+    /// A request that is waiting when the opener's connect fails fails with
+    /// it; one that comes after finds the turn free.
+    async fn enter(self: &Arc<Self>) -> Entry {
         loop {
             // Registered before the state is read, so that a turn given back
             // between the read and the wait still wakes this request.
             let mut changed = pin!(self.changed.notified());
             changed.as_mut().enable();
             if self.is_warm() {
-                return None;
+                return Entry::Pool;
             }
-            if self
-                .opening
-                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                return Some(Opener { gate: Arc::clone(self) });
-            }
+            let turns = self.turns.load(Ordering::Relaxed);
+            let ended = if turns & HELD == 0 {
+                match self.turns.compare_exchange(
+                    turns,
+                    turns | HELD,
+                    Ordering::Acquire,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => return Entry::Open(Opener { gate: Arc::clone(self), failure: None }),
+                    // Another request took the turn first: this one waits for
+                    // the turn that request holds.
+                    Err(now) if now & HELD == HELD => now >> 1,
+                    // A whole turn began and ended in between: look again.
+                    Err(_) => continue,
+                }
+            } else {
+                turns >> 1
+            };
             changed.await;
+            if let Some(failure) = self.failed_after(ended) {
+                return Entry::Failed(WaitedConnectFailed(failure));
+            }
         }
+    }
+
+    /// The failure of a turn that ended after `ended` turns had, if one did
+    /// and its connect failed.
+    fn failed_after(&self, ended: u64) -> Option<Arc<str>> {
+        let failed = self.failed.lock().unwrap_or_else(PoisonError::into_inner);
+        failed
+            .as_ref()
+            .filter(|failed| failed.turn > ended)
+            .map(|failed| Arc::clone(&failed.failure))
     }
 
     /// A connect began: the gate is cold until a request is given a pooled
@@ -135,17 +200,58 @@ impl Gate {
 }
 
 /// The turn to open a connection. Dropping it gives the turn back and wakes
-/// every waiting request, whether the opener has its connection, failed, or
-/// was dropped before it could finish.
+/// every waiting request: with a failure when the opener's connect failed,
+/// which fails them all; without one otherwise, and one of them opens.
 struct Opener {
     gate: Arc<Gate>,
+    failure: Option<Arc<str>>,
+}
+
+impl Opener {
+    /// Gives the turn back because the opener's connect failed with
+    /// `failure`.
+    fn fail(mut self, failure: Arc<str>) {
+        self.failure = Some(failure);
+    }
 }
 
 impl Drop for Opener {
     fn drop(&mut self) {
-        self.gate.opening.store(false, Ordering::Release);
-        self.gate.changed.notify_waiters();
+        let gate = &self.gate;
+        // Only the holder of the turn changes `turns`, so this is the count
+        // with the held bit set, and nothing changes it until the store.
+        let ended = (gate.turns.load(Ordering::Relaxed) >> 1) + 1;
+        if let Some(failure) = self.failure.take() {
+            *gate.failed.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(Failed { turn: ended, failure });
+        }
+        gate.turns.store(ended << 1, Ordering::Release);
+        gate.changed.notify_waiters();
     }
+}
+
+/// The error of a request that waited for another request's connect, when
+/// that connect failed: it quotes that failure.
+///
+/// It has no source. The failure is the opener's own error, which is not
+/// `Clone`, so it stays the opener's and is quoted here as text.
+#[derive(Debug)]
+pub(super) struct WaitedConnectFailed(Arc<str>);
+
+impl fmt::Display for WaitedConnectFailed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "the connect this request waited for failed: {}", self.0)
+    }
+}
+
+impl StdError for WaitedConnectFailed {}
+
+/// Why a request sent through the gate failed.
+pub(super) enum SendError {
+    /// The request's own error, as hyper-util returned it.
+    Own(legacy::Error),
+    /// The request waited for another request's connect, which failed.
+    Waited(WaitedConnectFailed),
 }
 
 /// Sends `request` through `gate`: it waits while another request opens a
@@ -155,19 +261,22 @@ impl Drop for Opener {
 /// The opener gives its turn back as soon as hyper-util reports the
 /// connection it was given, before the response arrives. Hyper-util reports
 /// it right after it has put a new connection in the pool, so every request
-/// released then finds it there. A report without a connection, or a
-/// response that fails first, gives the turn back without marking the pool,
-/// and the next request opens.
+/// released then finds it there. A response that fails with a connect error
+/// before that report fails every waiting request with it; a response that
+/// is `Ok`, or fails another way, gives the turn back without failing
+/// anyone, and marks the pool only when it is `Ok`.
 pub(super) async fn send<C>(
     gate: Arc<Gate>,
     client: legacy::Client<C, Body>,
     mut request: Request<Body>,
-) -> Result<Response<Incoming>, legacy::Error>
+) -> Result<Response<Incoming>, SendError>
 where
     C: Connect + Clone + Send + Sync + 'static,
 {
-    let Some(opener) = gate.enter().await else {
-        return client.request(request).await;
+    let opener = match gate.enter().await {
+        Entry::Pool => return client.request(request).await.map_err(SendError::Own),
+        Entry::Failed(failed) => return Err(SendError::Waited(failed)),
+        Entry::Open(opener) => opener,
     };
     let mut capture = capture_connection(&mut request);
     let mut response = client.request(request);
@@ -190,19 +299,32 @@ where
     })
     .await;
     match first {
-        Some(result) => {
-            if result.is_ok() {
-                gate.mark_pooled();
-            }
+        Some(Ok(response)) => {
+            gate.mark_pooled();
             drop(opener);
-            result
+            Ok(response)
+        }
+        Some(Err(error)) => {
+            if error.is_connect() {
+                opener.fail(quoted(&error));
+            } else {
+                drop(opener);
+            }
+            Err(SendError::Own(error))
         }
         None => {
             gate.mark_pooled();
             drop(opener);
-            response.await
+            response.await.map_err(SendError::Own)
         }
     }
+}
+
+/// `error`'s chain of messages, rendered as the transport renders the chain
+/// of any error it fails with, without the prefix of its message.
+fn quoted(error: &legacy::Error) -> Arc<str> {
+    let message = connection_message(error);
+    Arc::from(message.strip_prefix(CONNECTION_PREFIX).unwrap_or(&message))
 }
 
 /// Counts one stream in [`Gate::open_streams`] until it is dropped.

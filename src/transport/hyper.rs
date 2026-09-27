@@ -45,7 +45,7 @@ use tower_service::Service;
 
 use super::{
     Body, BoxError,
-    gate::{self, Counting, Gate},
+    gate::{self, Counting, Gate, SendError},
 };
 use crate::{error::Error, text};
 
@@ -165,6 +165,12 @@ impl HyperTransport {
     pub(crate) fn open_streams(&self) -> usize {
         self.gate.open_streams()
     }
+
+    /// Whether a request sent now goes straight to the pool.
+    #[cfg(feature = "internals")]
+    pub(crate) fn pool_is_warm(&self) -> bool {
+        self.gate.is_warm()
+    }
 }
 
 impl fmt::Debug for HyperTransport {
@@ -217,7 +223,7 @@ enum Sent {
     Direct(legacy::ResponseFuture),
     /// `Sync` as well as `Send`, as hyper-util's own response future is, so
     /// that the public future keeps both.
-    Gated(Pin<Box<dyn Future<Output = Result<Response<Incoming>, legacy::Error>> + Send + Sync>>),
+    Gated(Pin<Box<dyn Future<Output = Result<Response<Incoming>, SendError>> + Send + Sync>>),
 }
 
 impl fmt::Debug for HyperResponseFuture {
@@ -235,13 +241,16 @@ impl Future for HyperResponseFuture {
         // inner future pinned in place again.
         let this = self.get_mut();
         let polled = match &mut this.inner {
-            Sent::Direct(future) => Pin::new(future).poll(cx),
+            Sent::Direct(future) => Pin::new(future).poll(cx).map_err(SendError::Own),
             Sent::Gated(future) => future.as_mut().poll(cx),
         };
         match polled {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(response)) => Poll::Ready(Ok(response.map(ResponseBody))),
-            Poll::Ready(Err(error)) => Poll::Ready(Err(failure(error, this.connect_timeout))),
+            Poll::Ready(Err(SendError::Own(error))) => {
+                Poll::Ready(Err(failure(error, this.connect_timeout)))
+            }
+            Poll::Ready(Err(SendError::Waited(error))) => Poll::Ready(Err(Box::new(error))),
         }
     }
 }

@@ -1,7 +1,10 @@
-//! The gate's state machine, without a network: the futures are polled by
-//! hand with a waker that counts its wakes, so each step is exact.
+//! The gate's state machine: the futures are polled by hand with a waker
+//! that counts its wakes, so each step is exact. The connector is the real
+//! one, against a real listener.
 
 use std::task::{Wake, Waker};
+
+use hyper_util::client::legacy::connect::HttpConnector;
 
 use super::*;
 
@@ -26,12 +29,31 @@ fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>, waker: &Waker) -> Poll<F::
     future.poll(&mut Context::from_waker(waker))
 }
 
+/// What one poll of `enter` gave, as a word a failed assertion can print.
+fn outcome(polled: &Poll<Entry>) -> String {
+    match polled {
+        Poll::Pending => String::from("waiting"),
+        Poll::Ready(Entry::Pool) => String::from("to the pool"),
+        Poll::Ready(Entry::Open(_)) => String::from("the turn to open"),
+        Poll::Ready(Entry::Failed(failed)) => format!("failed: {failed}"),
+    }
+}
+
 /// A gate with one pooled connection whose stream is open.
 fn warm_gate() -> (Arc<Gate>, OpenStream) {
     let gate = Arc::new(Gate::default());
     let stream = gate.stream_opened();
     gate.mark_pooled();
     (gate, stream)
+}
+
+/// The turn to open, taken by the first request on a cold gate.
+fn take_the_turn(gate: &Arc<Gate>, waker: &Waker) -> Opener {
+    let mut entered = pin!(gate.enter());
+    match poll_once(entered.as_mut(), waker) {
+        Poll::Ready(Entry::Open(opener)) => opener,
+        other => panic!("the first request on a cold gate is the opener, not {}", outcome(&other)),
+    }
 }
 
 #[test]
@@ -68,28 +90,51 @@ fn a_connect_that_begins_makes_the_gate_cold() {
     assert!(gate.is_warm());
 }
 
+/// hyper-util's own connector, wrapped as the transport wraps its connector,
+/// connecting to a real listener: the call alone makes the gate cold, and
+/// the stream it hands over is counted until it is dropped.
+#[tokio::test]
+async fn a_connect_that_begins_through_the_connector_makes_the_gate_cold() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a loopback port");
+    let destination: Uri =
+        format!("http://{}", listener.local_addr().expect("its address")).parse().expect("a URI");
+    let (gate, stream) = warm_gate();
+    let mut connector = Counting::new(HttpConnector::new(), Arc::clone(&gate));
+
+    poll_fn(|cx| connector.poll_ready(cx)).await.expect("the connector is ready");
+    let connecting = connector.call(destination);
+    assert!(!gate.is_warm(), "the connect began: the gate is cold before it ends");
+
+    let counted = connecting.await.expect("the listener accepts");
+    assert_eq!(gate.open_streams(), 2, "the stream handed over is counted");
+    drop(stream);
+    assert!(!gate.is_warm(), "no request was given the new connection yet");
+    gate.mark_pooled();
+    assert!(gate.is_warm());
+    drop(counted);
+    assert_eq!(gate.open_streams(), 0, "the dropped stream is no longer counted");
+}
+
 #[test]
 fn a_warm_gate_lets_every_request_through_without_a_turn() {
     let (gate, _stream) = warm_gate();
     let waker = Waker::from(Arc::new(Wakes::default()));
     for request in 0..3 {
         let mut entered = pin!(gate.enter());
+        let polled = poll_once(entered.as_mut(), &waker);
         assert!(
-            matches!(poll_once(entered.as_mut(), &waker), Poll::Ready(None)),
-            "request {request} goes straight to the pool"
+            matches!(polled, Poll::Ready(Entry::Pool)),
+            "request {request} goes straight to the pool, not {}",
+            outcome(&polled)
         );
     }
-    assert!(!gate.opening.load(Ordering::Relaxed), "no request took the turn");
+    assert_eq!(gate.turns.load(Ordering::Relaxed) & HELD, 0, "no request took the turn");
 }
 
 #[test]
 fn every_waiter_is_released_by_one_release() {
     let gate = Arc::new(Gate::default());
-    let waker = Waker::from(Arc::new(Wakes::default()));
-    let mut opener = pin!(gate.enter());
-    let Poll::Ready(Some(opener)) = poll_once(opener.as_mut(), &waker) else {
-        panic!("the first request on a cold gate is the opener");
-    };
+    let opener = take_the_turn(&gate, &Waker::from(Arc::new(Wakes::default())));
 
     let wakes: [Arc<Wakes>; 3] = Default::default();
     let mut waiters = [pin!(gate.enter()), pin!(gate.enter()), pin!(gate.enter())];
@@ -105,38 +150,76 @@ fn every_waiter_is_released_by_one_release() {
 
     for (index, (waiter, wakes)) in waiters.iter_mut().zip(&wakes).enumerate() {
         assert_eq!(wakes.count(), 1, "waiter {index} was woken once by the one release");
-        let waker = Waker::from(Arc::clone(wakes));
+        let polled = poll_once(waiter.as_mut(), &Waker::from(Arc::clone(wakes)));
         assert!(
-            matches!(poll_once(waiter.as_mut(), &waker), Poll::Ready(None)),
-            "waiter {index} goes to the pool, where the connection is"
+            matches!(polled, Poll::Ready(Entry::Pool)),
+            "waiter {index} goes to the pool, where the connection is, not {}",
+            outcome(&polled)
         );
     }
 }
 
 #[test]
-fn an_opener_that_ends_without_a_connection_passes_the_turn_on() {
+fn an_opener_dropped_without_a_connection_passes_the_turn_on() {
     let gate = Arc::new(Gate::default());
     let waker = Waker::from(Arc::new(Wakes::default()));
-    let mut first = pin!(gate.enter());
-    let Poll::Ready(Some(first)) = poll_once(first.as_mut(), &waker) else {
-        panic!("the first request on a cold gate is the opener");
-    };
+    let first = take_the_turn(&gate, &waker);
     let mut second = pin!(gate.enter());
     let mut third = pin!(gate.enter());
     assert!(poll_once(second.as_mut(), &waker).is_pending());
     assert!(poll_once(third.as_mut(), &waker).is_pending());
 
-    // Failed or dropped: either way the opener is dropped without marking
-    // the pool, and exactly one waiter takes the turn.
+    // Dropped, as by a caller's deadline: nobody fails, and exactly one
+    // waiter takes the turn.
     drop(first);
-    let Poll::Ready(Some(second)) = poll_once(second.as_mut(), &waker) else {
-        panic!("the second request takes the turn the first gave back");
+    let second = match poll_once(second.as_mut(), &waker) {
+        Poll::Ready(Entry::Open(opener)) => opener,
+        other => panic!("the second request takes the turn, not {}", outcome(&other)),
     };
-    assert!(poll_once(third.as_mut(), &waker).is_pending(), "the third waits for the second");
+    let polled = poll_once(third.as_mut(), &waker);
+    assert!(polled.is_pending(), "the third waits for the second, not {}", outcome(&polled));
 
     drop(second);
+    let polled = poll_once(third.as_mut(), &waker);
     assert!(
-        matches!(poll_once(third.as_mut(), &waker), Poll::Ready(Some(_))),
-        "the third request takes the turn the second gave back"
+        matches!(polled, Poll::Ready(Entry::Open(_))),
+        "the third request takes the turn the second gave back, not {}",
+        outcome(&polled)
+    );
+}
+
+#[test]
+fn a_failed_connect_fails_every_waiting_request_and_not_one_that_comes_after() {
+    let gate = Arc::new(Gate::default());
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let opener = take_the_turn(&gate, &waker);
+    let mut waiters = [pin!(gate.enter()), pin!(gate.enter())];
+    for waiter in &mut waiters {
+        assert!(poll_once(waiter.as_mut(), &waker).is_pending());
+    }
+
+    opener.fail(Arc::from("client error (Connect): tcp connect error: refused"));
+    for (index, waiter) in waiters.iter_mut().enumerate() {
+        let polled = poll_once(waiter.as_mut(), &waker);
+        assert_eq!(
+            outcome(&polled),
+            "failed: the connect this request waited for failed: \
+             client error (Connect): tcp connect error: refused",
+            "waiter {index}"
+        );
+    }
+
+    // A request that comes after the failure finds the turn free and opens,
+    // and one that waits for it is failed only by its failure, not by the
+    // earlier one.
+    let later = take_the_turn(&gate, &waker);
+    let mut waiting = pin!(gate.enter());
+    assert!(poll_once(waiting.as_mut(), &waker).is_pending());
+    drop(later);
+    let polled = poll_once(waiting.as_mut(), &waker);
+    assert!(
+        matches!(polled, Poll::Ready(Entry::Open(_))),
+        "the earlier failure is not this turn's: {}",
+        outcome(&polled)
     );
 }
