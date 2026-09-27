@@ -14,6 +14,7 @@
 use std::{
     error::Error as StdError,
     io,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -466,7 +467,12 @@ async fn a_cold_burst_of_64_enters_the_pool_once() {
     drop(installed);
 
     let waiting = checkouts_waiting(&recorder);
-    assert_eq!(waiting.len(), 1, "requests that waited in the pool for a connection: {waiting:#?}");
+    assert_eq!(
+        waiting.len(),
+        1,
+        "requests that waited in the pool for a connection, found by the text hyper-util 0.1.20 \
+         logs for it ({CHECKOUT_WAITING:?}), which an upgrade may have renamed: {waiting:#?}"
+    );
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
 
@@ -487,7 +493,12 @@ async fn a_burst_after_the_server_closed_the_connection_enters_the_pool_once() {
     drop(installed);
 
     let waiting = checkouts_waiting(&recorder);
-    assert_eq!(waiting.len(), 1, "requests that waited in the pool for a connection: {waiting:#?}");
+    assert_eq!(
+        waiting.len(),
+        1,
+        "requests that waited in the pool for a connection, found by the text hyper-util 0.1.20 \
+         logs for it ({CHECKOUT_WAITING:?}), which an upgrade may have renamed: {waiting:#?}"
+    );
     assert_eq!(server.accepted_connections(), 2, "{:#?}", server.connections());
 }
 
@@ -562,4 +573,53 @@ async fn two_calls_under_auto_at_a_server_that_never_answers_both_connect() {
     connected.unwrap_or_else(|_| {
         panic!("the two calls did not both connect within 2 s: one waited: {server:?}")
     });
+}
+
+/// A cold burst whose first response the server holds until it has received
+/// every request of the burst. The requests that wait at the gate are
+/// released when the opener has its connection, not when its response
+/// arrives: all of them reach the server while the first response is held,
+/// and the burst ends. Were they released only by the opener's response,
+/// the burst would stall until the test's bound; the client's own deadline
+/// is set past that bound so that nothing else can end a stall.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_waiting_requests_go_once_the_connection_exists_not_after_the_response() {
+    const BURST: usize = 64;
+
+    let arrived = Arc::new(tokio::sync::watch::Sender::new(0_usize));
+    let held = Arc::clone(&arrived);
+    let server = TestServer::start(Protocol::Http2Tls, move |_request| {
+        let arrived = Arc::clone(&held);
+        async move {
+            let mut position = 0;
+            arrived.send_modify(|count| {
+                *count += 1;
+                position = *count;
+            });
+            if position == 1 {
+                let mut count = arrived.subscribe();
+                let _ = count.wait_for(|count| *count >= BURST).await;
+            }
+            let mut response = Response::new(Full::new(Bytes::from_static(RESULT)));
+            *response.status_mut() = StatusCode::OK;
+            response
+        }
+    })
+    .await
+    .expect("the test server starts");
+    let client =
+        builder_for(&server).timeout(Duration::from_secs(30)).build().expect("the client builds");
+
+    tokio::time::timeout(Duration::from_secs(10), concurrently(&client, &questions(), BURST))
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "the burst did not end within 10 s: {} of {BURST} requests reached the server \
+                 while the first response was held: {:#?}",
+                *arrived.borrow(),
+                server.connections()
+            )
+        });
+    assert_eq!(server.request_count(), BURST);
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }

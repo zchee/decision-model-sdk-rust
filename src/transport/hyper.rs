@@ -12,12 +12,13 @@
 //! algorithm is off, because every request and response here is small.
 //!
 //! Under `Http2Only` every request of a client shares one connection. While
-//! the pool holds none - before the first request, or once the connection it
-//! held has closed - one request opens it and the others wait at a gate until
-//! hyper-util reports that connection, so a burst opens one connection. The
-//! gate does not see a connection that ends while requests are in flight:
-//! hyper-util replaces it on its own, and a burst at that moment can still
-//! open a second connection, which the pool closes at once.
+//! the pool holds none - before the first request, or once the server closed
+//! the connection it held and the client has seen the close - one request
+//! opens it and the others wait at a gate until hyper-util reports that
+//! connection, so a burst opens one connection. The gate does not see a
+//! connection that ends while requests are in flight: hyper-util replaces it
+//! on its own, and a burst at that moment can still open a second
+//! connection, which the pool closes at once.
 
 use std::{
     error::Error as StdError,

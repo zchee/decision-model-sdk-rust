@@ -164,7 +164,9 @@ pub fn open_streams(client: &crate::Client<crate::HyperTransport>) -> usize {
 /// Whether a request of `client` sent now goes straight to the pool of its
 /// built-in transport: a request was given a pooled connection since the
 /// last connect began, and a stream is still open. When it does not, the
-/// request passes the transport's wait for a connection first.
+/// request passes the transport's wait for a connection first. The wait is
+/// used under `HttpVersion::Http2Only` only: under `Auto`, where every
+/// request goes straight to the pool, this is always `false`.
 #[cfg(feature = "hyper")]
 #[must_use]
 pub fn pool_is_warm(client: &crate::Client<crate::HyperTransport>) -> bool {
