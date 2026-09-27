@@ -745,9 +745,18 @@ impl RefusingPort {
     }
 }
 
-/// A listener on `127.0.0.1` that accepts every connection and then neither
-/// reads, writes nor closes it: a server that never answers, for a deadline
-/// that runs out while a client connects.
+/// How long a [`SilentServer`] waits before it accepts again after a failed
+/// accept.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(10);
+
+/// A listener on `127.0.0.1` that accepts every connection and neither reads
+/// nor writes on it: a server that never answers.
+///
+/// Made with [`start`](Self::start), it holds every connection open, for a
+/// deadline that runs out while a client connects. Made with
+/// [`closing_after`](Self::closing_after), it closes each connection a fixed
+/// delay after it accepted it, so that a client's TLS handshake fails after
+/// that delay: a connect that fails slowly.
 ///
 /// Dropping the value closes the listener and every connection it holds.
 pub struct SilentServer {
@@ -767,26 +776,64 @@ impl fmt::Debug for SilentServer {
 }
 
 impl SilentServer {
-    /// Binds a listener on `127.0.0.1:0` and starts accepting.
+    /// Binds a listener on `127.0.0.1:0` and starts accepting, holding every
+    /// connection open until the value is dropped.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Bind`] or [`Error::LocalAddr`] when the socket cannot
     /// be set up.
     pub async fn start() -> Result<Self, Error> {
+        Self::bind(None).await
+    }
+
+    /// Binds a listener on `127.0.0.1:0` and starts accepting, closing each
+    /// connection `delay` after it accepted it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Bind`] or [`Error::LocalAddr`] when the socket cannot
+    /// be set up.
+    pub async fn closing_after(delay: Duration) -> Result<Self, Error> {
+        Self::bind(Some(delay)).await
+    }
+
+    async fn bind(close_after: Option<Duration>) -> Result<Self, Error> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.map_err(Error::Bind)?;
         let addr = listener.local_addr().map_err(Error::LocalAddr)?;
         let accepted = Arc::new(AtomicU64::new(0));
         let counter = Arc::clone(&accepted);
         let accept_task = tokio::spawn(async move {
-            // The streams are kept, unread, for as long as the task runs.
+            // The streams are kept, unread, for as long as the task runs: in
+            // `held`, or each by a task of `closing` until its delay has
+            // passed. Aborting this task drops both, and dropping a `JoinSet`
+            // aborts its tasks, so every connection ends with the server.
             let mut held = Vec::new();
+            let mut closing = tokio::task::JoinSet::new();
             loop {
-                if let Ok((stream, _)) = listener.accept().await {
-                    // Relaxed: a count read for a report, with nothing
-                    // ordered against it.
-                    counter.fetch_add(1, Ordering::Relaxed);
-                    held.push(stream);
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        // Relaxed: a count read for a report, with nothing
+                        // ordered against it.
+                        counter.fetch_add(1, Ordering::Relaxed);
+                        match close_after {
+                            None => held.push(stream),
+                            Some(delay) => {
+                                closing.spawn(async move {
+                                    tokio::time::sleep(delay).await;
+                                    drop(stream);
+                                });
+                            }
+                        }
+                        // The tasks that have closed their connection are
+                        // reaped, so the set holds only the open ones.
+                        while closing.try_join_next().is_some() {}
+                    }
+                    // A failed accept (out of file descriptors, say) is tried
+                    // again after a pause, not at once: at once, the loop
+                    // would keep a worker thread spinning for as long as the
+                    // failure lasts.
+                    Err(_) => tokio::time::sleep(ACCEPT_PAUSE).await,
                 }
             }
         });

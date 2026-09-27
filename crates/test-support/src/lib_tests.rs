@@ -553,6 +553,77 @@ async fn a_silent_server_accepts_and_never_answers() {
 }
 
 #[tokio::test]
+async fn a_closing_server_closes_each_connection_after_its_delay_without_a_word() {
+    const DELAY: Duration = Duration::from_millis(200);
+
+    let server = SilentServer::closing_after(DELAY).await.expect("a silent server binds");
+    let started = std::time::Instant::now();
+    let mut first = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    let mut second = TcpStream::connect(server.addr()).await.expect("the server accepts again");
+
+    for (name, stream) in [("first", &mut first), ("second", &mut second)] {
+        let mut buffer = [0; 64];
+        let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
+            .await
+            .unwrap_or_else(|_| panic!("the {name} connection was not closed within 5 s"));
+        // A clean close with no byte before it: the server wrote nothing.
+        assert_eq!(read.expect("a clean close"), 0, "the {name} connection");
+        let elapsed = started.elapsed();
+        assert!(elapsed >= DELAY, "the {name} connection closed after {elapsed:?}");
+    }
+    assert_eq!(server.accepted_connections(), 2, "{server:?}");
+}
+
+#[tokio::test]
+async fn a_tls_handshake_with_a_closing_server_fails_after_its_delay() {
+    const DELAY: Duration = Duration::from_millis(200);
+
+    let server = SilentServer::closing_after(DELAY).await.expect("a silent server binds");
+    let request = Request::get(format!("https://{}/v1/models", server.addr()))
+        .body(Full::new(Bytes::new()))
+        .expect("the request parts are valid");
+    let started = std::time::Instant::now();
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        tls_client(rustls::RootCertStore::empty())
+            .expect("the client TLS configuration is valid")
+            .request(request),
+    )
+    .await
+    .expect("the handshake ended within 5 s")
+    .expect_err("the server closes the connection instead of answering the handshake");
+
+    let elapsed = started.elapsed();
+    assert!(error.is_connect(), "a connect-time failure, not an HTTP response: {error:?}");
+    assert!(elapsed >= DELAY, "the handshake failed after {elapsed:?}, before the close");
+    assert_eq!(server.accepted_connections(), 1, "{server:?}");
+}
+
+#[tokio::test]
+async fn dropping_a_closing_server_closes_what_it_holds_at_once() {
+    // A delay no test waits for: only the drop can close the connection.
+    let server = SilentServer::closing_after(Duration::from_secs(3600))
+        .await
+        .expect("a silent server binds");
+    let mut stream = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    let accepted = async {
+        while server.accepted_connections() < 1 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), accepted)
+        .await
+        .unwrap_or_else(|_| panic!("the server did not accept within 5 s: {server:?}"));
+
+    drop(server);
+    let mut buffer = [0; 64];
+    let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
+        .await
+        .expect("the held connection closed within 5 s of the drop");
+    assert_eq!(read.expect("a clean close"), 0);
+}
+
+#[tokio::test]
 async fn a_raw_server_answers_every_connection_with_its_bytes() {
     let reply = b"SSH-2.0-OpenSSH_9.9\r\n\r\n";
     let addr = raw_server(reply).await.expect("a raw server binds on loopback");
