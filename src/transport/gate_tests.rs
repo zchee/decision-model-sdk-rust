@@ -1,10 +1,11 @@
 //! The gate's state machine: the futures are polled by hand with a waker
 //! that counts its wakes, so each step is exact. The connector is the real
-//! one, against a real listener.
+//! one, against a real listener, except where a connect has to fail after
+//! the connector has handed over its stream.
 
 use std::task::{Wake, Waker};
 
-use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::{client::legacy::connect::HttpConnector, rt::TokioExecutor};
 
 use super::*;
 
@@ -222,4 +223,141 @@ fn a_failed_connect_fails_every_waiting_request_and_not_one_that_comes_after() {
         "the earlier failure is not this turn's: {}",
         outcome(&polled)
     );
+}
+
+/// A connector that hands over a stream on which the HTTP/2 handshake
+/// cannot happen: its first write fails, and it never has anything to read.
+/// It counts its calls.
+#[derive(Clone, Default)]
+struct BrokenPipe {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Service<Uri> for BrokenPipe {
+    type Response = BrokenStream;
+    type Error = io::Error;
+    type Future = SecondPoll;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _: Uri) -> SecondPoll {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        SecondPoll { polled: false }
+    }
+}
+
+/// A connect of [`BrokenPipe`]: it ends on its second poll, and on its first
+/// wakes its task and returns `Pending`, as no real connect ends on its
+/// first poll. Were it to end at once, the opener's handshake would fail
+/// inside the opener's first poll, before another request could reach the
+/// gate to wait.
+struct SecondPoll {
+    polled: bool,
+}
+
+impl Future for SecondPoll {
+    type Output = Result<BrokenStream, io::Error>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        if this.polled {
+            return Poll::Ready(Ok(BrokenStream));
+        }
+        this.polled = true;
+        cx.waker().wake_by_ref();
+        Poll::Pending
+    }
+}
+
+/// The stream of [`BrokenPipe`]: a connection the connector made and the
+/// peer broke before the HTTP/2 preface could be written.
+struct BrokenStream;
+
+impl Read for BrokenStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        _: ReadBufCursor<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Pending
+    }
+}
+
+impl Write for BrokenStream {
+    fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+        Poll::Ready(Err(io::Error::from(io::ErrorKind::BrokenPipe)))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl Connection for BrokenStream {
+    fn connected(&self) -> Connected {
+        Connected::new()
+    }
+}
+
+/// What a request sent through the gate ended with, as a failed assertion
+/// can print it.
+fn ended(result: &Result<Response<Incoming>, SendError>) -> String {
+    match result {
+        Ok(response) => format!("a response with status {}", response.status()),
+        Err(SendError::Own(error)) => format!("its own error: {error:?}"),
+        Err(SendError::Waited(error)) => format!("the waited error: {error}"),
+    }
+}
+
+/// A connect whose HTTP/2 handshake fails after the connector handed over
+/// its stream fails the requests waiting for it, as a failed connect does.
+/// hyper-util reports that failure as a `SendRequest` error, not a connect
+/// error, and attaches no connection to it: that is what the gate goes by.
+#[tokio::test]
+async fn a_failed_http2_handshake_fails_every_waiting_request() {
+    let gate = Arc::new(Gate::default());
+    let connector = BrokenPipe::default();
+    let calls = Arc::clone(&connector.calls);
+    let client = legacy::Client::builder(TokioExecutor::new())
+        .http2_only(true)
+        .build(Counting::new(connector, Arc::clone(&gate)));
+    let request =
+        || Request::get("http://127.0.0.1:9/v1/models").body(Body::empty()).expect("a request");
+
+    // Spawned in this order on a current-thread runtime, the first takes the
+    // turn and the second waits for it.
+    let first = tokio::spawn(send(Arc::clone(&gate), client.clone(), request()));
+    let second = tokio::spawn(send(Arc::clone(&gate), client.clone(), request()));
+    let first = first.await.expect("the first task ran");
+    let second = second.await.expect("the second task ran");
+
+    let Err(SendError::Own(opener)) = &first else {
+        panic!("the first request opens and fails with its own error, not {}", ended(&first));
+    };
+    assert!(opener.connect_info().is_none(), "no connection was reported: {opener:?}");
+    assert!(!opener.is_connect(), "hyper-util does not call it a connect error: {opener:?}");
+    let Err(SendError::Waited(waited)) = &second else {
+        panic!("the second request fails with the waited error, not {}", ended(&second));
+    };
+    assert_eq!(
+        waited.to_string(),
+        format!("the connect this request waited for failed: {}", quoted(opener))
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 1, "one connect for both requests");
+
+    // A request that comes after the failure opens: the connector is called
+    // again.
+    let third = send(Arc::clone(&gate), client, request()).await;
+    assert!(
+        matches!(third, Err(SendError::Own(_))),
+        "the third request opens and fails with its own error, not {}",
+        ended(&third)
+    );
+    assert_eq!(calls.load(Ordering::Relaxed), 2, "the third request connected again");
 }

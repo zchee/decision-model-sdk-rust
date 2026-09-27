@@ -14,7 +14,8 @@
 //!
 //! When the connect of the request that opens fails, every request waiting
 //! for it fails with it, as hyper-util fails the requests waiting for a
-//! connect it could not make, and none of them connects on its own. When the
+//! connect it could not make, and none of them connects on its own. The
+//! connect includes the HTTP/2 handshake that follows TLS. When the
 //! request that opens is dropped instead, one waiting request opens: a caller
 //! that gives up does not fail the others.
 //!
@@ -261,10 +262,11 @@ pub(super) enum SendError {
 /// The opener gives its turn back as soon as hyper-util reports the
 /// connection it was given, before the response arrives. Hyper-util reports
 /// it right after it has put a new connection in the pool, so every request
-/// released then finds it there. A response that fails with a connect error
-/// before that report fails every waiting request with it; a response that
-/// is `Ok`, or fails another way, gives the turn back without failing
-/// anyone, and marks the pool only when it is `Ok`.
+/// released then finds it there. A response that fails before there was a
+/// connection - in the connect, the HTTP/2 handshake after TLS included -
+/// fails every waiting request with it; a response that is `Ok`, or fails on
+/// a connection, gives the turn back without failing anyone, and marks the
+/// pool only when it is `Ok`.
 pub(super) async fn send<C>(
     gate: Arc<Gate>,
     client: legacy::Client<C, Body>,
@@ -305,7 +307,14 @@ where
             Ok(response)
         }
         Some(Err(error)) => {
-            if error.is_connect() {
+            // `connect_info()` is the info of the connection on which the
+            // error occurred: hyper-util attaches it to every error that
+            // happened on a connection, and to none that happened before
+            // there was one. `None` is therefore a failed connect, including
+            // a failed HTTP/2 handshake after TLS, which hyper-util reports
+            // as a `SendRequest` error, not a connect error, so that
+            // `is_connect()` alone would miss it.
+            if error.connect_info().is_none() {
                 opener.fail(quoted(&error));
             } else {
                 drop(opener);
