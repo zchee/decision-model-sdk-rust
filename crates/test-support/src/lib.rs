@@ -10,13 +10,19 @@
 //! (HTTP/2 over cleartext, prior knowledge, no upgrade dance) and HTTP/2 over
 //! TLS with ALPN `h2` and a freshly generated self-signed certificate.
 //!
-//! The server records every request it serves and counts every TCP connection
-//! it accepts, so a test can assert both what was sent and how many
-//! connections carried it. The caller supplies the response as an async
-//! closure, which may capture state (to answer a retry sequence differently on
-//! each attempt) and may await (to hold a response back past a deadline).
+//! The server records every request it serves and every TCP connection it
+//! accepts - who connected, how the TLS handshake ended, how many requests
+//! the connection carried - so a test can assert both what was sent and how
+//! many connections carried it, and a failed count explains itself. The
+//! caller supplies the response as an async closure, which may capture state
+//! (to answer a retry sequence differently on each attempt) and may await (to
+//! hold a response back past a deadline).
 //!
 //! The listener is released when the [`TestServer`] is dropped.
+//!
+//! Two more endpoints are for failures: [`RefusingPort`], an address at which
+//! every connection is refused, and [`SilentServer`], which accepts
+//! connections and never answers on them.
 
 #![forbid(unsafe_code)]
 
@@ -26,12 +32,15 @@ use std::{
     convert::Infallible,
     fmt,
     future::Future,
+    io,
     net::{Ipv4Addr, SocketAddr},
     pin::Pin,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
+    task::{Context, Poll, ready},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -44,9 +53,9 @@ use hyper::{body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::CertificateDer;
 use tokio::{
-    io::{AsyncReadExt as _, AsyncWriteExt as _},
+    io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _, ReadBuf},
     net::{TcpListener, TcpStream},
-    sync::watch,
+    sync::{Notify, watch},
     task::JoinHandle,
 };
 use tokio_rustls::TlsAcceptor;
@@ -120,7 +129,8 @@ impl RecordedRequest {
     }
 }
 
-/// Why a [`TestServer`] could not be started.
+/// Why a server of this crate could not be started, or why the
+/// [`RefusingPort`] cannot be used.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -136,6 +146,131 @@ pub enum Error {
     /// rustls rejected the generated certificate or the requested versions.
     #[error("could not build the server TLS configuration: {0}")]
     TlsConfig(#[source] rustls::Error),
+    /// A connect to the address that should refuse every connection was not
+    /// refused: something on this machine answers there.
+    #[error("{addr} should refuse every connection, but a connect to it {outcome}")]
+    NotRefused {
+        /// The address that was expected to refuse.
+        addr: SocketAddr,
+        /// What the connect did instead: `connected`, `did not end within
+        /// ...`, or `failed with ...` and the error.
+        outcome: String,
+    },
+}
+
+/// What became of the TLS handshake of one accepted connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Tls {
+    /// The server speaks cleartext, so there is no handshake.
+    None,
+    /// The handshake has not ended yet.
+    InProgress,
+    /// The handshake completed.
+    Completed {
+        /// The protocol ALPN settled on, if the client offered any.
+        alpn: Option<Vec<u8>>,
+    },
+    /// The handshake failed.
+    Failed {
+        /// The text of the handshake's error.
+        error: String,
+        /// The first bytes the peer sent, at most [`FIRST_BYTES`], as it sent
+        /// them: a plaintext request that reached a TLS port shows here.
+        first_bytes: Vec<u8>,
+    },
+}
+
+/// How many of the bytes a peer sent first are kept for a connection whose
+/// TLS handshake failed.
+pub const FIRST_BYTES: usize = 64;
+
+/// What the server saw of one connection it accepted.
+///
+/// `Debug` prints one line, so that a failing assertion on a connection count
+/// can print every connection and say where each came from: the peer, the
+/// TLS outcome (with the peer's first bytes escaped when the handshake
+/// failed), and how many requests the connection served.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ConnectionRecord {
+    peer: SocketAddr,
+    tls: Tls,
+    requests: usize,
+}
+
+impl ConnectionRecord {
+    /// The address of the peer that connected.
+    #[must_use]
+    pub fn peer(&self) -> SocketAddr {
+        self.peer
+    }
+
+    /// What became of the TLS handshake, as of when the record was taken.
+    #[must_use]
+    pub fn tls(&self) -> &Tls {
+        &self.tls
+    }
+
+    /// How many requests the connection served, as of when the record was
+    /// taken.
+    #[must_use]
+    pub fn requests(&self) -> usize {
+        self.requests
+    }
+}
+
+impl fmt::Debug for ConnectionRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}, ", self.peer)?;
+        match &self.tls {
+            Tls::None => formatter.write_str("cleartext")?,
+            Tls::InProgress => formatter.write_str("TLS handshake in progress")?,
+            Tls::Completed { alpn: Some(alpn) } => {
+                write!(formatter, "TLS, ALPN {}", Escaped(alpn))?
+            }
+            Tls::Completed { alpn: None } => formatter.write_str("TLS, no ALPN")?,
+            Tls::Failed { error, first_bytes } => {
+                write!(formatter, "TLS failed: {error}; first bytes {}", Escaped(first_bytes))?;
+            }
+        }
+        write!(formatter, ", {} request(s)", self.requests)
+    }
+}
+
+/// Bytes as a quoted string, every byte that is not printable ASCII escaped
+/// (`\r`, `\n`, `\x16`, ...).
+struct Escaped<'a>(&'a [u8]);
+
+impl fmt::Display for Escaped<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("\"")?;
+        for &byte in self.0 {
+            write!(formatter, "{}", byte.escape_ascii())?;
+        }
+        formatter.write_str("\"")
+    }
+}
+
+/// One accepted connection, as its task updates it.
+struct Connection {
+    peer: SocketAddr,
+    tls: Mutex<Tls>,
+    requests: AtomicUsize,
+    /// Notified by [`TestServer::close_connections`]. A notification sent
+    /// before the task waits on it is kept, so none is lost.
+    close: Notify,
+}
+
+impl Connection {
+    fn record(&self) -> ConnectionRecord {
+        ConnectionRecord {
+            peer: self.peer,
+            tls: lock(&self.tls).clone(),
+            // Relaxed: a count read for a report, with nothing ordered
+            // against it.
+            requests: self.requests.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// Shared between the accept loop, every connection task and the handle the
@@ -143,7 +278,15 @@ pub enum Error {
 struct State {
     handler: BoxedHandler,
     requests: Mutex<Vec<RecordedRequest>>,
-    accepted_connections: AtomicU64,
+    /// Every accepted connection, in accept order.
+    connections: Mutex<Vec<Arc<Connection>>>,
+}
+
+/// Locks `mutex` even when a panicking thread poisoned it: what it holds is
+/// a record, and losing it is worse for a failing test than reading past the
+/// poison flag.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// A running HTTP server on `127.0.0.1`.
@@ -164,7 +307,7 @@ impl fmt::Debug for TestServer {
         f.debug_struct("TestServer")
             .field("base_url", &self.base_url)
             .field("requests", &self.request_count())
-            .field("accepted_connections", &self.state.accepted_connections.load(Ordering::Relaxed))
+            .field("accepted_connections", &self.accepted_connections())
             .finish_non_exhaustive()
     }
 }
@@ -202,7 +345,7 @@ impl TestServer {
         let state = Arc::new(State {
             handler: Arc::new(move |request| Box::pin(handler(request)) as HandlerFuture),
             requests: Mutex::new(Vec::new()),
-            accepted_connections: AtomicU64::new(0),
+            connections: Mutex::new(Vec::new()),
         });
 
         let (shutdown, shutdown_rx) = watch::channel(false);
@@ -266,13 +409,36 @@ impl TestServer {
         self.request_log().len()
     }
 
-    /// How many TCP connections have been accepted so far.
+    /// How many TCP connections have been accepted so far: the length of
+    /// [`connections`](Self::connections).
     ///
     /// Counted at accept time, so a connection that fails its TLS handshake is
     /// still counted.
     #[must_use]
     pub fn accepted_connections(&self) -> u64 {
-        self.state.accepted_connections.load(Ordering::Relaxed)
+        lock(&self.state.connections).len() as u64
+    }
+
+    /// A record of every TCP connection accepted so far, in accept order.
+    ///
+    /// A record is taken at the time of the call: a handshake still running
+    /// shows as [`Tls::InProgress`], and the request counts are those served
+    /// so far.
+    #[must_use]
+    pub fn connections(&self) -> Vec<ConnectionRecord> {
+        lock(&self.state.connections).iter().map(|connection| connection.record()).collect()
+    }
+
+    /// Ends every connection the server holds now, as a server that closes
+    /// its connections does: the client sees each one closed by its peer.
+    ///
+    /// The listener keeps running, and a connection accepted after this call
+    /// is served as usual. The connections end on their own tasks, shortly
+    /// after the call returns.
+    pub fn close_connections(&self) {
+        for connection in lock(&self.state.connections).iter() {
+            connection.close.notify_one();
+        }
     }
 
     /// The server's certificate in DER, for [`Protocol::Http2Tls`] only.
@@ -284,11 +450,8 @@ impl TestServer {
         self.certificate.clone()
     }
 
-    /// A poisoned request log still holds every request recorded before the
-    /// panic, and losing that is worse for a failing test than reading past the
-    /// poison flag.
-    fn request_log(&self) -> std::sync::MutexGuard<'_, Vec<RecordedRequest>> {
-        self.state.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn request_log(&self) -> MutexGuard<'_, Vec<RecordedRequest>> {
+        lock(&self.state.requests)
     }
 }
 
@@ -309,28 +472,45 @@ async fn accept_loop(
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
-        let stream = tokio::select! {
+        let (stream, peer) = tokio::select! {
             biased;
             _ = shutdown.changed() => return,
             accepted = listener.accept() => match accepted {
-                Ok((stream, _peer)) => stream,
+                Ok(accepted) => accepted,
                 // A failed accept says nothing about the next one, and a test
                 // that cares will fail on its own assertions.
                 Err(_) => continue,
             },
         };
-        state.accepted_connections.fetch_add(1, Ordering::Relaxed);
+        let connection = Arc::new(Connection {
+            peer,
+            tls: Mutex::new(if acceptor.is_some() { Tls::InProgress } else { Tls::None }),
+            requests: AtomicUsize::new(0),
+            close: Notify::new(),
+        });
+        lock(&state.connections).push(Arc::clone(&connection));
         // Nagle's algorithm would add latency to the small request/response
         // pairs these tests measure.
         let _ = stream.set_nodelay(true);
 
-        tokio::spawn(serve_connection(
+        let served = serve_connection(
             stream,
             protocol,
             acceptor.clone(),
             Arc::clone(&state),
-            shutdown.clone(),
-        ));
+            Arc::clone(&connection),
+        );
+        let mut shutdown = shutdown.clone();
+        // Dropping the connection's future drops its socket: the client sees
+        // the connection closed, whether by `close_connections` or because
+        // the server is gone.
+        tokio::spawn(async move {
+            tokio::select! {
+                () = served => {}
+                () = connection.close.notified() => {}
+                _ = shutdown.changed() => {}
+            }
+        });
     }
 }
 
@@ -339,45 +519,115 @@ async fn serve_connection(
     protocol: Protocol,
     acceptor: Option<TlsAcceptor>,
     state: Arc<State>,
-    mut shutdown: watch::Receiver<bool>,
+    connection: Arc<Connection>,
 ) {
-    let service = service_fn(move |request| dispatch(Arc::clone(&state), request));
+    let counted = Arc::clone(&connection);
+    let service =
+        service_fn(move |request| dispatch(Arc::clone(&state), Arc::clone(&counted), request));
 
     match (protocol, acceptor) {
         (Protocol::Http1, _) => {
-            let connection = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service);
-            until_shutdown(connection, &mut shutdown).await;
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
         }
         (Protocol::H2c, _) => {
-            let connection = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(stream), service);
-            until_shutdown(connection, &mut shutdown).await;
+            let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
         }
         (Protocol::Http2Tls, Some(acceptor)) => {
-            // A rejected handshake is the expected outcome of the
+            // The handshake reads through a stream that keeps the first bytes
+            // the peer sent, and the fallible form of the accept hands the
+            // stream back when the handshake fails, so that the record can
+            // show what arrived: a plaintext request at a TLS port, say. A
+            // failed handshake is also the expected outcome of the
             // untrusted-client test, so it ends the connection quietly.
-            let Ok(stream) = acceptor.accept(stream).await else {
-                return;
+            let stream = match acceptor.accept(FirstBytes::new(stream)).into_fallible().await {
+                Ok(stream) => {
+                    let alpn = stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                    *lock(&connection.tls) = Tls::Completed { alpn };
+                    stream
+                }
+                Err((error, stream)) => {
+                    *lock(&connection.tls) =
+                        Tls::Failed { error: error.to_string(), first_bytes: stream.first };
+                    return;
+                }
             };
-            let connection = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                .serve_connection(TokioIo::new(stream), service);
-            until_shutdown(connection, &mut shutdown).await;
+            let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
         }
         (Protocol::Http2Tls, None) => {}
     }
 }
 
-/// Drives `connection` until it ends or the server shuts down.
-async fn until_shutdown(connection: impl Future, shutdown: &mut watch::Receiver<bool>) {
-    tokio::select! {
-        _ = connection => {}
-        _ = shutdown.changed() => {}
+/// A stream that keeps a copy of the first [`FIRST_BYTES`] bytes read from
+/// it, and forwards everything else unchanged.
+struct FirstBytes<S> {
+    inner: S,
+    first: Vec<u8>,
+}
+
+impl<S> FirstBytes<S> {
+    fn new(inner: S) -> Self {
+        Self { inner, first: Vec::with_capacity(FIRST_BYTES) }
+    }
+}
+
+// The wrapped stream is `Unpin` (a `TcpStream`), so every method turns the
+// pinned reference back into a plain one and pins the inner stream in place
+// again, with no `unsafe` projection.
+impl<S: AsyncRead + Unpin> AsyncRead for FirstBytes<S> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let before = buf.filled().len();
+        ready!(Pin::new(&mut this.inner).poll_read(cx, buf))?;
+        let read = &buf.filled()[before..];
+        let room = FIRST_BYTES - this.first.len();
+        this.first.extend_from_slice(&read[..read.len().min(room)]);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for FirstBytes<S> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().inner).poll_write_vectored(cx, bufs)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
     }
 }
 
 async fn dispatch(
     state: Arc<State>,
+    connection: Arc<Connection>,
     request: Request<Incoming>,
 ) -> Result<TestResponse, Infallible> {
     let (parts, body) = request.into_parts();
@@ -401,7 +651,9 @@ async fn dispatch(
         body,
         version: parts.version,
     };
-    state.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(recorded.clone());
+    lock(&state.requests).push(recorded.clone());
+    // Relaxed: a count read for a report, with nothing ordered against it.
+    connection.requests.fetch_add(1, Ordering::Relaxed);
 
     Ok((state.handler)(recorded).await)
 }
@@ -429,6 +681,135 @@ pub async fn raw_server(reply: impl AsRef<[u8]>) -> Result<SocketAddr, Error> {
         }
     });
     Ok(addr)
+}
+
+/// The port [`RefusingPort`] names: below the range from which Linux
+/// (32768-60999) and macOS (49152-65535) pick the port of a `bind(0)`, so no
+/// server of this crate, which binds port 0, is ever given it.
+const REFUSING_PORT: u16 = 1;
+
+/// How long [`RefusingPort::new`] waits for its one connect to be refused.
+const REFUSAL_BOUND: Duration = Duration::from_secs(2);
+
+/// An address at which every connection is refused: `127.0.0.1:1`.
+///
+/// A test that sends to it gets a refused connection and never reaches a
+/// server of another test, because no `bind(0)` hands out a port below the
+/// ephemeral range. A port released by a test, by contrast, can be given to
+/// the next server that binds, which then counts the stranger's request as a
+/// connection of its own. The value holds no socket: it names the address
+/// once [`new`](Self::new) has checked that nothing on this machine answers
+/// there.
+#[derive(Debug, Clone)]
+pub struct RefusingPort {
+    addr: SocketAddr,
+    base_url: String,
+}
+
+impl RefusingPort {
+    /// Connects to `127.0.0.1:1` once and returns the address when the
+    /// connect is refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NotRefused`] when the connect succeeds, fails another
+    /// way, or does not end within 2 seconds: a machine that runs something
+    /// at port 1 cannot run the tests that send there, and says so by name.
+    pub async fn new() -> Result<Self, Error> {
+        Self::at(SocketAddr::from((Ipv4Addr::LOCALHOST, REFUSING_PORT)), REFUSAL_BOUND).await
+    }
+
+    /// [`new`](Self::new) for any address and bound.
+    async fn at(addr: SocketAddr, bound: Duration) -> Result<Self, Error> {
+        let outcome = match tokio::time::timeout(bound, TcpStream::connect(addr)).await {
+            Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused => {
+                return Ok(Self { addr, base_url: format!("http://{addr}") });
+            }
+            Ok(Ok(_)) => String::from("connected"),
+            Ok(Err(error)) => format!("failed with {:?}: {error}", error.kind()),
+            Err(_) => format!("did not end within {bound:?}"),
+        };
+        Err(Error::NotRefused { addr, outcome })
+    }
+
+    /// The address, `127.0.0.1:1`.
+    #[must_use]
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// The base URL, `http://127.0.0.1:1`.
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+/// A listener on `127.0.0.1` that accepts every connection and then neither
+/// reads, writes nor closes it: a server that never answers, for a deadline
+/// that runs out while a client connects.
+///
+/// Dropping the value closes the listener and every connection it holds.
+pub struct SilentServer {
+    addr: SocketAddr,
+    accepted: Arc<AtomicU64>,
+    accept_task: JoinHandle<()>,
+}
+
+impl fmt::Debug for SilentServer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SilentServer")
+            .field("addr", &self.addr)
+            .field("accepted_connections", &self.accepted_connections())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SilentServer {
+    /// Binds a listener on `127.0.0.1:0` and starts accepting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Bind`] or [`Error::LocalAddr`] when the socket cannot
+    /// be set up.
+    pub async fn start() -> Result<Self, Error> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.map_err(Error::Bind)?;
+        let addr = listener.local_addr().map_err(Error::LocalAddr)?;
+        let accepted = Arc::new(AtomicU64::new(0));
+        let counter = Arc::clone(&accepted);
+        let accept_task = tokio::spawn(async move {
+            // The streams are kept, unread, for as long as the task runs.
+            let mut held = Vec::new();
+            loop {
+                if let Ok((stream, _)) = listener.accept().await {
+                    // Relaxed: a count read for a report, with nothing
+                    // ordered against it.
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    held.push(stream);
+                }
+            }
+        });
+        Ok(Self { addr, accepted, accept_task })
+    }
+
+    /// The address the server listens on.
+    #[must_use]
+    pub fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    /// How many connections have been accepted so far.
+    #[must_use]
+    pub fn accepted_connections(&self) -> u64 {
+        self.accepted.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for SilentServer {
+    fn drop(&mut self) {
+        self.accept_task.abort();
+    }
 }
 
 #[cfg(test)]

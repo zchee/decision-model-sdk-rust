@@ -311,6 +311,247 @@ async fn a_counted_handler_is_told_which_request_it_answers() {
     assert_eq!(server.requests()[1].header_values("x-absent"), Vec::<&str>::new());
 }
 
+/// The server's records once it has accepted `count` connections and none of
+/// them is still in its TLS handshake, waited for under a bound of 5 s.
+async fn settled_connections(server: &TestServer, count: usize) -> Vec<ConnectionRecord> {
+    let settled = async {
+        loop {
+            let records = server.connections();
+            if records.len() == count
+                && records.iter().all(|record| *record.tls() != Tls::InProgress)
+            {
+                return records;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), settled).await.unwrap_or_else(|_| {
+        panic!(
+            "the server did not hold {count} settled connection(s) within 5 s: {:#?}",
+            server.connections()
+        )
+    })
+}
+
+/// Writes `request` to `stream` and reads until the answer ends with `ok`,
+/// under a bound of 5 s.
+async fn exchange_ok(stream: &mut TcpStream, request: &[u8]) -> Vec<u8> {
+    stream.write_all(request).await.expect("the request is written");
+    let read = async {
+        let mut answer = Vec::new();
+        let mut buffer = [0; 1024];
+        while !answer.ends_with(b"ok") {
+            let read = stream.read(&mut buffer).await.expect("the answer reads");
+            assert_ne!(read, 0, "the server closed before answering: {answer:?}");
+            answer.extend_from_slice(&buffer[..read]);
+        }
+        answer
+    };
+    tokio::time::timeout(Duration::from_secs(5), read)
+        .await
+        .expect("the server answered within 5 s")
+}
+
+#[tokio::test]
+async fn a_tls_connection_is_recorded_with_its_alpn_and_its_requests() {
+    let server = TestServer::start(Protocol::Http2Tls, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("an HTTP/2-over-TLS server binds on loopback");
+    let certificate = server.certificate_der().expect("a TLS server exposes its certificate");
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(certificate).expect("the generated certificate is a usable trust anchor");
+    let client = tls_client(roots).expect("the client TLS configuration is valid");
+
+    for _ in 0..3 {
+        let request = Request::get(format!("{}/v1/models", server.base_url()))
+            .body(Full::new(Bytes::new()))
+            .expect("the request parts are valid");
+        let response = client.request(request).await.expect("the request is served");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let records = server.connections();
+    assert_eq!(records.len(), 1, "{records:#?}");
+    let record = &records[0];
+    assert!(record.peer().ip().is_loopback(), "{record:?}");
+    assert_ne!(record.peer().port(), server.addr().port(), "the peer is the client");
+    assert_eq!(*record.tls(), Tls::Completed { alpn: Some(b"h2".to_vec()) });
+    assert_eq!(record.requests(), 3);
+    assert_eq!(format!("{record:?}"), format!("{}, TLS, ALPN \"h2\", 3 request(s)", record.peer()));
+    assert_eq!(server.accepted_connections(), 1, "the length of the records");
+}
+
+#[tokio::test]
+async fn a_plaintext_request_at_a_tls_port_is_recorded_with_its_first_bytes() {
+    let server = TestServer::start(Protocol::Http2Tls, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("an HTTP/2-over-TLS server binds on loopback");
+    // 76 bytes, of which the record keeps the first 64: the request line, the
+    // host, and the credential's scheme.
+    let request =
+        b"GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1\r\nauthorization: Bearer test-key\r\n\r\n";
+    let mut stream = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    stream.write_all(request).await.expect("the request is written");
+
+    let records = settled_connections(&server, 1).await;
+    let record = &records[0];
+    assert_eq!(record.peer(), stream.local_addr().expect("the client's address"));
+    assert_eq!(
+        *record.tls(),
+        Tls::Failed {
+            error: String::from("received corrupt message of type InvalidContentType"),
+            first_bytes: request[..FIRST_BYTES].to_vec(),
+        }
+    );
+    assert_eq!(record.requests(), 0);
+    assert_eq!(
+        format!("{record:?}"),
+        format!(
+            "{}, TLS failed: received corrupt message of type InvalidContentType; first bytes {}, 0 request(s)",
+            record.peer(),
+            r#""GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1\r\nauthorization: Bearer ""#
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_handshake_the_client_rejects_is_recorded_with_its_client_hello() {
+    let server = TestServer::start(Protocol::Http2Tls, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("an HTTP/2-over-TLS server binds on loopback");
+    let request = Request::get(format!("{}/v1/models", server.base_url()))
+        .body(Full::new(Bytes::new()))
+        .expect("the request parts are valid");
+    tls_client(rustls::RootCertStore::empty())
+        .expect("the client TLS configuration is valid")
+        .request(request)
+        .await
+        .expect_err("a client trusting nothing must not complete the handshake");
+
+    let records = settled_connections(&server, 1).await;
+    let record = &records[0];
+    let Tls::Failed { error, first_bytes } = record.tls() else {
+        panic!("the handshake failed on the server as well: {record:?}");
+    };
+    assert_eq!(error, "received fatal alert: UnknownCA", "{record:?}");
+    // A TLS record of type handshake (22), then the version of the record
+    // layer: binary, so the rendering escapes it.
+    assert_eq!(first_bytes.len(), FIRST_BYTES, "{record:?}");
+    assert_eq!(first_bytes[..2], [0x16, 0x03], "{record:?}");
+    let rendered = format!("{record:?}");
+    assert!(
+        rendered.contains(r#"; first bytes "\x16\x03"#) && rendered.ends_with(", 0 request(s)"),
+        "{rendered}"
+    );
+    assert!(rendered.is_ascii() && !rendered.contains('\n'), "one printable line: {rendered}");
+}
+
+#[tokio::test]
+async fn close_connections_ends_every_held_connection_and_keeps_listening() {
+    let server = TestServer::start(Protocol::Http1, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("an HTTP/1.1 server binds on loopback");
+    let request = b"GET /v1/models HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n";
+
+    let mut first = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    let answer = exchange_ok(&mut first, request).await;
+    assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\n"), "{:?}", answer.escape_ascii().to_string());
+
+    server.close_connections();
+    let mut buffer = [0; 64];
+    let read = tokio::time::timeout(Duration::from_secs(5), first.read(&mut buffer))
+        .await
+        .expect("the server closed the connection within 5 s");
+    assert_eq!(read.expect("a clean close, not a reset"), 0, "the connection ended");
+
+    // The listener is still there, and a new connection is served.
+    let mut second = TcpStream::connect(server.addr()).await.expect("the server still accepts");
+    let answer = exchange_ok(&mut second, request).await;
+    assert!(answer.starts_with(b"HTTP/1.1 200 OK\r\n"), "{:?}", answer.escape_ascii().to_string());
+
+    let records = server.connections();
+    let peers = [
+        first.local_addr().expect("the first client's address"),
+        second.local_addr().expect("the second client's address"),
+    ];
+    assert_eq!(
+        records.iter().map(|record| format!("{record:?}")).collect::<Vec<_>>(),
+        peers.map(|peer| format!("{peer}, cleartext, 1 request(s)")),
+    );
+    assert_eq!(server.accepted_connections(), 2);
+}
+
+#[tokio::test]
+async fn the_refusing_port_is_port_one_and_refuses() {
+    let port = RefusingPort::new().await.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(port.addr(), SocketAddr::from((Ipv4Addr::LOCALHOST, 1)));
+    assert_eq!(port.base_url(), "http://127.0.0.1:1");
+    for attempt in 1..=3 {
+        let error = TcpStream::connect(port.addr()).await.expect_err("nothing answers at port 1");
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused, "attempt {attempt}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn an_address_that_accepts_is_not_a_refusing_port() {
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.expect("a loopback listener binds");
+    let addr = listener.local_addr().expect("its address");
+
+    let error = RefusingPort::at(addr, Duration::from_secs(2))
+        .await
+        .expect_err("a connect to a listener is not refused");
+    let Error::NotRefused { addr: named, outcome } = &error else {
+        panic!("the error says the port was not refused: {error:?}");
+    };
+    assert_eq!(*named, addr);
+    assert_eq!(outcome, "connected");
+    assert_eq!(
+        error.to_string(),
+        format!("{addr} should refuse every connection, but a connect to it connected")
+    );
+}
+
+#[tokio::test]
+async fn a_silent_server_accepts_and_never_answers() {
+    let server = SilentServer::start().await.expect("a silent server binds on loopback");
+    assert!(server.addr().ip().is_loopback(), "{server:?}");
+    let mut written = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    let mut quiet = TcpStream::connect(server.addr()).await.expect("the server accepts again");
+    written.write_all(b"GET / HTTP/1.1\r\nhost: 127.0.0.1\r\n\r\n").await.expect("it is written");
+
+    let accepted = async {
+        while server.accepted_connections() < 2 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), accepted)
+        .await
+        .unwrap_or_else(|_| panic!("the server did not accept both connections: {server:?}"));
+
+    // Nothing comes back, neither an answer nor a close: the read is still
+    // waiting when its own bound ends.
+    let mut buffer = [0; 64];
+    let read = tokio::time::timeout(Duration::from_millis(200), written.read(&mut buffer)).await;
+    assert!(read.is_err(), "the silent server answered or closed: {read:?}");
+    assert_eq!(server.accepted_connections(), 2, "{server:?}");
+
+    // Dropping the server closes what it held.
+    drop(server);
+    let read = tokio::time::timeout(Duration::from_secs(5), quiet.read(&mut buffer))
+        .await
+        .expect("the held connection closed within 5 s of the drop");
+    assert_eq!(read.expect("a clean close"), 0);
+}
+
 #[tokio::test]
 async fn a_raw_server_answers_every_connection_with_its_bytes() {
     let reply = b"SSH-2.0-OpenSSH_9.9\r\n\r\n";
