@@ -586,8 +586,8 @@ binary (median 64, max 64, client_opened 64 in both). It depends on how far the 
 maximum are 64 while B was 1/1/1 in both runs.
 
 B's 1/1/1 was two runs of 10 repetitions on an idle macOS machine, and it was not the whole picture: on Linux,
-hyper-util's own client opened a second connection in 5 of 4,000 cold bursts on 4 idle CPUs, and the SDK's cold fan-out
-in up to 17.4 % of them, which S2c measures and explains.
+hyper-util's own client opened a second connection in 5 of 4,000 cold bursts on 4 idle CPUs and in 174 of 2,000 on 2
+CPUs, and the SDK's cold fan-out in up to 17.4 % of them, which S2c measures and explains.
 
 **Decision (plan section 5, S2b rule: "if `http2_only` yields 1 and `Auto` yields > 1, the default for `https` base
 URLs is `Http2Only`, with `Auto` as the documented knob"): the rule fires exactly. `Http2Only` is the default for
@@ -619,19 +619,25 @@ processes" is eight such loops at once in that container.
 | Linux and macOS, warm pool (100 calls one after another, then 100 at once): Linux 4 CPUs idle and with 8 processes, coverage-instrumented idle and with 8 processes, Linux 2 CPUs idle and with 4 processes, macOS idle and with 24 processes | | | 17,200 | 0 | 0 |
 
 The change against the code before it: the same harness, the two builds run in alternating blocks inside one container
-per configuration, cold bursts of 64 calls with 2 or more connections, no call failed in any run.
+per configuration, cold bursts of 64 calls with 2 or more connections, no call failed in any run. The table is the gate
+as it ships.
 
 | configuration | before the change | with the gate |
 | --- | ---: | ---: |
-| 4 CPUs, 3 bodies in one process | 522 / 3,000 (17.40 %) | 0 / 3,000 |
-| 4 CPUs, 8 processes | 467 / 4,000 (11.68 %) | 0 / 4,000 |
-| 2 CPUs, idle | 151 / 2,000 (7.55 %) | 0 / 2,000 |
-| 4 CPUs, coverage-instrumented | 0 / 2,000 (25 / 2,000 in an earlier run that day) | 0 / 2,000 |
-| all four | 1,140 / 11,000 | 0 / 11,000 |
+| 4 CPUs, 3 bodies in one process | 502 / 3,000 (16.73 %) | 0 / 3,000 |
+| 4 CPUs, 8 processes | 469 / 4,000 (11.72 %) | 0 / 4,000 |
+| 2 CPUs, idle | 106 / 2,000 (5.30 %) | 0 / 2,000 |
+| all three | 1,077 / 9,000 | 0 / 9,000 |
 
-hyper-util alone, without the SDK, did the same: 2 connector calls in 5 of 4,000 cold bursts on 4 idle Linux CPUs. The
-rate follows the machine's scheduling, not the code path: the retry policy made no measurable difference (33 against
-42 in 4,000 interleaved bursts each), and tracing raised it (16 against 6 in 4,000).
+Three such runs were made that day, the last with the gate as it ships and two with earlier forms of it whose success
+path was the same: 0 cold bursts with a second connection in 29,000 with the gate, against 3,306 before it. One of them
+also ran the body instrumented for coverage: 0 / 2,000 with the gate, and 0 / 2,000 before it (25 / 2,000 before it in
+an earlier run).
+
+hyper-util alone, without the SDK, did the same: 2 connector calls in 5 of 4,000 cold bursts on 4 idle Linux CPUs, and a
+second connection in 174 of 2,000 (8.70 %) on 2 CPUs. The rate follows the machine's scheduling, not the code path: the
+retry policy made no measurable difference (33 against 42 in 4,000 interleaved bursts each), and tracing raised it (16
+against 6 in 4,000).
 
 **What the second connection was.** The client's own: from the next ephemeral port, a completed TLS handshake with
 ALPN `h2`, 0 requests, and closed by the client a median 48 µs (at most 2.1 ms, over 101 records) after its handshake.
@@ -648,9 +654,10 @@ holds no connection: no request was given a pooled connection since the last con
 through `capture_connection`, or no stream the connector made is still open, which the transport counts at the socket.
 The one request (the opener) goes to hyper-util with `capture_connection` attached; hyper-util fills it after the new
 connection is in the pool, and the gate then releases every waiter at once, so each one's checkout finds the connection
-on its first poll and its connect is never started. When the opener's connect fails - TCP, TLS or the HTTP/2 handshake
-after it - every waiting request fails with it, as before the change; an opener that is dropped (its caller's
-deadline, a cancelled task) passes the turn to one waiter instead, and a call's deadline covers its wait. A request
+on its first poll and its connect is never started. When the opener's turn ends without a connection - its connect
+failed (TCP, TLS or the HTTP/2 handshake after it), or it was dropped before a connection existed (its caller's
+deadline, a cancelled task) - every waiting request fails with it, as before the change; an opener whose response
+fails on a connection passes the turn to one waiter instead, and a call's deadline covers its wait. A request
 sent while the pool holds a connection pays two atomic loads; one sent while it does not pays a boxed future and a
 clone of the client. `Auto` is unchanged. Every call future over the default transport grew by 16 bytes (the gate's
 reference count in the transport and in its connector): 2,344 / 2,328 / 2,328 / 2,032 became 2,360 / 2,344 / 2,344 /
@@ -660,38 +667,65 @@ What it does not cover: a connection that ends while requests are in flight is r
 resends a request that had not started (`retry_canceled_requests`) without passing the gate, so a burst at that
 moment can still open a second connection that is closed at once.
 
+**What a connect that outlasts the deadline costs.** At an endpoint that accepts TCP and never finishes the TLS
+handshake - an overloaded TLS terminator, a stalled load balancer; `connect_timeout` is off by default and covers TCP
+only - the request that opened is dropped at its deadline before a connection exists. Before the change, hyper-util
+failed every request waiting for that connect with `request was canceled`. An earlier form of the gate handed the
+dropped request's turn to a waiting one instead, which started a connect of its own and was dropped at its own deadline
+in turn: one connect per waiting call's deadline. The waiting requests now fail at once, as before the change, with a
+connection error that says the request that started the connect was dropped before a connection existed; the default
+policy retries them after its backoff, with one opener again. 64 calls under `Http2Only` with a 1 s deadline each at a
+server that accepts and never answers, measured on 2026-09-28, 3 runs of each; the columns are the connections the
+server accepted per run.
+
+| system | runtime | calls | retries | before the change | the earlier form of the gate | with the gate |
+| --- | --- | --- | ---: | --- | --- | --- |
+| macOS | current-thread | 1 ms apart | 0 | 1, 1, 1 | 20, 24, 21 | 1, 1, 1 |
+| macOS | current-thread | 1 ms apart | 2 | 3, 3, 3 | 117, 96, 99 | 3, 3, 3 |
+| macOS | current-thread | all at once | 0 | 1, 1, 1 | 1, 3, 1 | 1, 1, 1 |
+| macOS | current-thread | all at once | 2 | 3, 3, 3 | not measured | 3, 3, 3 |
+| macOS | multi-thread, 4 workers | 1 ms apart | 0 | 1, 1, 1 | 5, 4, 4 | 1, 1, 1 |
+| macOS | multi-thread, 4 workers | 1 ms apart | 2 | 3, 3, 3 | 10, 11, 8 | 3, 3, 3 |
+| macOS | multi-thread, 4 workers | all at once | 0 | 1, 1, 1 | 1, 1, 1 | 1, 1, 1 |
+| macOS | multi-thread, 4 workers | all at once | 2 | 3, 3, 3 | 9, 13, 9 | 3, 3, 3 |
+| Linux, 4 CPUs | both | 1 ms apart or all at once | 0 | 1, 1, 1 | not measured | 1, 1, 1 |
+| Linux, 4 CPUs | both | 1 ms apart or all at once | 2 | 3, 3, 3 | not measured | 3, 3, 3 |
+
+Before the change and with the gate alike, every call ended 1,001-1,012 ms after it started with no retry, and
+4,135-4,163 ms after it with the default policy.
+
 **What a failed connect costs.** Before the change, when the connect hyper-util was making for a burst failed, every
 request waiting for it failed at once with `request was canceled`. A first form of the gate handed the turn to one
 waiting request after another instead, each with a connect of its own: a burst of 64 with the default two retries at a
 server that fails the TLS handshake after 200 ms ran up to 26.7 s, and the server saw 132 connects instead of 4. The
 waiting requests now fail with the opener as before, and say why: `the connect this request waited for failed: ` and the
-opener's failure, where the code before the change said `request was canceled`. A burst of 64 calls under `Http2Only` at
-a loopback endpoint whose connect fails, the two builds run alternately on 2026-09-28; "fails the TLS handshake" accepts
-TCP and closes after the delay, "closed after TLS" completes TLS with ALPN `h2` and closes after the delay without
-speaking HTTP/2. The columns are when the calls ended (first to last, over all runs) and the connections the server
-accepted; no call timed out.
+opener's failure, where the code before the change said `request was canceled`. For a connect that fails, what the
+burst costs with the gate is what it cost before the change, as the table shows; a connect given up at a caller's
+deadline is the paragraph above. A burst of 64 calls under `Http2Only` at a loopback endpoint whose connect fails, the
+two builds run alternately on 2026-09-28, the gate as it ships; "fails the TLS handshake" accepts TCP and closes after
+the delay, "closed after TLS" completes TLS with ALPN `h2` and closes after the delay without speaking HTTP/2. The
+columns are when the calls ended (first to last, over all runs) and the connections the server accepted; no call timed
+out.
 
 | system | endpoint | retries | before the change | with the gate |
 | --- | --- | ---: | --- | --- |
-| macOS | fails the TLS handshake after 200 ms | 0 | 202-230 ms, 1 | 226-236 ms, 1 |
-| macOS | fails the TLS handshake after 200 ms | 2 | 1,763-1,991 ms, 4 | 1,763-1,990 ms, 4 |
-| macOS | closed right after TLS | 0 | 5-9 ms, 1-2 | 4-5 ms, 1 |
-| macOS | closed right after TLS | 2 | 1,162-1,491 ms, 58-62 | 1,155-1,501 ms, 61-70 |
-| macOS | closed 50 ms after TLS | 2 | 1,297-1,645 ms, 10-11 | 1,293-1,637 ms, 10-11 |
-| macOS | closed 200 ms after TLS | 2 | 1,750-1,977 ms, 4 | 1,749-1,961 ms, 4 |
-| Linux, 4 and 2 CPUs | fails the TLS handshake after 200 ms | 0 | 202-205 ms, 1 | 201-206 ms, 1 |
-| Linux, 4 and 2 CPUs | fails the TLS handshake after 200 ms | 2 | 1,740-1,967 ms, 4 | 1,739-1,977 ms, 4 |
-| Linux, 4 and 2 CPUs | closed right after TLS | 0 | 0-3 ms, 1-3 | 0-13 ms, 1-3 |
-| Linux, 4 and 2 CPUs | closed right after TLS | 2 | 1,155-1,504 ms, 51-69 | 1,145-1,508 ms, 44-65 |
-| Linux, 4 and 2 CPUs | closed 50 ms after TLS | 2 | 1,292-1,656 ms, 9-11 | 1,296-1,640 ms, 9-10 |
-| Linux, 4 and 2 CPUs | closed 200 ms after TLS | 2 | 1,745-1,963 ms, 4 | 1,749-1,980 ms, 4 |
-| both | refused (`127.0.0.1:1`) | 0 | within 1 ms | within 1 ms |
+| macOS | fails the TLS handshake after 200 ms | 0 | 224-226 ms, 1 | 224-239 ms, 1 |
+| macOS | fails the TLS handshake after 200 ms | 2 | 1,747-1,977 ms, 4 | 1,764-1,996 ms, 4 |
+| macOS | closed right after TLS | 0 | 4-6 ms, 1 | 5-6 ms, 1 |
+| macOS | closed right after TLS | 2 | 1,155-1,491 ms, 62-64 | 1,160-1,496 ms, 57-68 |
+| macOS | closed 200 ms after TLS | 2 | 1,749-1,982 ms, 4 | 1,745-1,962 ms, 4 |
+| Linux, 4 and 2 CPUs | fails the TLS handshake after 200 ms | 0 | 201-209 ms, 1 | 202-208 ms, 1 |
+| Linux, 4 and 2 CPUs | fails the TLS handshake after 200 ms | 2 | 1,743-1,976 ms, 4 | 1,747-1,982 ms, 4 |
+| Linux, 4 and 2 CPUs | closed right after TLS | 0 | 0-3 ms, 1-2 | 0-3 ms, 1-2 |
+| Linux, 4 and 2 CPUs | closed right after TLS | 2 | 1,143-1,501 ms, 53-69 | 1,155-1,508 ms, 53-67 |
+| Linux, 4 and 2 CPUs | closed 50 ms after TLS | 2 | 1,298-1,651 ms, 10-11 | 1,305-1,652 ms, 9-11 |
+| Linux, 4 and 2 CPUs | closed 200 ms after TLS | 2 | 1,753-1,995 ms, 4 | 1,746-1,980 ms, 4 |
 
-One of the 40 Linux bursts at the endpoint closed right after TLS, with no retry, ended at 13 ms with 3 connections:
-the opener's HTTP/2 handshake had failed after TLS, which hyper-util reports as a `SendRequest` error rather than a
-connect error, and the gate, which then went by the error's kind, passed the turn on. The gate now fails the waiting
-requests on any error that happened before there was a connection, which hyper-util states on the error itself (it
-attaches no connection to it); that change came after this measurement.
+In an earlier run, with an earlier form of the gate, one of 40 Linux bursts at the endpoint closed right after TLS, with
+no retry, ended at 13 ms with 3 connections: the opener's HTTP/2 handshake had failed after TLS, which hyper-util
+reports as a `SendRequest` error rather than a connect error, and that form of the gate, which went by the error's kind,
+passed the turn on. The gate now fails the waiting requests on any error that happened before there was a connection,
+which hyper-util states on the error itself (it attaches no connection to it); the table above is measured with it.
 
 A connection count had a second, rarer possible source: a stranger's request. Two tests of `tests/client.rs` sent calls
 to a port they had bound and released, and Linux hands a released port to the next `bind(0)` about once in 7,058 binds,

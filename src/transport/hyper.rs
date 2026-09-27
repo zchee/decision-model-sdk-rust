@@ -83,9 +83,16 @@ pub enum HttpVersion {
     /// that error cannot be copied, so only the request that opened carries
     /// it. A request that opened and hit the connect timeout reports
     /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout), while the requests
-    /// that waited report `Connection`. A caller that gives up - its deadline
-    /// passes, or its task is dropped - does not fail the others: the next
-    /// waiting request opens.
+    /// that waited report `Connection`.
+    ///
+    /// When the request that opened is dropped before a connection exists -
+    /// its deadline passes, or its task is dropped - the requests waiting for
+    /// it fail at once as well, with an `ErrorKind::Connection` error that
+    /// says so, as hyper-util fails the requests waiting for a connect it no
+    /// longer makes. The default retry policy retries them after its backoff,
+    /// and the retry wave opens one connection again. A waiting request that
+    /// took over instead would start a connect at an endpoint that has just
+    /// failed to answer one, once per waiting call.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.
