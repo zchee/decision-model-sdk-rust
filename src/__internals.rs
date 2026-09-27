@@ -1,5 +1,6 @@
 //! Thin wrappers around the codec and the retry delay, for allocation tests
-//! and benchmarks.
+//! and benchmarks, and the built-in transport's count of open streams, for
+//! the connection tests.
 //!
 //! This module exists only because an allocation budget has to be asserted
 //! against the same code the SDK runs, and that code is crate-private. It is
@@ -148,6 +149,16 @@ pub fn parse_retry_after(
     now: std::time::SystemTime,
 ) -> Option<std::time::Duration> {
     crate::error::parse_retry_after(headers, now)
+}
+
+/// The streams the built-in transport of `client` has open: every connection
+/// it made that is not dropped yet, one the server closed included until the
+/// client has noticed. At zero, the next request of `client` opens a
+/// connection.
+#[cfg(feature = "hyper")]
+#[must_use]
+pub fn open_streams(client: &crate::Client<crate::HyperTransport>) -> usize {
+    client.shared().service.open_streams()
 }
 
 /// Forwards to `retry::backoff_seconds`, unchanged: the delay in seconds

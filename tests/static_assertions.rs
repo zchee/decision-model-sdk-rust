@@ -62,6 +62,14 @@ const _: () = crosses_threads::<HyperResponseFuture>();
 #[cfg(feature = "hyper")]
 const _: fn(<HyperTransport as HttpService>::ResponseBody) -> ResponseBody = |body| body;
 
+// The default transport's future is also `Sync` and `Unpin`, as hyper-util's
+// own response future is: whichever path a request takes, the public type
+// keeps the auto traits it has always had.
+#[cfg(feature = "hyper")]
+const fn is_send_sync_unpin<T: Send + Sync + Unpin>() {}
+#[cfg(feature = "hyper")]
+const _: () = is_send_sync_unpin::<HyperResponseFuture>();
+
 // The response types keep their sizes whatever holds their names: a name is
 // as wide as the `String` it replaced, and `None` still costs nothing extra.
 // Sizes on a 64-bit target.
@@ -187,15 +195,19 @@ fn the_future_of_every_call_is_send() {
 /// response future is the larger one), so what is guarded there is growth:
 /// the bounds are the sizes measured on macOS arm64 and Linux x86_64 -
 /// identical on both, in both profiles, 24 bytes less each without the
-/// default features - plus 32 bytes. Targets other than macOS and Linux
-/// (Windows among them) have not been measured, so their bounds are looser.
-/// Raising a bound is a decision to state, not a number to bump.
+/// default features - plus 32 bytes. The transport's wait for the first
+/// connection of a client took 16 of those bytes: a reference count held by
+/// the transport and one held by its connector, both inside the transport
+/// the call clones. Targets other than macOS and Linux (Windows among them)
+/// have not been measured, so their bounds are looser. Raising a bound is a
+/// decision to state, not a number to bump.
 #[test]
 fn the_future_of_every_call_stays_small() {
     // Tokio 1.53.1 `runtime/mod.rs`: the debug build's `BOX_FUTURE_THRESHOLD`.
     const TOKIO_DEBUG_BOX: usize = 2048;
-    // Measured over the default transport: 2344, 2328 and 2032 bytes, `ask`
-    // the same 2328 as `typed`; over a custom transport 2040, 2024 and 1728.
+    // Measured over the default transport: 2360, 2344 and 2048 bytes (2344,
+    // 2328 and 2032 before the wait for the first connection), `ask` the same
+    // as `typed`; over a custom transport 2040, 2024 and 1728.
     #[cfg(all(feature = "hyper", any(target_os = "macos", target_os = "linux")))]
     const DEFAULT_TRANSPORT: [usize; 4] = [2376, 2360, 2360, 2064];
     #[cfg(all(feature = "hyper", not(any(target_os = "macos", target_os = "linux"))))]

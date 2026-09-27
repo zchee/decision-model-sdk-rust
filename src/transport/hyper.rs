@@ -35,7 +35,10 @@ use rustls::{ClientConfig, pki_types::CertificateDer};
 use rustls_platform_verifier::{BuilderVerifierExt as _, Verifier};
 use tower_service::Service;
 
-use super::{Body, BoxError};
+use super::{
+    Body, BoxError,
+    gate::{self, Counting, Gate},
+};
 use crate::{error::Error, text};
 
 /// How long an idle pooled connection is kept before it is closed.
@@ -83,7 +86,9 @@ pub(crate) struct TransportSettings {
 #[derive(Clone)]
 #[cfg_attr(docsrs, doc(cfg(feature = "hyper")))]
 pub struct HyperTransport {
-    client: legacy::Client<HttpsConnector<HttpConnector>, Body>,
+    client: legacy::Client<Counting<HttpsConnector<HttpConnector>>, Body>,
+    /// Shared by every clone, as the pool is.
+    gate: Arc<Gate>,
     version: HttpVersion,
     extra_roots: usize,
     connect_timeout: Option<Duration>,
@@ -131,12 +136,21 @@ impl HyperTransport {
             .http2_keep_alive_while_idle(true)
             .http2_only(version == HttpVersion::Http2Only);
 
+        let gate = Arc::new(Gate::default());
         Ok(Self {
-            client: builder.build(connector),
+            client: builder.build(Counting::new(connector, Arc::clone(&gate))),
+            gate,
             version,
             extra_roots: root_count,
             connect_timeout,
         })
+    }
+
+    /// The streams the transport's connector handed to hyper that are not
+    /// dropped yet.
+    #[cfg(feature = "internals")]
+    pub(crate) fn open_streams(&self) -> usize {
+        self.gate.open_streams()
     }
 }
 
@@ -163,10 +177,17 @@ impl Service<Request<Body>> for HyperTransport {
     }
 
     fn call(&mut self, request: Request<Body>) -> HyperResponseFuture {
-        HyperResponseFuture {
-            inner: self.client.request(request),
-            connect_timeout: self.connect_timeout,
-        }
+        // Under `Http2Only`, two atomic loads decide whether the pool holds a
+        // connection; only a request sent while it does not goes through the
+        // gate, which costs one boxed future and a clone of the client.
+        // `Auto` never waits: it needs a connection per concurrent HTTP/1.1
+        // request.
+        let inner = if self.version == HttpVersion::Http2Only && !self.gate.is_warm() {
+            Sent::Gated(Box::pin(gate::send(Arc::clone(&self.gate), self.client.clone(), request)))
+        } else {
+            Sent::Direct(self.client.request(request))
+        };
+        HyperResponseFuture { inner, connect_timeout: self.connect_timeout }
     }
 }
 
@@ -174,8 +195,16 @@ impl Service<Request<Body>> for HyperTransport {
 #[must_use = "futures do nothing unless polled"]
 #[cfg_attr(docsrs, doc(cfg(feature = "hyper")))]
 pub struct HyperResponseFuture {
-    inner: legacy::ResponseFuture,
+    inner: Sent,
     connect_timeout: Option<Duration>,
+}
+
+/// A request sent straight to the pool, or through the gate.
+enum Sent {
+    Direct(legacy::ResponseFuture),
+    /// `Sync` as well as `Send`, as hyper-util's own response future is, so
+    /// that the public future keeps both.
+    Gated(Pin<Box<dyn Future<Output = Result<Response<Incoming>, legacy::Error>> + Send + Sync>>),
 }
 
 impl fmt::Debug for HyperResponseFuture {
@@ -188,10 +217,15 @@ impl Future for HyperResponseFuture {
     type Output = Result<Response<ResponseBody>, BoxError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Both fields are `Unpin`, so the pinned reference can be turned back
-        // into a plain one and the inner future pinned in place again.
+        // Both fields are `Unpin` (the gated future is pinned in its box), so
+        // the pinned reference can be turned back into a plain one and the
+        // inner future pinned in place again.
         let this = self.get_mut();
-        match Pin::new(&mut this.inner).poll(cx) {
+        let polled = match &mut this.inner {
+            Sent::Direct(future) => Pin::new(future).poll(cx),
+            Sent::Gated(future) => future.as_mut().poll(cx),
+        };
+        match polled {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Ok(response)) => Poll::Ready(Ok(response.map(ResponseBody))),
             Poll::Ready(Err(error)) => Poll::Ready(Err(failure(error, this.connect_timeout))),

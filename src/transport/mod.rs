@@ -17,6 +17,8 @@
 //! attempt, whichever transport is underneath.
 
 #[cfg(feature = "hyper")]
+mod gate;
+#[cfg(feature = "hyper")]
 #[cfg_attr(docsrs, doc(cfg(feature = "hyper")))]
 mod hyper;
 
@@ -373,7 +375,7 @@ where
     // every call's future, which over a custom transport tips it over the
     // size at which tokio boxes a spawned future in a debug build (2,048
     // bytes). Over the default transport hyper's response future keeps the
-    // call over that size either way (2,344 bytes), so a debug-build call
+    // call over that size either way (2,360 bytes), so a debug-build call
     // spawned on the default client is boxed.
     let (started, exchanged) = {
         let mut headers = exchange.base_headers.clone();

@@ -25,8 +25,9 @@ name = "typesafe_sdk"
 
 [features]
 default = ["hyper", "macros", "tracing"]
-# The built-in transport and its TLS stack.
-hyper = ["dep:hyper", "dep:hyper-rustls", "dep:hyper-util", "dep:rustls", "dep:rustls-platform-verifier"]
+# The built-in transport and its TLS stack. `tokio/sync` is the transport's
+# wait for the first connection of a client; hyper-util compiles it anyway.
+hyper = ["dep:hyper", "dep:hyper-rustls", "dep:hyper-util", "dep:rustls", "dep:rustls-platform-verifier", "tokio/sync"]
 # Exposes `typesafe_sdk::__internals`, the seam the allocation tests and the
 # benchmarks measure through. It carries no semver promise and is never on by
 # default.

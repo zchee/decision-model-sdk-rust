@@ -498,7 +498,7 @@ second identical call, 64-bit targets.
   and call 32 with serde_json.
 - **Debug builds and the default transport.** Tokio boxes a future larger than 2,048 bytes when
   it is spawned or blocked on in a debug build (16,384 in release). A System One call over the
-  default transport is a 2,344-byte future, so a debug build that spawns calls pays one more
+  default transport is a 2,360-byte future, so a debug build that spawns calls pays one more
   allocation per call; a release build does not, and neither does a call over a custom transport
   (2,040 bytes).
 - **Release profile.** A library cannot set the profile it is built with, so these belong in the
