@@ -392,14 +392,22 @@ pings every 30 s.
 
 - For an `https` base URL the default is `HttpVersion::Http2Only`: all requests of a client share
   one multiplexed HTTP/2 connection. While a client has no connection - before its first request,
-  or after the server closed the connection while the client was idle - one request opens it and
-  the others started at the same time wait for it, so a burst opens one connection (64 concurrent
-  cold calls open exactly 1 connection in the test suite). One case is not covered: when a
-  connection ends while requests are in flight, hyper-util replaces it on its own, and a burst at
-  that moment can still open a second connection, which is closed at once.
+  or after the server closed an idle connection and the client has seen the close - one request
+  opens it and the others started at the same time wait for it, so a burst opens one connection
+  (64 concurrent cold calls open exactly 1 connection in the test suite). One case is not
+  covered: when a connection ends while requests are in flight, hyper-util replaces it on its
+  own, and a burst at that moment can still open a second connection, which is closed at once.
   `HttpVersion::Auto` lets ALPN choose HTTP/1.1 or HTTP/2, for a proxy that speaks HTTP/1.1 only;
   a cold client under `Auto` may open one connection per request started at the same time. An
   `http` base URL uses `Auto` unless told otherwise.
+- When that one connect fails - TCP, TLS or the HTTP/2 handshake - every request that waited for
+  it fails at once, without a connect of its own. Its error is an `ErrorKind::Connection` whose
+  message quotes the failure (`Connection error: the connect this request waited for failed:`,
+  then the failure's own messages). A downcast of its sources finds no hyper-util error: that
+  error cannot be copied, so only the request that opened carries it. The kinds can differ: a
+  request that opened and hit the `connect_timeout` reports `ErrorKind::Timeout`, and the requests
+  that waited report `Connection`. A caller that gives up - its deadline passes, or its task is
+  dropped - does not fail the others: the next waiting request opens.
 - `client.warm_up().await` lists the models once and drops the answer. It checks the API key and
   leaves an open connection in the pool, so call it **before a fan-out**: the first requests
   then pay no TCP or TLS handshake, and a bad key fails once instead of once per request.

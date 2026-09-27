@@ -68,11 +68,23 @@ pub enum HttpVersion {
     ///
     /// Every request of a client shares one multiplexed connection. While the
     /// client has no connection - before its first request, or after the
-    /// server closed the connection while the client was idle - one request
-    /// opens it and the others started at the same time wait for it, so they
-    /// share it too. When a connection ends while requests are in flight,
-    /// hyper-util replaces it on its own, and a burst at that moment can still
-    /// open a second connection, which is closed at once.
+    /// server closed an idle connection and the client has seen the close -
+    /// one request opens it and the others started at the same time wait for
+    /// it, so they share it too. When a connection ends while requests are in
+    /// flight, hyper-util replaces it on its own, and a burst at that moment
+    /// can still open a second connection, which is closed at once.
+    ///
+    /// When that one connect fails - TCP, TLS or the HTTP/2 handshake - every
+    /// request that waited for it fails at once, without a connect of its
+    /// own, with an [`ErrorKind::Connection`](crate::ErrorKind::Connection)
+    /// error whose message quotes the failure. A downcast of its
+    /// [`source`](std::error::Error::source) chain finds no hyper-util error:
+    /// that error cannot be copied, so only the request that opened carries
+    /// it. A request that opened and hit the connect timeout reports
+    /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout), while the requests
+    /// that waited report `Connection`. A caller that gives up - its deadline
+    /// passes, or its task is dropped - does not fail the others: the next
+    /// waiting request opens.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.
