@@ -90,9 +90,13 @@ pub enum HttpVersion {
     /// it fail at once as well, with an `ErrorKind::Connection` error that
     /// says so, as hyper-util fails the requests waiting for a connect it no
     /// longer makes. The default retry policy retries them after its backoff,
-    /// and the retry wave opens one connection again. A waiting request that
-    /// took over instead would start a connect at an endpoint that has just
-    /// failed to answer one, once per waiting call.
+    /// and the retry wave opens one connection again when its retries start
+    /// within one attempt's deadline of each other, as the default backoff and
+    /// the default 10 s deadline guarantee; with a deadline shorter than the
+    /// backoff's spread (about 250 ms) it opens as many as hyper-util alone
+    /// would. A waiting request that took over instead would start a connect
+    /// at an endpoint that has just failed to answer one, once per waiting
+    /// call.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.

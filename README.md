@@ -411,9 +411,11 @@ pings every 30 s.
   task is dropped - the requests waiting for it fail at once as well, with an
   `ErrorKind::Connection` that says so (`the connect this request waited for was given up`), as
   hyper-util fails the requests waiting for a connect it no longer makes. The default retry policy
-  retries them after its backoff, and the retry wave opens one connection again. A waiting request
-  that took over instead would start a connect at an endpoint that has just failed to answer one,
-  once per waiting call.
+  retries them after its backoff, and the retry wave opens one connection again when its retries
+  start within one attempt's deadline of each other, as the default backoff and the default 10 s
+  deadline guarantee; with a deadline shorter than the backoff's spread (about 250 ms) it opens as
+  many as hyper-util alone would. A waiting request that took over instead would start a connect
+  at an endpoint that has just failed to answer one, once per waiting call.
 - `client.warm_up().await` lists the models once and drops the answer. It checks the API key and
   leaves an open connection in the pool, so call it **before a fan-out**: the first requests
   then pay no TCP or TLS handshake, and a bad key fails once instead of once per request.

@@ -587,7 +587,7 @@ maximum are 64 while B was 1/1/1 in both runs.
 
 B's 1/1/1 was two runs of 10 repetitions on an idle macOS machine, and it was not the whole picture: on Linux,
 hyper-util's own client opened a second connection in 5 of 4,000 cold bursts on 4 idle CPUs and in 174 of 2,000 on 2
-CPUs, and the SDK's cold fan-out in up to 17.4 % of them, which S2c measures and explains.
+CPUs, and the SDK's cold fan-out in up to 16.73 % of them, which S2c measures and explains.
 
 **Decision (plan section 5, S2b rule: "if `http2_only` yields 1 and `Auto` yields > 1, the default for `https` base
 URLs is `Http2Only`, with `Auto` as the documented knob"): the rule fires exactly. `Http2Only` is the default for
@@ -674,9 +674,12 @@ failed every request waiting for that connect with `request was canceled`. An ea
 dropped request's turn to a waiting one instead, which started a connect of its own and was dropped at its own deadline
 in turn: one connect per waiting call's deadline. The waiting requests now fail at once, as before the change, with a
 connection error that says the request that started the connect was dropped before a connection existed; the default
-policy retries them after its backoff, with one opener again. 64 calls under `Http2Only` with a 1 s deadline each at a
-server that accepts and never answers, measured on 2026-09-28, 3 runs of each; the columns are the connections the
-server accepted per run.
+policy retries them after its backoff, with one opener again when the wave's retries start within one attempt's deadline
+of each other, which the default backoff (windows of 125 and 250 ms) and the default 10 s attempt guarantee; with a 100
+ms deadline a wave of 64 made 6 or 7 connects and with a 50 ms one 11 to 13, before the change and with the gate alike
+(macOS, 2 retries, 3 runs of each on both runtimes). 64 calls under `Http2Only` with a 1 s deadline each at a server
+that accepts and never answers, measured on 2026-09-28, 3 runs of each; the columns are the connections the server
+accepted per run.
 
 | system | runtime | calls | retries | before the change | the earlier form of the gate | with the gate |
 | --- | --- | --- | ---: | --- | --- | --- |
@@ -691,7 +694,7 @@ server accepted per run.
 | Linux, 4 CPUs | both | 1 ms apart or all at once | 0 | 1, 1, 1 | not measured | 1, 1, 1 |
 | Linux, 4 CPUs | both | 1 ms apart or all at once | 2 | 3, 3, 3 | not measured | 3, 3, 3 |
 
-Before the change and with the gate alike, every call ended 1,001-1,012 ms after it started with no retry, and
+Before the change and with the gate alike, every call ended 1,001-1,012 ms after the burst started with no retry, and
 4,135-4,163 ms after it with the default policy.
 
 **What a failed connect costs.** Before the change, when the connect hyper-util was making for a burst failed, every
