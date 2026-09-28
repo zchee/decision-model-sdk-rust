@@ -1,5 +1,5 @@
 //! The gate in front of the default transport's pool: while the pool holds
-//! no connection, one request opens it and the others wait.
+//! no connection, one connect opens it and every request waits for it.
 //!
 //! hyper-util lets one task at a time connect to an HTTP/2 destination, and
 //! the others wait for that connection in the pool. A task that began
@@ -8,18 +8,33 @@
 //! connects a second time. The pool keeps one HTTP/2 connection per
 //! destination, so it closes the second one at once. No call fails, but the
 //! client paid a TCP and TLS handshake for nothing, and the server saw the
-//! connection. The gate keeps every request but one out of hyper-util until
-//! the first connection is in the pool, where the checkout of each finds it
-//! on its first poll, so that its connect is never started.
+//! connection. The gate keeps every request out of hyper-util until the
+//! first connection is in the pool, where the checkout of each finds it on
+//! its first poll, so that its connect is never started.
 //!
-//! When the turn of the request that opens ends without a connection, every
-//! request waiting for it fails with it, as hyper-util fails the requests
-//! waiting for a connect it could not make, and none of them connects on its
-//! own: when the connect fails (the HTTP/2 handshake that follows TLS
-//! included), and when the request that opens is dropped before a connection
-//! existed (its caller's deadline passed, or its task was dropped). A waiting
-//! request that took the turn over instead would start a connect at an
-//! endpoint that has just failed to answer one, once per waiting call.
+//! The connection is opened by a task of the gate's own, which holds the
+//! turn to open. Its request is a `CONNECT` declaring a body it does not
+//! send, which hyper refuses before it writes a frame of it, so the server
+//! sees the connection and no request; the task releases every waiting
+//! request, the one that started the connect included, as soon as
+//! hyper-util reports the connection.
+//!
+//! The connect outlives the request that started it: a request that gives
+//! up - its deadline passed, or its task was dropped - does not end it for
+//! the requests waiting for it. It is never given up while that request
+//! waits, and once that request is gone it is given up when the gate's
+//! bound has passed since it began: the client's connect timeout, or
+//! without one its deadline of one attempt. A client with neither gives the
+//! connect up with the request that started it, as a connect that nothing
+//! bounds, at an endpoint that never answers, would hold every later
+//! request.
+//!
+//! When the connect fails (the HTTP/2 handshake that follows TLS included)
+//! or is given up, every request waiting for it fails with it, as hyper-util
+//! fails the requests waiting for a connect it could not make, and none of
+//! them connects on its own. A waiting request that took the turn over
+//! instead would start a connect at an endpoint that has just failed to
+//! answer one, once per waiting call.
 //!
 //! What the gate does not see: a connection that ends while requests are in
 //! flight is replaced inside hyper-util, which resends a request that had
@@ -140,13 +155,16 @@ struct Failed {
     failure: Failure,
 }
 
-/// Why the turn of the request that opened ended without a connection.
+/// Why a turn to open ended without a connection.
 #[derive(Debug, Clone)]
 enum Failure {
-    /// The connect failed; the opener's error, rendered as the transport
-    /// renders the chain of any error it fails with.
+    /// The connect failed; the error the request that started it gets,
+    /// rendered as the transport renders the chain of any error it fails
+    /// with.
     Connect(Arc<str>),
-    /// The request that opened was dropped before a connection existed.
+    /// The connect ended before a connection existed with nothing to bound
+    /// it: the request that started it gave up on a gate with no bound, or
+    /// the runtime dropped the task that ran it.
     GivenUp,
     /// The request that started the connect was gone, and the connect had
     /// run for the gate's bound without a connection.
@@ -318,12 +336,13 @@ impl Drop for Opener {
     }
 }
 
-/// The error of a request that waited for another request's connect, when
-/// that request's turn ended without a connection: it says why, quoting the
-/// connect's failure when there was one.
+/// The error of a request that waited for a connect another request
+/// started, when that connect's turn ended without a connection: it says
+/// why, quoting the connect's failure when there was one.
 ///
-/// It has no source. The failure is the opener's own error, which is not
-/// `Clone`, so it stays the opener's and is quoted here as text.
+/// It has no source. The failure is hyper-util's error, which is not
+/// `Clone`, so it goes to the request that started the connect and is
+/// quoted here as text.
 #[derive(Debug)]
 pub(super) struct WaitedConnectFailed(Failure);
 

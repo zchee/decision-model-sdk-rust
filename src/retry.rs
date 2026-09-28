@@ -269,8 +269,8 @@ impl RetryPolicy {
     /// The budget is checked only before a retry and never cuts an attempt short,
     /// so a call lasts at most the budget plus one per-attempt deadline; with
     /// `RetryPolicy::none()` it lasts at most one per-attempt deadline.
-    /// Dropping a call's future cancels the attempt in flight; the SDK spawns no
-    /// task of its own, so nothing is sent or retried after the drop.
+    /// Dropping a call's future cancels the attempt in flight, and nothing of
+    /// that call is sent or retried after the drop.
     ///
     /// # Errors
     ///

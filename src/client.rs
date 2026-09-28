@@ -260,8 +260,13 @@ impl ClientBuilder {
     /// The budget is checked only before a retry and never cuts an attempt short,
     /// so a call lasts at most the budget plus one per-attempt deadline; with
     /// `RetryPolicy::none()` it lasts at most one per-attempt deadline.
-    /// Dropping a call's future cancels the attempt in flight; the SDK spawns no
-    /// task of its own, so nothing is sent or retried after the drop.
+    /// Dropping a call's future cancels the attempt in flight, and nothing of
+    /// that call is sent or retried after the drop. Under
+    /// `HttpVersion::Http2Only` (with the `hyper` feature) a connect the call
+    /// had started goes on in a task of the transport's for the calls waiting
+    /// for it, and without a `connect_timeout` this deadline also bounds that
+    /// connect: it is given up once this long has passed since it began and
+    /// the call that started it is gone.
     #[must_use]
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(Some(timeout));
@@ -269,6 +274,11 @@ impl ClientBuilder {
     }
 
     /// No deadline on any attempt.
+    ///
+    /// Under `HttpVersion::Http2Only` (with the `hyper` feature) a connect is
+    /// then given up with the call that started it, as nothing else bounds
+    /// it; a `connect_timeout` bounds it instead, and lets it outlive that
+    /// call.
     #[must_use]
     pub fn no_timeout(mut self) -> Self {
         self.timeout = Some(None);
@@ -343,6 +353,29 @@ impl ClientBuilder {
     /// A deadline for opening a TCP connection, inside the deadline of the
     /// whole attempt. None unless set. When it passes, the request fails with
     /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) carrying this value.
+    ///
+    /// Under [`HttpVersion::Http2Only`] it also bounds the whole connect - TCP,
+    /// TLS and the HTTP/2 handshake - once the call that started it has given
+    /// up: the connect goes on for the calls waiting for it until this long
+    /// after it began, and those still waiting then fail with
+    /// `ErrorKind::Timeout` carrying this value. While the call that started
+    /// it waits, it bounds the TCP connect only, as above. Without it, the
+    /// client's [`timeout`](Self::timeout) bounds the connect in the same
+    /// way, and with [`no_timeout`](Self::no_timeout) nothing does, so the
+    /// connect is given up with the call that started it: set a connect
+    /// timeout to let the connect outlive that call.
+    ///
+    /// Set above the deadline of an attempt, it lets the retries of the calls
+    /// that gave up at an endpoint slower than that deadline be served on the
+    /// connect their first attempts started: at an endpoint whose TLS and
+    /// HTTP/2 handshake end 1.5 s after it accepted the connection, 64 calls
+    /// with a 1 s deadline and the default retry policy all succeed on one
+    /// connection with a 2 s connect timeout, and none does without one. The
+    /// price is paid at an endpoint whose first connect stalls while a new
+    /// one would be served: the calls wait for the stalled connect until the
+    /// connect timeout, so they recover about one retry wave later (the first
+    /// success after 2.8 s with 2 s, 1.4 s without), and a connect timeout
+    /// longer than the retries last loses the burst (none of 64 with 10 s).
     ///
     /// The default transport only; see
     /// [`build_with_service`](Self::build_with_service).

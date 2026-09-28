@@ -264,8 +264,9 @@ async fn ask_twice(questions: &PreparedQuestions) -> Result<(), Error> {
   reaches the budget, retrying stops and the call fails with the last attempt's error, unchanged.
   The budget is checked only before a retry and never cuts an attempt short, so a call lasts at
   most the budget plus one per-attempt deadline; with `RetryPolicy::none()` it lasts at most one
-  per-attempt deadline. Dropping a call's future cancels the attempt in flight; the SDK spawns
-  no task of its own, so nothing is sent or retried after the drop.
+  per-attempt deadline. Dropping a call's future cancels the attempt in flight, and nothing of
+  that call is sent or retried after the drop; under `HttpVersion::Http2Only` a connect the call
+  had started may go on for the calls waiting for it (see below).
   `RetryPolicy::no_timeout()` removes the budget. The budget is separate from the per-attempt
   deadline set with the client's or the call's `timeout`. Without a budget a server's
   `Retry-After` is obeyed however long it is; keep a budget, or turn `respect_retry_after` off,
@@ -392,9 +393,11 @@ pings every 30 s.
 
 - For an `https` base URL the default is `HttpVersion::Http2Only`: all requests of a client share
   one multiplexed HTTP/2 connection. While a client has no connection - before its first request,
-  or after the server closed an idle connection and the client has seen the close - one request
-  opens it and the others started at the same time wait for it, so a burst opens one connection
-  (64 concurrent cold calls open exactly 1 connection in the test suite). One case is not
+  or after the server closed an idle connection and the client has seen the close - one connect
+  opens it and every request started meanwhile waits for it, so a burst opens one connection
+  (64 concurrent cold calls open exactly 1 connection in the test suite). The connect runs in a
+  task of the transport's own, and its request is a `CONNECT` that hyper refuses before it sends
+  a byte of it, so the server sees the connection and the callers' requests only. One case is not
   covered: when a connection ends while requests are in flight, hyper-util replaces it on its
   own, and a burst at that moment can still open a second connection, which is closed at once.
   `HttpVersion::Auto` lets ALPN choose HTTP/1.1 or HTTP/2, for a proxy that speaks HTTP/1.1 only;
@@ -404,18 +407,38 @@ pings every 30 s.
   it fails at once, without a connect of its own. Its error is an `ErrorKind::Connection` whose
   message quotes the failure (`Connection error: the connect this request waited for failed:`,
   then the failure's own messages). A downcast of its sources finds no hyper-util error: that
-  error cannot be copied, so only the request that opened carries it. The kinds can differ: a
-  request that opened and hit the `connect_timeout` reports `ErrorKind::Timeout`, and the requests
-  that waited report `Connection`.
-- When the request that opened is dropped before a connection exists - its deadline passes, or its
-  task is dropped - the requests waiting for it fail at once as well, with an
-  `ErrorKind::Connection` that says so (`the connect this request waited for was given up`), as
-  hyper-util fails the requests waiting for a connect it no longer makes. The default retry policy
-  retries them after its backoff, and the retry wave opens one connection again when its retries
-  start within one attempt's deadline of each other, as the default backoff and the default 10 s
-  deadline guarantee; with a deadline shorter than the backoff's spread (about 250 ms) it opens as
-  many as hyper-util alone would. A waiting request that took over instead would start a connect
-  at an endpoint that has just failed to answer one, once per waiting call.
+  error cannot be copied, so only the request that started the connect carries it. The kinds can
+  differ: a request that started a connect whose TCP connect ran past the `connect_timeout`
+  reports `ErrorKind::Timeout`, and the requests that waited report `Connection`.
+- The connect outlives the request that started it. When that request gives up before a
+  connection exists - its deadline passes, or its caller drops it - the connect goes on for the
+  requests waiting for it, and a request that comes after, a retry of one that gave up included,
+  waits for it too instead of connecting on its own. It is never given up while the request that
+  started it still waits (a call's own deadline may be longer than the client's). Once that
+  request is gone, it is given up when the `connect_timeout` has passed since it began - under
+  `Http2Only` the connect timeout bounds the whole connect: TCP, TLS and the HTTP/2 handshake -
+  or, without one, the client's deadline of one attempt (10 s by default). The requests still
+  waiting then fail, with `ErrorKind::Timeout` carrying the connect timeout, or with an
+  `ErrorKind::Connection` that says the connect `did not complete within` the deadline; each
+  keeps its own deadline too. A client with `no_timeout()` and no `connect_timeout` gives the
+  connect up with the request that started it, and the requests waiting for it fail at once
+  (`the connect this request waited for was given up`): a connect that nothing bounds, at an
+  endpoint that never answers, would hold every later request. Set a `connect_timeout` to let the
+  connect outlive that request on such a client. A waiting request never takes the connect over:
+  it would start a connect at an endpoint that has not answered one, once per waiting call.
+- What that buys, measured (ledger S2d): at an endpoint whose TLS and HTTP/2 handshake end 1.5 s
+  after it accepted the connection, 64 calls with a 1 s deadline and the default retry policy all
+  succeed on one connection with `connect_timeout(2 s)`, the first after about 1.5 s: the retries
+  wait for the connect the first attempts started. Without a `connect_timeout` they all fail: the
+  connect is given up at the deadline, and each retry wave opens a new one (3 connections). 300
+  calls 10 ms apart, each cancelled by its caller after 1 s under the SDK's defaults, succeed 248
+  or 249 times on one connection: the calls cancelled before the handshake ended do not take the
+  connect down with them.
+  The price of a `connect_timeout` above the deadline of an attempt is paid at an endpoint whose
+  first connect stalls while a new one would be served: the calls wait for the stalled connect
+  until the connect timeout, so they recover about one retry wave later (the first success after
+  2.8 s with 2 s, 1.4 s without one), and a connect timeout longer than the retries last loses
+  the burst (none of 64 with 10 s).
 - `client.warm_up().await` lists the models once and drops the answer. It checks the API key and
   leaves an open connection in the pool, so call it **before a fan-out**: the first requests
   then pay no TCP or TLS handshake, and a bad key fails once instead of once per request.

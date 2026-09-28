@@ -13,9 +13,10 @@
 //!
 //! Under `Http2Only` every request of a client shares one connection. While
 //! the pool holds none - before the first request, or once the server closed
-//! the connection it held and the client has seen the close - one request
-//! opens it and the others wait at a gate until hyper-util reports that
-//! connection, so a burst opens one connection. The gate does not see a
+//! the connection it held and the client has seen the close - one connect
+//! opens it, in a task that outlives the request that started it, and every
+//! request waits at a gate until hyper-util reports that connection, so a
+//! burst opens one connection. The gate does not see a
 //! connection that ends while requests are in flight: hyper-util replaces it
 //! on its own, and a burst at that moment can still open a second
 //! connection, which the pool closes at once.
@@ -70,33 +71,48 @@ pub enum HttpVersion {
     /// Every request of a client shares one multiplexed connection. While the
     /// client has no connection - before its first request, or after the
     /// server closed an idle connection and the client has seen the close -
-    /// one request opens it and the others started at the same time wait for
-    /// it, so they share it too. When a connection ends while requests are in
-    /// flight, hyper-util replaces it on its own, and a burst at that moment
-    /// can still open a second connection, which is closed at once.
+    /// one connect opens it and every request started meanwhile waits for
+    /// it, so they share it too. The connect runs in a task of the
+    /// transport's own, and its request is one hyper refuses before it sends
+    /// a byte of it, so the server sees the connection and the callers'
+    /// requests only. When a connection ends while requests are in flight,
+    /// hyper-util replaces it on its own, and a burst at that moment can
+    /// still open a second connection, which is closed at once.
     ///
     /// When that one connect fails - TCP, TLS or the HTTP/2 handshake - every
     /// request that waited for it fails at once, without a connect of its
     /// own, with an [`ErrorKind::Connection`](crate::ErrorKind::Connection)
     /// error whose message quotes the failure. A downcast of its
     /// [`source`](std::error::Error::source) chain finds no hyper-util error:
-    /// that error cannot be copied, so only the request that opened carries
-    /// it. A request that opened and hit the connect timeout reports
+    /// that error cannot be copied, so only the request that started the
+    /// connect carries it. A request that started a connect whose TCP connect
+    /// ran past the connect timeout reports
     /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout), while the requests
     /// that waited report `Connection`.
     ///
-    /// When the request that opened is dropped before a connection exists -
-    /// its deadline passes, or its task is dropped - the requests waiting for
-    /// it fail at once as well, with an `ErrorKind::Connection` error that
-    /// says so, as hyper-util fails the requests waiting for a connect it no
-    /// longer makes. The default retry policy retries them after its backoff,
-    /// and the retry wave opens one connection again when its retries start
-    /// within one attempt's deadline of each other, as the default backoff and
-    /// the default 10 s deadline guarantee; with a deadline shorter than the
-    /// backoff's spread (about 250 ms) it opens as many as hyper-util alone
-    /// would. A waiting request that took over instead would start a connect
-    /// at an endpoint that has just failed to answer one, once per waiting
-    /// call.
+    /// The connect outlives the request that started it. When that request
+    /// gives up before a connection exists - its deadline passes, or its
+    /// task is dropped - the connect goes on for the requests waiting for it,
+    /// and a request that comes after waits for it too instead of starting
+    /// one of its own; the retries of the calls that gave up wait for it as
+    /// well. It is never given up while the request that started it still
+    /// waits, whose own deadline may be longer than the client's. Once that
+    /// request is gone, it is given up when the
+    /// [`connect_timeout`](crate::ClientBuilder::connect_timeout) has passed
+    /// since it began, or without one the client's
+    /// [`timeout`](crate::ClientBuilder::timeout), 10 s by default; the
+    /// requests still waiting then fail, with `ErrorKind::Timeout` carrying
+    /// the connect timeout, or with an `ErrorKind::Connection` error that
+    /// says the connect did not complete within the deadline. Each waiting
+    /// request keeps its own deadline. A client with
+    /// [`no_timeout`](crate::ClientBuilder::no_timeout) and no connect
+    /// timeout gives the connect up with the request that started it, and
+    /// the requests waiting for it fail at once with an
+    /// `ErrorKind::Connection` error that says so: a connect that nothing
+    /// bounds, at an endpoint that never answers, would hold every later
+    /// request. A waiting request never takes the connect over: it would
+    /// start a connect at an endpoint that has not answered one, once per
+    /// waiting call.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.

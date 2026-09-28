@@ -656,7 +656,8 @@ The one request (the opener) goes to hyper-util with `capture_connection` attach
 connection is in the pool, and the gate then releases every waiter at once, so each one's checkout finds the connection
 on its first poll and its connect is never started. When the opener's turn ends without a connection - its connect
 failed (TCP, TLS or the HTTP/2 handshake after it), or it was dropped before a connection existed (its caller's
-deadline, a cancelled task) - every waiting request fails with it, as before the change; an opener whose response
+deadline, a cancelled task; S2d replaces this case: the connect now outlives the request that started it) - every
+waiting request fails with it, as before the change; an opener whose response
 fails on a connection passes the turn to one waiter instead, and a call's deadline covers its wait. A request
 sent while the pool holds a connection pays two atomic loads; one sent while it does not pays a boxed future and a
 clone of the client. `Auto` is unchanged. Every call future over the default transport grew by 16 bytes (the gate's
@@ -684,7 +685,8 @@ only - the request that opened is dropped at its deadline before a connection ex
 failed every request waiting for that connect with `request was canceled`. An earlier form of the gate handed the
 dropped request's turn to a waiting one instead, which started a connect of its own and was dropped at its own deadline
 in turn: one connect per waiting call's deadline. The waiting requests now fail at once, as before the change, with a
-connection error that says the request that started the connect was dropped before a connection existed; the default
+connection error that says the request that started the connect was dropped before a connection existed (S2d replaces
+this rule: the connect now outlives the request that started it, under a bound); the default
 policy retries them after its backoff, with one opener again when the wave's retries start within one attempt's deadline
 of each other, which the default backoff (windows of 125 and 250 ms) and the default 10 s attempt guarantee; with a 100
 ms deadline a wave of 64 made 6 or 7 connects and with a 50 ms one 11 to 13, before the change and with the gate alike
@@ -747,6 +749,140 @@ so a test server started inside their retry window could count that request as a
 servers in a direct test, each a TLS handshake failed by a plaintext `GET /v1/models`). They now send to `127.0.0.1:1`,
 which no `bind(0)` hands out, and the test server records per connection the peer, the TLS outcome with the first bytes
 of a failed handshake, and the requests served, so a failed count says which of the two it was.
+
+## S2d - the connect outlives the request that started it
+
+**What the change does.** Before the change, the connect that opens a cold client's connection under `Http2Only` ran
+inside the future of the request that started it, so a caller that gave up - its deadline, a cancelled task - took the
+connect down for every request waiting at the gate (S2c). With the change, the connect runs in a task no request owns.
+Its request is a `CONNECT` to the base URL's scheme and authority, declaring a one-byte body it does not send, which
+hyper 1.11.1's HTTP/2 client refuses before it writes a frame (`proto/h2/client.rs:716-729`); hyper-util reports the
+refusal with the connection, which stays pooled. The task releases every waiting request, the one that started the
+connect included, when hyper-util reports the connection, as before the change (`capture_connection`), and drops the
+probe's response in that poll. The connect is never given up while the request that started it waits. Once that
+request is gone, it is given up when `connect_timeout` has passed since it began (under `Http2Only` that bounds the
+whole connect: TCP, TLS and the HTTP/2 handshake), else the client's deadline of one attempt; the waiting requests then
+fail with `ErrorKind::Timeout` carrying the connect timeout, or with a connection error that says the connect did not
+complete within the deadline. A client with `no_timeout()` and no `connect_timeout` keeps the rule of S2c. A call's
+future over the default transport keeps its size (2,328 / 2,312 / 2,312 / 2,016 bytes, macOS arm64 and Linux arm64,
+both profiles), and the warm calls' allocation counts are unchanged; the cold path allocates a 1,336-byte box and a
+task whose future is 1,608 bytes (and a oneshot), where it allocated one 1,704-byte box before the change.
+
+**How it was measured.** On 2026-09-28, 15:42-16:13 JST, before the change and with it alternating run by run, on the
+macOS arm64 host (M3 Max) and in a Docker Desktop linux/arm64 container with 4 CPUs (`--cpuset-cpus=0-3`), each build
+on a current-thread runtime and on a multi-thread runtime with 4 workers, 3 runs of each (1 run of each for the price
+table). The record is `.omc/handoffs/artifacts/t2/lead/runs-077e278/`: `ac-record.md`, `tables.md` (every row), the raw
+`mac.txt` and `linux.txt`, and `A-parallel3.txt`, `B-contended8.txt`, `C-idle2.txt`. A cell is the calls that
+succeeded, the connections the server accepted, and the first success (or the last call's end) in ms from the burst's
+start, over all runs of both runtimes. "Connect timeout 2 s" is the same build with `connect_timeout(2 s)`: before the
+change it covers the TCP connect only. Ledger section written 2026-09-28.
+
+A slow endpoint: TCP accepted at once, TLS and the HTTP/2 handshake finished 1.5 s later; 64 calls, a 1 s deadline.
+
+| calls | retries | system | before the change | with the change | before the change, connect timeout 2 s | with the change, connect timeout 2 s |
+| --- | ---: | --- | --- | --- | --- | --- |
+| all at once | 2 | macOS | 0/64, 3, ends 4,138-4,161 | 0/64, 3, ends 4,136-4,143 | 0/64, 3, ends 4,140-4,150 | **64/64, 1, first ok 1,504-1,514** |
+| all at once | 2 | Linux | 0/64, 3, ends 4,145-4,163 | 0/64, 3, ends 4,150-4,170 | 0/64, 3, ends 4,146-4,170 | **64/64, 1, first ok 1,504-1,508** |
+| 1 ms apart | 2 | macOS | 0/64, 3, ends 4,138-4,158 | 0/64, 3, ends 4,139-4,157 | 0/64, 3, ends 4,140-4,149 | **64/64, 1, first ok 1,507-1,518** |
+| 1 ms apart | 2 | Linux | 0/64, 3, ends 4,150-4,165 | 0/64, 3, ends 4,149-4,170 | 0/64, 3, ends 4,148-4,166 | **64/64, 1, first ok 1,505-1,509** |
+| all at once | 0 | both | 0/64, 1, ends 1,002-1,008 | 0/64, 1, ends 1,001-1,009 | 0/64, 1, ends 1,001-1,008 | 0/64, 1, ends 1,001-1,006 |
+
+With no retry no design serves a burst whose every deadline ends before the handshake does.
+
+Callers that give up early: the same endpoint, 300 calls 10 ms apart under the SDK's defaults (a 10 s deadline, 2
+retries), each cancelled by its caller's own 1 s `tokio::time::timeout`.
+
+| system | before the change | with the change | with the change, connect timeout 2 s |
+| --- | --- | --- | --- |
+| macOS | 0/300, 3, ends 3,024-3,028 | **248-249/300, 1, first ok 1,507-1,517** | 248-249/300, 1, first ok 1,506-1,517 |
+| Linux | 0/300, 3, ends 3,026-3,034 | **248-249/300, 1, first ok 1,506-1,509** | 249/300, 1, first ok 1,503-1,509 |
+
+Before the change with a connect timeout of 2 s: 0/300 and 3 connections on both. The 51-52 calls lost are those whose
+caller gave up before 1.5 s; a server that served one `POST` more than the calls that succeeded saw a call cancelled
+while its request was in flight.
+
+A call's own deadline longer than the client's: the same endpoint, the client's deadline 1 s, every call's 5 s, 64 at
+once, no retry.
+
+| system | before the change | with the change |
+| --- | --- | --- |
+| macOS | 64/64, 1, first ok 1,508-1,517 | 64/64, 1, first ok 1,507-1,516 |
+| Linux | 64/64, 1, first ok 1,504-1,509 | 64/64, 1, first ok 1,504-1,509 |
+
+With a connect timeout of 2 s the same, before the change and with it. This is why the connect is never given up while
+the request that started it waits: a bound applied without looking at that request made this 0/64 in the measurements
+that chose the rule.
+
+What the servers saw of the connect's request, in every run above, of every build and scenario.
+
+| runs | requests the servers served | `CONNECT` or any other request |
+| --- | --- | ---: |
+| 284 per system, macOS and Linux | the callers' `POST /v1/systemone` only (or none) | 0 |
+
+`tests/connection_reuse.rs` `a_cold_burst_sends_the_server_nothing_but_its_calls` pins it in the test suite, and a unit
+test in `src/transport/gate_tests.rs` pins the probe itself: a `CONNECT`, the base URL's scheme and authority, an empty
+body, and no header but `content-length: 1`.
+
+The price, at an endpoint whose first connection is held silent forever while every later one is served at once: 64
+calls 1 ms apart, the default policy, 1 run per runtime.
+
+| system | before the change | with the change | with the change, connect timeout 2 s | with the change, connect timeout 10 s |
+| --- | --- | --- | --- | --- |
+| macOS | 64/64, 2, first ok 1,388-1,389 | 64/64, 2, first ok 1,387-1,401 | 64/64, 2, first ok 2,760-2,766 | 0/64, 1, ends 4,499-4,525 |
+| Linux | 64/64, 2, first ok 1,385-1,390 | 64/64, 2, first ok 1,387-1,391 | 64/64, 2, first ok 2,775-2,784 | 0/64, 1, ends 4,507-4,574 |
+
+Without a connect timeout the bound is the deadline, and nothing changes. A connect timeout above the deadline makes
+the retries wait for the stalled connect until it: recovery comes one retry wave (about 1.4 s) later with 2 s, and a
+connect timeout longer than the three attempts last loses the burst.
+
+A silent endpoint: TCP accepted, never a byte; 64 calls, a 1 s deadline. The connections the server accepted, and when
+the last call ended.
+
+| calls | retries | system | before the change | with the change | before the change, connect timeout 2 s | with the change, connect timeout 2 s |
+| --- | ---: | --- | --- | --- | --- | --- |
+| all at once | 0 | both | 1, 1,002-1,011 | 1, 1,001-1,007 | 1, 1,002-1,009 | 1, 1,001-1,009 |
+| all at once | 2 | macOS | 3, 4,136-4,147 | 3, 4,137-4,151 | 3, 4,139-4,159 | 2, 3,992-4,004 |
+| all at once | 2 | Linux | 3, 4,151-4,163 | 3, 4,145-4,192 | 3, 4,151-4,169 | 2, 4,002-4,012 |
+| 1 ms apart | 0 | macOS | 1, 1,003-1,005 | 1, 1,003-1,005 | 1, 1,002-1,005 | 1, 1,064-1,067 |
+| 1 ms apart | 0 | Linux | 1, 1,003-1,013 | 1, 1,005-1,014 | 1, 1,005-1,010 | 1, 1,065-1,066 |
+| 1 ms apart | 2 | macOS | 3, 4,139-4,146 | 3, 4,138-4,153 | 3, 4,141-4,151 | 2, 3,990-4,006 |
+| 1 ms apart | 2 | Linux | 3, 4,146-4,163 | 3, 4,149-4,167 | 3, 4,150-4,174 | 2, 3,997-4,014 |
+
+Every call ended within its deadline plus 100 ms. With a connect timeout of 2 s a waiting call ends at its own deadline
+(the last of a spread burst, started at 63 ms, at 1,064-1,067 ms) instead of with the first, and a retry wave waits for
+the connect still running instead of opening one of its own: 2 connections instead of 3.
+
+A connect that fails: TCP accepted, closed 200 ms later; 64 calls, none succeeds. The connections, and when the calls
+ended.
+
+| retries | system | before the change | with the change | before the change, connect timeout 2 s | with the change, connect timeout 2 s |
+| ---: | --- | --- | --- | --- | --- |
+| 0 | macOS | 1, 223-241 | 1, 202-245 | 1, 223-243 | 1, 204-246 |
+| 0 | Linux | 1, 204-247 | 1, 204-244 | 1, 205-247 | 1, 205-246 |
+| 2 | macOS | 4, 1,952-1,982 | 4, 1,947-1,995 | 4, 1,964-1,996 | 4, 1,948-1,986 |
+| 2 | Linux | 4, 1,956-2,001 | 4, 1,962-1,994 | 4, 1,969-2,019 | 4, 1,964-1,994 |
+
+Cold bursts of 64 with a second connection, the harness of S2c in the same container, the builds in alternating blocks.
+Before the change the gate of S2c already holds it at 0; the check is that the change keeps it there.
+
+| configuration | before the change | with the change |
+| --- | ---: | ---: |
+| 4 CPUs, 3 bodies in one process | 0 / 3,000 | 0 / 3,000 |
+| 4 CPUs, 8 processes | 0 / 4,000 | 0 / 4,000 |
+| 2 CPUs, idle | 0 / 2,000 | 0 / 2,000 |
+
+A cold call's latency: 100 single calls per run, each on a new client, the server with `TCP_NODELAY`; medians and p99 in
+µs, ranges over 3 runs.
+
+| system | runtime | before the change, median / p99 | with the change, median / p99 |
+| --- | --- | --- | --- |
+| macOS | current-thread | 793-919 / 1,260-1,671 | 826-938 / 983-1,284 |
+| macOS | multi-thread | 860-948 / 1,656-1,817 | 785-869 / 992-1,971 |
+| Linux | current-thread | 294-356 / 477-724 | 296-337 / 545-712 |
+| Linux | multi-thread | 393-395 / 622-876 | 393-412 / 651-780 |
+
+Within the run-to-run spread: the task hop costs no round trip, because the waiting requests go on when hyper-util
+reports the connection, before any response.
 
 ## S4 - the server's HTTP/2 SETTINGS
 
