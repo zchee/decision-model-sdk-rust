@@ -518,9 +518,9 @@ second identical call, 64-bit targets.
   and call 32 with serde_json.
 - **Debug builds and the default transport.** Tokio boxes a future larger than 2,048 bytes when
   it is spawned or blocked on in a debug build (16,384 in release). A System One call over the
-  default transport is a 2,360-byte future, so a debug build that spawns calls pays one more
+  default transport is a 2,328-byte future, so a debug build that spawns calls pays one more
   allocation per call; a release build does not, and neither does a call over a custom transport
-  (2,040 bytes).
+  (2,040 bytes) or a model listing over the default one (2,016 bytes).
 - **Release profile.** A library cannot set the profile it is built with, so these belong in the
   application's `Cargo.toml`. They are the usual settings for a smaller, faster binary; this
   repository's numbers were taken with Cargo's default profiles, so their effect on this SDK is

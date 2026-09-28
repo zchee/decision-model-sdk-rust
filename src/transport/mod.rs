@@ -374,9 +374,10 @@ where
     // future beside the copy the transport call already holds: 352 bytes of
     // every call's future, which over a custom transport tips it over the
     // size at which tokio boxes a spawned future in a debug build (2,048
-    // bytes). Over the default transport hyper's response future keeps the
-    // call over that size either way (2,360 bytes), so a debug-build call
-    // spawned on the default client is boxed.
+    // bytes). Over the default transport hyper's response future keeps a
+    // System One call over that size either way (2,328 bytes), so a
+    // debug-build System One call spawned on the default client is boxed; a
+    // model listing (2,016 bytes) is not.
     let (started, exchanged) = {
         let mut headers = exchange.base_headers.clone();
         for (name, value) in exchange.call_headers {

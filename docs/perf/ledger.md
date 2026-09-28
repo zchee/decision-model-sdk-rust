@@ -661,7 +661,14 @@ fails on a connection passes the turn to one waiter instead, and a call's deadli
 sent while the pool holds a connection pays two atomic loads; one sent while it does not pays a boxed future and a
 clone of the client. `Auto` is unchanged. Every call future over the default transport grew by 16 bytes (the gate's
 reference count in the transport and in its connector): 2,344 / 2,328 / 2,328 / 2,032 became 2,360 / 2,344 / 2,344 /
-2,048, measured on macOS arm64 in both profiles, inside the bounds of `tests/static_assertions.rs`.
+2,048, measured on macOS arm64 in both profiles, inside the bounds of `tests/static_assertions.rs`. The transport's
+three settings (the HTTP version, the count of added roots, the connect timeout) then moved behind the `Arc` it already
+held for the gate (`e08280c`), which took 32 bytes back: 2,328 / 2,312 / 2,312 / 2,016, measured on macOS arm64 and
+Linux arm64 in both profiles, with the bounds, the futures over a custom transport and every allocation count
+unchanged; the model listing's future is now under tokio's 2,048-byte debug box threshold. A request sent while the
+pool holds a connection pays one pointer dereference more for its settings and no atomic operation beyond the two
+loads: the connect timeout is still copied into the response future by value, and only the gated path clones the
+gate's `Arc`.
 
 What it does not cover: a connection that ends while requests are in flight is replaced inside hyper-util, which
 resends a request that had not started (`retry_canceled_requests`) without passing the gate, so a burst at that
