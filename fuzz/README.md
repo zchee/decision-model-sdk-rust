@@ -23,9 +23,11 @@ unnoticed, and checks the directory's dependency policy against the
 repository's `deny.toml` (`cargo deny --manifest-path fuzz/Cargo.toml check`,
 the "Dependency policy of the fuzz targets" step). That policy carries one
 crate-scoped license exception: `libfuzzer-sys` may carry NCSA, the license of
-the libFuzzer C++ runtime it bundles; no other crate may. CI never runs a
-target: that needs the nightly toolchain (for the sanitizer flags cargo-fuzz
-passes) and `cargo install cargo-fuzz --locked`:
+the libFuzzer C++ runtime it bundles; no other crate may. CI runs a target
+only when someone starts it by hand (see
+[Fuzzing on x86_64 in CI](#fuzzing-on-x86_64-in-ci)). A run needs the nightly
+toolchain (for the sanitizer flags cargo-fuzz passes) and
+`cargo install cargo-fuzz --locked`:
 
 ```sh
 cd fuzz
@@ -73,6 +75,59 @@ rebuilds its errors from. A run without it exercises the same decoders over
 serde_json, so it is the control. The depth guard and the UTF-8 check are the
 codec's own and run before either parser, so both builds cover them alike.
 `retry_after` reads no JSON, so the feature changes nothing for it.
+
+## Fuzzing on x86_64 in CI
+
+sonic-rs chooses its SIMD code when it is compiled, from the target features
+the build turns on; nothing is chosen at run time. A run on Apple silicon or
+another arm64 machine therefore compiles its NEON code and never its x86_64
+code. The workflow `.github/workflows/fuzz.yaml` fuzzes one target on GitHub's
+x86_64 runner (`ubuntu-26.04`) for that code. Its `cpu` input is named for the
+flags the build gets, and chooses what the three sonic crates compile:
+
+| `cpu` | Flags | sonic-simd | sonic-number | sonic-rs's parser code |
+| --- | --- | --- | --- | --- |
+| `baseline` (default) | none | `sse2.rs`, with 256-bit vectors built from pairs of 128-bit ones (`v256.rs`) | portable (`fallback.rs`) | portable (`fallback.rs`) |
+| `x86-64-v3` | `-C target-cpu=x86-64-v3` | `avx2.rs` | x86_64 (AVX2) | portable (`fallback.rs`) |
+| `x86-64-v3+pclmulqdq` | `-C target-cpu=x86-64-v3 -C target-feature=+pclmulqdq` | `avx2.rs` | x86_64 (AVX2) | x86_64 (PCLMULQDQ and AVX2) |
+
+sonic-rs's own parser code (the mask of what is inside a string, and the skip
+over whitespace) is compiled for x86_64 only when `pclmulqdq` is on beside
+`avx2` and `sse2`, and the x86-64-v3 level does not include PCLMULQDQ. So
+`x86-64-v3` fuzzes the build the SDK's README names to its users, and
+`x86-64-v3+pclmulqdq` the one `-C target-cpu=native` gives on a CPU that has
+both. AVX-512 is not reachable: sonic-rs compiles its AVX-512 code only under
+its own `avx512` feature, which the SDK does not turn on. With `backend` set to
+`default`, no sonic-rs code is compiled and the run is the serde_json control.
+
+Before it fuzzes, a run refuses a CPU that lacks one of the target features
+the flags turn on (the binary would die with SIGILL, which reads like a
+finding), prints the `target_feature` lines rustc gives for the flags, checks
+that exactly those flags reach the rustc command lines of the SDK and of the
+sonic crates, and puts the table above, for the choice made, into the run's
+summary. It builds against `Cargo.lock`: `cargo fetch --locked` first, then
+with no network.
+
+The workflow never runs on its own: no push, pull request or schedule starts
+it. Start it from the Actions tab or with the GitHub CLI:
+
+```sh
+gh workflow run fuzz.yaml -f target=decode_response -f backend=sonic -f cpu=x86-64-v3+pclmulqdq -f seconds=900
+```
+
+`target` is `decode_response` (the default) or `retry_after`, `backend` is
+`sonic` (the default) or `default`, and `seconds` is the fuzzing time, a whole
+number from 60 to 3300 (900 by default); the run starts one job per core of
+the runner, each for that long. The run's summary names the CPU model and the
+nightly, and gives each job's last statistics line and the totals.
+
+A run fails when the fuzzer exits with anything but 0, leaves a reproducer, or
+ran on a build that changed `Cargo.lock`. The fuzzer's logs are uploaded as
+the artifact `fuzz-logs-<target>-<backend>-<cpu>`, and a reproducer (what a
+local run leaves in `artifacts/<target>/`) as
+`fuzz-reproducers-<target>-<backend>-<cpu>`; `gh run download <run-id>`
+fetches both. Report a reproducer rather than committing it, as for a local
+finding.
 
 ## Seeds
 

@@ -1,0 +1,432 @@
+name: Fuzz
+
+# One fuzz target for a set time on an x86_64 runner. sonic-rs chooses its
+# SIMD code at compile time from the target's CPU features, so a run on Apple
+# silicon or any other arm64 machine compiles its NEON code and never the
+# x86_64 code this workflow exists to fuzz. Started by hand only, with no
+# push trigger and no schedule; fuzz/README.md says how.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Fuzz target
+        type: choice
+        options:
+          - decode_response
+          - retry_after
+        default: decode_response
+      backend:
+        description: "JSON backend: sonic (sonic-rs) or default (serde_json)"
+        type: choice
+        options:
+          - sonic
+          - default
+        default: sonic
+      # Each choice is named for exactly the flags the build gets.
+      cpu:
+        description: "Build flags: baseline (none), x86-64-v3 (-C target-cpu=x86-64-v3), x86-64-v3+pclmulqdq (that and -C target-feature=+pclmulqdq)"
+        type: choice
+        options:
+          - baseline
+          - x86-64-v3
+          - x86-64-v3+pclmulqdq
+        default: baseline
+      # A string rather than a number, so that the value the first step
+      # checks is exactly the one given.
+      seconds:
+        description: Fuzzing time in seconds, a whole number from 60 to 3300
+        type: string
+        default: "900"
+
+# Two runs of the same inputs on the same ref would fuzz the same code twice,
+# so a second one waits for the first. A run in progress is never cancelled:
+# one cut short says nothing about the code it was fuzzing. (GitHub keeps one
+# waiting run per group; a third replaces the waiting second.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.target }}-${{ inputs.backend }}-${{ inputs.cpu }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ inputs.target }}, ${{ inputs.backend }}, ${{ inputs.cpu }})
+    runs-on: ubuntu-26.04
+    # Up to 55 minutes of fuzzing (3,300 s), plus the nightly toolchain,
+    # cargo-fuzz built from source and the target's build before it.
+    timeout-minutes: 75
+    # A shell named outright is what makes GitHub run each script with
+    # `-o pipefail` as well as `-e`; left unnamed, a failure on the left of a
+    # pipe would pass unnoticed.
+    defaults:
+      run:
+        shell: bash
+    # The inputs reach the scripts only through these variables, always
+    # quoted. `${{ }}` inside a script would paste the text into it before
+    # bash parses it.
+    env:
+      FUZZ_TARGET: ${{ inputs.target }}
+      FUZZ_BACKEND: ${{ inputs.backend }}
+      FUZZ_CPU: ${{ inputs.cpu }}
+      FUZZ_SECONDS: ${{ inputs.seconds }}
+      # A finding cannot be re-run on the runner under a debugger, so the
+      # panic's backtrace has to be in the log the first time.
+      RUST_BACKTRACE: 1
+    steps:
+      # First, so that a value the run cannot use fails it before anything is
+      # installed. A refused value is printed with `%q`, so that no text of an
+      # input can start a line GitHub reads as a command. The arithmetic runs
+      # only on a value the pattern has found to be one to four digits: bash
+      # expands a subscript inside `(( ))`, command substitutions included.
+      #
+      # `x86-64-v3` is the level the SDK's README names to its users (AVX2):
+      # sonic-simd and sonic-number compile their x86_64 code there, but
+      # sonic-rs's own parser code (the in-string mask and the whitespace
+      # skip) needs PCLMULQDQ beside AVX2 and stays portable, since the level
+      # does not include it. `x86-64-v3+pclmulqdq` adds it, which is what
+      # `-C target-cpu=native` gives on a CPU that has both. AVX-512 is no
+      # choice: sonic-rs compiles it only under its `avx512` feature, which
+      # the SDK does not turn on.
+      - name: Check the inputs
+        run: |
+          case "${FUZZ_TARGET}" in
+            decode_response | retry_after) ;;
+            *)
+              printf 'target: %q\n' "${FUZZ_TARGET}"
+              echo "::error::target must be decode_response or retry_after"
+              exit 1
+              ;;
+          esac
+          case "${FUZZ_BACKEND}" in
+            sonic | default) ;;
+            *)
+              printf 'backend: %q\n' "${FUZZ_BACKEND}"
+              echo "::error::backend must be sonic or default"
+              exit 1
+              ;;
+          esac
+          case "${FUZZ_CPU}" in
+            baseline) rustflags="" ;;
+            x86-64-v3) rustflags="-C target-cpu=x86-64-v3" ;;
+            x86-64-v3+pclmulqdq) rustflags="-C target-cpu=x86-64-v3 -C target-feature=+pclmulqdq" ;;
+            *)
+              printf 'cpu: %q\n' "${FUZZ_CPU}"
+              echo "::error::cpu must be baseline, x86-64-v3 or x86-64-v3+pclmulqdq"
+              exit 1
+              ;;
+          esac
+          if ! [[ "${FUZZ_SECONDS}" =~ ^[0-9]{1,4}$ ]] ||
+            ((10#${FUZZ_SECONDS} < 60 || 10#${FUZZ_SECONDS} > 3300)); then
+            printf 'seconds: %q\n' "${FUZZ_SECONDS}"
+            echo "::error::seconds must be a whole number from 60 to 3300"
+            exit 1
+          fi
+          echo "target ${FUZZ_TARGET}, backend ${FUZZ_BACKEND}, cpu ${FUZZ_CPU} (RUSTFLAGS: '${rustflags}'), $((10#${FUZZ_SECONDS})) s"
+          echo "FUZZ_RUSTFLAGS=${rustflags}" >> "${GITHUB_ENV}"
+          echo "FUZZ_TIME=$((10#${FUZZ_SECONDS}))" >> "${GITHUB_ENV}"
+
+      # No later step fetches or pushes through git with the job's token, so
+      # it is not left in `.git/config`, where every build script and proc
+      # macro the job compiles could read it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # cargo-fuzz passes sanitizer flags that only nightly accepts. Nightly
+      # floats, as it does in fuzz/README.md: each run takes the newest one,
+      # and the summary names it.
+      - name: Install the nightly toolchain
+        run: |
+          rustup toolchain install nightly --profile minimal --no-self-update
+          rustc +nightly -Vv
+          echo "FUZZ_NIGHTLY=$(rustc +nightly -V)" >> "${GITHUB_ENV}"
+
+      # taiki-e/install-action has no prebuilt cargo-fuzz, so it is built from
+      # source against the lock file it was released with. `+nightly`, because
+      # the repository's rust-toolchain.toml names a release this job never
+      # installs.
+      - name: Install cargo-fuzz
+        run: |
+          cargo +nightly install cargo-fuzz --locked
+          echo "FUZZ_CARGO_FUZZ=$(cargo +nightly fuzz --version)" >> "${GITHUB_ENV}"
+
+      # The build compiles for every target feature its flags turn on, and a
+      # binary holding an instruction the CPU lacks dies with SIGILL, which
+      # would read like a finding. So the run stops here when the CPU lacks
+      # one: each `target_feature` rustc lists under the build's flags is
+      # looked up in /proc/cpuinfo under the name Linux gives it
+      # (arch/x86/include/asm/cpufeatures.h), and a feature this step has no
+      # name for fails it rather than pass unchecked. On a host that is not
+      # x86_64 (a local run of these steps on arm64) there is nothing to check.
+      - name: The CPU
+        run: |
+          arch="$(uname -m)"
+          if [ "${arch}" != x86_64 ]; then
+            echo "host architecture ${arch}, not x86_64: no x86_64 CPU features to check"
+            echo "FUZZ_CPU_MODEL=not read, the host is ${arch}" >> "${GITHUB_ENV}"
+            exit 0
+          fi
+          model="$(awk '/^model name/ { sub(/^[^:]*:[ \t]*/, ""); print; exit }' /proc/cpuinfo)"
+          flags=" $(awk '/^flags/ { sub(/^[^:]*:[ \t]*/, ""); print; exit }' /proc/cpuinfo) "
+          echo "CPU: ${model}"
+          echo "FUZZ_CPU_MODEL=${model}" >> "${GITHUB_ENV}"
+          for name in avx2 pclmulqdq; do
+            case "${flags}" in
+              *" ${name} "*) echo "${name}: yes" ;;
+              *) echo "${name}: no" ;;
+            esac
+          done
+          read -ra rustflags <<< "${FUZZ_RUSTFLAGS}"
+          cfg="$(rustc +nightly --print cfg --target x86_64-unknown-linux-gnu "${rustflags[@]}")"
+          missing=""
+          while read -r feature; do
+            case "${feature}" in
+              cmpxchg16b) name=cx16 ;;
+              lahfsahf) name=lahf_lm ;;
+              lzcnt) name=abm ;;
+              sse3) name=pni ;;
+              sse4.1) name=sse4_1 ;;
+              sse4.2) name=sse4_2 ;;
+              x87) name=fpu ;;
+              avx | avx2 | bmi1 | bmi2 | f16c | fma | fxsr | movbe | pclmulqdq | popcnt | sse | sse2 | ssse3 | xsave) name="${feature}" ;;
+              *)
+                echo "::error::the build turns on the target feature ${feature}, which this step has no /proc/cpuinfo name for"
+                exit 1
+                ;;
+            esac
+            case "${flags}" in
+              *" ${name} "*) ;;
+              *) missing="${missing} ${feature}" ;;
+            esac
+          done < <(sed -n 's/^target_feature="\(.*\)"$/\1/p' <<< "${cfg}")
+          echo "target features of the build this CPU lacks:${missing:- none}"
+          if [ -n "${missing}" ]; then
+            echo "::error::cpu is ${FUZZ_CPU}, and this CPU lacks:${missing}. A binary built for them would die with SIGILL, which would read like a finding."
+            exit 1
+          fi
+
+      # What is compiled, shown three ways. rustc's `--print cfg` under the
+      # build's flags lists the target features the sonic crates choose their
+      # code by, and a flag set that does not give exactly the `avx2` and
+      # `pclmulqdq` the `cpu` input names fails here. The build's own rustc
+      # command lines then show those flags, and no others, reaching the SDK
+      # and the three sonic crates: cargo-fuzz appends RUSTFLAGS after its own
+      # flags and builds with `--target`, so cargo passes them to every crate
+      # built for the target and to no build script. Last, which module each
+      # sonic crate compiles, derived from the cfg lines by the crates' own
+      # conditions: copied from sonic-simd 0.1.4 `src/lib.rs`, sonic-number
+      # 0.1.3 `src/arch/mod.rs` and sonic-rs 0.5.10 `src/util/arch/mod.rs`, so
+      # a new version of any of them is a reason to read them again.
+      #
+      # cargo has no setting for `--locked` and `cargo fuzz` no such flag, so
+      # the build is held to fuzz/Cargo.lock in three parts: `cargo fetch
+      # --locked` fails when the lock file no longer matches the manifests,
+      # the build and the run cannot reach the index (CARGO_NET_OFFLINE) and
+      # so take no version the fetch did not, and the verdict fails the run
+      # when the lock file changed.
+      - name: Build, and show what is compiled
+        id: build
+        run: |
+          export RUSTFLAGS="${FUZZ_RUSTFLAGS}"
+          read -ra flags <<< "${RUSTFLAGS}"
+          cfg="$(rustc +nightly --print cfg --target x86_64-unknown-linux-gnu "${flags[@]}")"
+          echo "x86_64 target_feature lines of rustc --print cfg under RUSTFLAGS='${RUSTFLAGS}':"
+          grep '^target_feature=' <<< "${cfg}"
+          on() { grep -qx "target_feature=\"$1\"" <<< "${cfg}"; }
+          case "${FUZZ_CPU}" in
+            baseline) want="avx2=no pclmulqdq=no" ;;
+            x86-64-v3) want="avx2=yes pclmulqdq=no" ;;
+            x86-64-v3+pclmulqdq) want="avx2=yes pclmulqdq=yes" ;;
+          esac
+          got="avx2=$(on avx2 && echo yes || echo no) pclmulqdq=$(on pclmulqdq && echo yes || echo no)"
+          if [ "${got}" != "${want}" ]; then
+            echo "::error::cpu is ${FUZZ_CPU}, which needs ${want}, but these flags give ${got}"
+            exit 1
+          fi
+
+          cargo +nightly fetch --locked --manifest-path fuzz/Cargo.toml
+          export CARGO_NET_OFFLINE=true
+          features=()
+          if [ "${FUZZ_BACKEND}" = sonic ]; then features=(--features sonic); fi
+          mkdir -p "${RUNNER_TEMP}/fuzz-logs"
+          log="${RUNNER_TEMP}/fuzz-logs/build.log"
+          if ! cargo +nightly fuzz build --verbose --fuzz-dir "${GITHUB_WORKSPACE}/fuzz" "${features[@]}" "${FUZZ_TARGET}" > "${log}" 2>&1; then
+            tail -n 60 "${log}"
+            echo "::error::the build failed; build.log is among the uploaded logs"
+            exit 1
+          fi
+          grep -E '^ +Finished ' "${log}"
+
+          cpu_flags() { { grep -oE 'target-(cpu|feature)=[^ ]+' || true; } | sort | paste -sd ' ' -; }
+          expected="compiled with [$(cpu_flags <<< "${RUSTFLAGS}")]"
+          for crate in typesafe_sdk sonic_simd sonic_number sonic_rs; do
+            line="$(grep -F -e "--crate-name ${crate} " "${log}" || true)"
+            if [ -z "${line}" ]; then
+              got="not compiled"
+            else
+              got="compiled with [$(cpu_flags <<< "${line}")]"
+            fi
+            want="${expected}"
+            if [ "${crate}" != typesafe_sdk ] && [ "${FUZZ_BACKEND}" != sonic ]; then want="not compiled"; fi
+            echo "${crate}: ${got}"
+            if [ "${got}" != "${want}" ]; then
+              echo "::error::${crate} should be ${want}"
+              exit 1
+            fi
+          done
+
+          if [ "${FUZZ_BACKEND}" != sonic ]; then
+            simd="not compiled" number="not compiled" parser="not compiled"
+          else
+            # sonic-simd: 128-bit vectors on `sse2`, 256-bit on `avx2`, 512-bit
+            # on `avx512f` with its own `avx512` feature.
+            simd="$(on sse2 && echo sse2.rs || echo v128.rs), $(on avx2 && echo avx2.rs || echo v256.rs)"
+            line="$(grep -F -e "--crate-name sonic_simd " "${log}")"
+            if on avx512f && grep -qF 'feature="avx512"' <<< "${line}"; then
+              simd="${simd}, avx512.rs"
+            else
+              simd="${simd}, v512.rs"
+            fi
+            # sonic-number: x86_64 code on `avx2` and `sse2`.
+            number="$(on avx2 && on sse2 && echo arch/x86_64.rs || echo arch/fallback.rs)"
+            # sonic-rs: x86_64 code on `pclmulqdq`, `avx2` and `sse2`.
+            parser="$(on pclmulqdq && on avx2 && on sse2 && echo util/arch/x86_64.rs || echo util/arch/fallback.rs)"
+          fi
+          {
+            echo "## What an x86_64 build compiles (cpu ${FUZZ_CPU}, backend ${FUZZ_BACKEND})"
+            echo
+            echo "| crate | module |"
+            echo "| --- | --- |"
+            echo "| sonic-simd | ${simd} |"
+            echo "| sonic-number | ${number} |"
+            echo "| sonic-rs | ${parser} |"
+            echo
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      # The committed seeds are only read: libFuzzer writes what it finds to
+      # the first corpus directory alone, a scratch one outside the checkout.
+      # One job per core; each writes fuzz-<n>.log into the working directory,
+      # and libFuzzer copies it into this step's output when the job ends. The
+      # same features, target directory and flags as the build above, so
+      # nothing is compiled again.
+      - name: Fuzz
+        id: fuzz
+        run: |
+          export RUSTFLAGS="${FUZZ_RUSTFLAGS}"
+          export CARGO_NET_OFFLINE=true
+          features=()
+          if [ "${FUZZ_BACKEND}" = sonic ]; then features=(--features sonic); fi
+          corpus="${RUNNER_TEMP}/corpus/${FUZZ_TARGET}"
+          mkdir -p "${corpus}"
+          cd "${RUNNER_TEMP}/fuzz-logs"
+          jobs="$(nproc)"
+          status=0
+          cargo +nightly fuzz run --fuzz-dir "${GITHUB_WORKSPACE}/fuzz" "${features[@]}" "${FUZZ_TARGET}" \
+            "${corpus}" "${GITHUB_WORKSPACE}/fuzz/corpus/${FUZZ_TARGET}" -- \
+            -max_total_time="${FUZZ_TIME}" -timeout=10 -rss_limit_mb=2048 -jobs="${jobs}" -workers="${jobs}" ||
+            status=$?
+          echo "${status}" > "${RUNNER_TEMP}/fuzz-exit"
+          exit "${status}"
+
+      # A statistics line is `#<executions>`, a kind (`NEW`, `REDUCE`, `DONE`,
+      # but `pulse` in lower case) and `cov:`. The executions add up over the
+      # jobs; `cov` and `ft` are each job's own count of what it reached, so
+      # the highest is given rather than a sum.
+      - name: Statistics
+        if: always() && steps.fuzz.outcome != 'skipped'
+        run: |
+          cd "${RUNNER_TEMP}/fuzz-logs"
+          shopt -s nullglob
+          logs=(fuzz-*.log)
+          stats=""
+          if [ "${#logs[@]}" -gt 0 ]; then
+            stats="$(awk '
+              /^#[0-9]+[ \t]+[A-Za-z]+[ \t]+cov: / { last[FILENAME] = $0 }
+              END {
+                for (file in last) {
+                  split(last[file], word, /[ \t]+/)
+                  executions += substr(word[1], 2)
+                  if (word[4] + 0 > cov) cov = word[4] + 0
+                  if (word[6] + 0 > ft) ft = word[6] + 0
+                  jobs++
+                }
+                printf "%d %d %d %d\n", jobs, executions, cov, ft
+                for (file in last) printf "%s: %s\n", file, last[file]
+              }' "${logs[@]}")"
+          fi
+          read -r jobs executions cov ft <<< "$(head -n 1 <<< "${stats:-0 0 0 0}")"
+          {
+            echo "## Fuzz: ${FUZZ_TARGET}"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| target | ${FUZZ_TARGET} |"
+            echo "| backend | ${FUZZ_BACKEND} |"
+            echo "| cpu | ${FUZZ_CPU} (RUSTFLAGS: ${FUZZ_RUSTFLAGS:-none}) |"
+            echo "| CPU model | ${FUZZ_CPU_MODEL:-not read} |"
+            echo "| nightly | ${FUZZ_NIGHTLY:-not installed} |"
+            echo "| cargo-fuzz | ${FUZZ_CARGO_FUZZ:-not installed} |"
+            echo "| time per job | ${FUZZ_TIME} s |"
+            echo "| fuzzer exit status | $(cat "${RUNNER_TEMP}/fuzz-exit" 2> /dev/null || echo 'none recorded') |"
+            echo "| jobs with statistics | ${jobs} of ${#logs[@]} |"
+            echo "| executions, all jobs | ${executions} |"
+            echo "| cov, highest job | ${cov} |"
+            echo "| ft, highest job | ${ft} |"
+            echo
+            echo "Last statistics line of each job:"
+            echo
+            echo '```text'
+            tail -n +2 <<< "${stats}" | sort
+            echo '```'
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      # From the build on, so that a failed build's log is uploaded as well.
+      - name: Upload the fuzz logs
+        if: always() && steps.build.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-logs-${{ inputs.target }}-${{ inputs.backend }}-${{ inputs.cpu }}
+          path: ${{ runner.temp }}/fuzz-logs/
+
+      # A reproducer is the input a job failed on, which libFuzzer writes to
+      # fuzz/artifacts/<target>/ as `crash-`, `timeout-`, `oom-`, `leak-` or
+      # `slow-unit-` and its SHA-1. That directory is ignored by git, so this
+      # upload is where a finding ends up.
+      - name: Upload the reproducers
+        if: always() && steps.fuzz.outcome != 'skipped' && hashFiles('fuzz/artifacts/**') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-reproducers-${{ inputs.target }}-${{ inputs.backend }}-${{ inputs.cpu }}
+          path: fuzz/artifacts/${{ inputs.target }}/
+          if-no-files-found: error
+
+      # The run fails when the fuzzer exited with anything but 0, left a
+      # reproducer, or ran on a build that changed fuzz/Cargo.lock (see the
+      # build step), and passes otherwise. The fuzz step already fails when
+      # the fuzzer does; this one gives every reason in one place.
+      - name: Verdict
+        if: always() && steps.fuzz.outcome != 'skipped'
+        run: |
+          status="$(cat "${RUNNER_TEMP}/fuzz-exit" 2> /dev/null || echo 'none recorded')"
+          shopt -s nullglob
+          found=("fuzz/artifacts/${FUZZ_TARGET}"/*)
+          echo "fuzzer exit status: ${status}"
+          echo "reproducers: ${#found[@]}"
+          for file in "${found[@]}"; do
+            echo "  ${file} ($(wc -c < "${file}") bytes)"
+          done
+          if git diff --quiet -- fuzz/Cargo.lock; then
+            lock=unchanged
+          else
+            lock=changed
+            git diff --stat -- fuzz/Cargo.lock
+          fi
+          echo "fuzz/Cargo.lock: ${lock}"
+          if [ "${status}" = 0 ] && [ "${#found[@]}" -eq 0 ] && [ "${lock}" = unchanged ]; then
+            echo "verdict: pass (exit status 0, no reproducer, lock file unchanged)" | tee -a "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "verdict: fail (exit status ${status}, ${#found[@]} reproducer(s), lock file ${lock})" | tee -a "${GITHUB_STEP_SUMMARY}"
+            echo "::error::the fuzzer failed, left a reproducer or ran on a changed lock file; the logs and any reproducer are among the uploaded artifacts"
+            exit 1
+          fi
