@@ -574,8 +574,11 @@ second identical call, 64-bit targets.
   selects its SIMD code at compile time. Without a `target-cpu`, an x86_64 build gets the SSE2 baseline only.
   An application that knows its hardware can build with, for example,
   `RUSTFLAGS="-C target-cpu=x86-64-v3"` (AVX2) or `-C target-cpu=native`; the binary then does not
-  run on CPUs without those features. Every number in the ledger was taken **without** such a
-  flag, which is what a default build gets.
+  run on CPUs without those features. sonic-rs's own scanning routines (the mask of what is inside
+  a string, and the skip over whitespace) are compiled for x86_64 only when `pclmulqdq` is on
+  beside AVX2; `x86-64-v3` does not include it, so at that level they stay on the portable code
+  unless `-C target-feature=+pclmulqdq` is added, and `native` turns it on where the CPU has it.
+  Every number in the ledger was taken **without** such a flag, which is what a default build gets.
 
 ## Testing
 
