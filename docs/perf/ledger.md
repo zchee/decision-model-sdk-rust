@@ -918,8 +918,8 @@ reports the connection, before any response.
 
 **Why it was measured.** The README's deviations table says how the two SDKs differ in choosing a protocol and in
 opening a connection; this is the record behind those rows. The Python SDK measured is `typesafe-sdk` 0.7.2 installed
-with its `http2` extra (httpx2 2.13.1, httpcore2 2.13.1, h2 4.4.1, Python 3.14). 0.7.2 differs from the ported 0.7.1 in
-its packaging only - the extra, and the documents that name it - and `src/` and `tests/` are identical in both.
+with its `http2` extra (httpx2 2.13.1, httpcore2 2.13.1, h2 4.4.1, Python 3.14). 0.7.2 differs from 0.7.1 in its
+packaging only - the extra, and the documents that name it - and `src/` and `tests/` are identical in both.
 
 **How it was measured.** On 2026-09-29, 01:47-02:22 JST, on the macOS arm64 host (M3 Max), 3 runs of each row, the
 server in the client's process and event loop. The server offers `h2` and `http/1.1` through ALPN and speaks the one

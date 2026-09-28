@@ -1,8 +1,8 @@
 # Upstream test matrix
 
 Every test function of the Python SDK's `tests/test_*.py`
-([typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.1, commit
-`0ffd094`) and where its behaviour is covered here: a Rust test that exists in this repository,
+([typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.2, commit
+`f078f1e`) and where its behaviour is covered here: a Rust test that exists in this repository,
 named `path::function`, or a row of the deviations table in [`README.md`](../README.md), quoted
 by its first cell; a test of the Python repository's own tooling is listed as excluded, with its
 reason. `.github/scripts/port-test-matrix.py` checks every row; its docstring lists the checks.

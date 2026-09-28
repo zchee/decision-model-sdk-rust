@@ -72,7 +72,7 @@ EXCLUDED_FILES = frozenset(
     }
 )
 #: Every ``test_*`` function the upstream files define at the ported release
-#: (typesafe-sdk-python 0ffd094, v0.7.1), as ``(file, name)``. Pinned so that a
+#: (typesafe-sdk-python f078f1e, v0.7.2), as ``(file, name)``. Pinned so that a
 #: dropped, renamed or made-up row fails without an upstream checkout;
 #: ``--upstream`` checks the pin itself against a checkout.
 UPSTREAM_TESTS = frozenset(

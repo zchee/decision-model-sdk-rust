@@ -1,7 +1,7 @@
 //! Tests for the question model.
 //!
 //! Wire shapes are compared against JSON literals copied from the upstream
-//! Python SDK's tests (v0.7.1), parsed with `serde_json`, so key order and
+//! Python SDK's tests (v0.7.2), parsed with `serde_json`, so key order and
 //! spacing do not matter there; the tests that pin exact bytes say so.
 
 use std::collections::BTreeMap;

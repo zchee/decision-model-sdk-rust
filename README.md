@@ -3,8 +3,8 @@
 An async Rust client for the [TypeSafe AI](https://typesafe.ai) API: the System One endpoint
 (`POST /v1/systemone`), which answers named questions about a state, and the model listing
 (`GET /v1/models`). It is a port of the official Python SDK,
-[typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.1 (commit
-`0ffd094`); the places where it behaves differently on purpose are listed under
+[typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.2 (commit
+`f078f1e`); the places where it behaves differently on purpose are listed under
 [Deviations from the Python SDK](#deviations-from-the-python-sdk).
 
 The package is published as **`typesafe-sdk-rust`**, because the name `typesafe-sdk` is already
