@@ -280,6 +280,8 @@ struct State {
     requests: Mutex<Vec<RecordedRequest>>,
     /// Every accepted connection, in accept order.
     connections: Mutex<Vec<Arc<Connection>>>,
+    /// How long after accepting a connection the server starts serving it.
+    delay: Duration,
 }
 
 /// Locks `mutex` even when a panicking thread poisoned it: what it holds is
@@ -330,6 +332,27 @@ impl TestServer {
         F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = TestResponse> + Send + 'static,
     {
+        Self::start_slow(protocol, Duration::ZERO, handler).await
+    }
+
+    /// Starts serving `protocol` as [`start`](Self::start) does, but begins
+    /// serving each connection `delay` after it accepted it: the TLS
+    /// handshake, or the first HTTP byte on cleartext, waits that long, so
+    /// that a client's connect takes at least `delay`. The connection's
+    /// record shows [`Tls::InProgress`] meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// As [`start`](Self::start).
+    pub async fn start_slow<F, Fut>(
+        protocol: Protocol,
+        delay: Duration,
+        handler: F,
+    ) -> Result<Self, Error>
+    where
+        F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResponse> + Send + 'static,
+    {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.map_err(Error::Bind)?;
         let addr = listener.local_addr().map_err(Error::LocalAddr)?;
 
@@ -346,6 +369,7 @@ impl TestServer {
             handler: Arc::new(move |request| Box::pin(handler(request)) as HandlerFuture),
             requests: Mutex::new(Vec::new()),
             connections: Mutex::new(Vec::new()),
+            delay,
         });
 
         let (shutdown, shutdown_rx) = watch::channel(false);
@@ -521,6 +545,9 @@ async fn serve_connection(
     state: Arc<State>,
     connection: Arc<Connection>,
 ) {
+    if !state.delay.is_zero() {
+        tokio::time::sleep(state.delay).await;
+    }
     let counted = Arc::clone(&connection);
     let service =
         service_fn(move |request| dispatch(Arc::clone(&state), Arc::clone(&counted), request));

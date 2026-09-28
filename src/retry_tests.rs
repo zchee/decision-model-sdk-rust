@@ -601,6 +601,7 @@ impl Flaky {
             version: HttpVersion::Auto,
             extra_roots: Vec::new(),
             connect_timeout: None,
+            attempt_deadline: None,
         };
         Self {
             inner: HyperTransport::new(settings).expect("the default transport builds"),

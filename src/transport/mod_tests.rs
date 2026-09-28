@@ -279,6 +279,7 @@ async fn the_retry_count_is_sent_from_the_second_attempt_on_and_never_taken_from
         version: HttpVersion::Auto,
         extra_roots: Vec::new(),
         connect_timeout: None,
+        attempt_deadline: None,
     })
     .expect("the transport builds");
     let base = base_headers(&config, true);

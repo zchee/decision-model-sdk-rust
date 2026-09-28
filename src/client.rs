@@ -570,6 +570,7 @@ impl ClientBuilder {
             }),
             extra_roots: transport.extra_roots,
             connect_timeout: transport.connect_timeout,
+            attempt_deadline: config.timeout(),
         };
         Ok(Client::assemble(config, retry, HyperTransport::new(settings)?))
     }

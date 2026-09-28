@@ -636,3 +636,55 @@ async fn a_raw_server_answers_every_connection_with_its_bytes() {
         assert_eq!(answer, reply, "connection {connection}");
     }
 }
+
+#[tokio::test]
+async fn a_slow_server_starts_the_tls_handshake_only_after_its_delay() {
+    const DELAY: Duration = Duration::from_millis(300);
+
+    let server = TestServer::start_slow(Protocol::Http2Tls, DELAY, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("a slow HTTP/2-over-TLS server binds on loopback");
+    let certificate = server.certificate_der().expect("a TLS server exposes its certificate");
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(certificate).expect("the generated certificate is a usable trust anchor");
+    let client = tls_client(roots).expect("the client TLS configuration is valid");
+    let request = Request::get(format!("{}/v1/models", server.base_url()))
+        .body(Full::new(Bytes::new()))
+        .expect("the request parts are valid");
+
+    let started = std::time::Instant::now();
+    let response = tokio::spawn(client.request(request));
+    let accepted = async {
+        while server.accepted_connections() < 1 {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), accepted)
+        .await
+        .unwrap_or_else(|_| panic!("the server did not accept within 5 s: {server:?}"));
+    assert_eq!(
+        server.connections().iter().map(|record| record.tls().clone()).collect::<Vec<_>>(),
+        [Tls::InProgress],
+        "accepted, and the handshake waits for the delay"
+    );
+
+    let response = tokio::time::timeout(Duration::from_secs(5), response)
+        .await
+        .expect("the request ended within 5 s")
+        .expect("the request task ran")
+        .expect("the handshake completes after the delay");
+    let elapsed = started.elapsed();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(elapsed >= DELAY, "the request was answered after {elapsed:?}, before the delay");
+    assert_eq!(
+        settled_connections(&server, 1)
+            .await
+            .iter()
+            .map(ConnectionRecord::requests)
+            .collect::<Vec<_>>(),
+        [1],
+        "one connection, which carried the request"
+    );
+}

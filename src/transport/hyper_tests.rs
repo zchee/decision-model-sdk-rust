@@ -11,7 +11,12 @@ use super::*;
 use crate::ErrorKind;
 
 fn settings(version: HttpVersion) -> TransportSettings {
-    TransportSettings { version, extra_roots: Vec::new(), connect_timeout: None }
+    TransportSettings {
+        version,
+        extra_roots: Vec::new(),
+        connect_timeout: None,
+        attempt_deadline: None,
+    }
 }
 
 /// Sends one `GET` through the transport itself, with no SDK around it, and
@@ -73,6 +78,7 @@ fn the_transport_prints_its_settings_and_counts_its_roots() {
         version: HttpVersion::Auto,
         extra_roots: Vec::new(),
         connect_timeout: Some(Duration::from_millis(1500)),
+        attempt_deadline: None,
     })
     .expect("it builds");
     assert_eq!(
@@ -94,6 +100,7 @@ fn a_root_that_is_not_a_certificate_is_a_config_error() {
         version: HttpVersion::Http2Only,
         extra_roots: vec![garbage],
         connect_timeout: None,
+        attempt_deadline: None,
     })
     .expect_err("a bad root must not build");
 

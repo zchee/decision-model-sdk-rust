@@ -21,7 +21,7 @@ use std::{
 use bytes::Bytes;
 use http::{Response, StatusCode, Version};
 use http_body_util::Full;
-use test_support::{Protocol, RefusingPort, SilentServer, TestServer, Tls};
+use test_support::{Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, Tls};
 use typesafe_sdk::{
     Client, ClientBuilder, Error, ErrorKind, HttpVersion, Noul, PreparedQuestions, Questions,
     RetryPolicy,
@@ -43,16 +43,29 @@ const RESULT: &[u8] = include_bytes!("fixtures/result.json");
 /// failure follows it.
 const WAITED: &str = "Connection error: the connect this request waited for failed: ";
 
+/// The answer of every server here that answers: the fixture to a `POST`,
+/// an empty model list to anything else.
+fn answer(request: &RecordedRequest) -> Response<Full<Bytes>> {
+    let body: &'static [u8] =
+        if request.method == http::Method::POST { RESULT } else { br#"{"models":[]}"# };
+    let mut response = Response::new(Full::new(Bytes::from_static(body)));
+    *response.status_mut() = StatusCode::OK;
+    response
+}
+
 async fn tls_server() -> TestServer {
-    TestServer::start(Protocol::Http2Tls, |request| async move {
-        let body: &'static [u8] =
-            if request.method == http::Method::POST { RESULT } else { br#"{"models":[]}"# };
-        let mut response = Response::new(Full::new(Bytes::from_static(body)));
-        *response.status_mut() = StatusCode::OK;
-        response
-    })
-    .await
-    .expect("the test server starts")
+    TestServer::start(Protocol::Http2Tls, |request| async move { answer(&request) })
+        .await
+        .expect("the test server starts")
+}
+
+/// A TLS server as [`tls_server`], which starts the TLS handshake of each
+/// connection `delay` after it accepted it: a client's connect - TCP, TLS
+/// and the HTTP/2 handshake - takes at least that long.
+async fn slow_tls_server(delay: Duration) -> TestServer {
+    TestServer::start_slow(Protocol::Http2Tls, delay, |request| async move { answer(&request) })
+        .await
+        .expect("the test server starts")
 }
 
 /// A builder for a client of `server`, trusting its certificate.
@@ -163,6 +176,21 @@ async fn concurrently(client: &Client, questions: &PreparedQuestions, count: usi
         let answers = task.await.expect("the task ran").unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(answers, 3);
     }
+}
+
+/// Every request the server recorded is a System One call's: a `POST` of
+/// `/v1/systemone`. The request the transport opens a connection with never
+/// reaches the server: hyper refuses it before it writes a frame of it.
+fn assert_only_calls(server: &TestServer) {
+    let others: Vec<String> = server
+        .requests()
+        .iter()
+        .filter(|request| {
+            request.method != http::Method::POST || request.uri.path() != "/v1/systemone"
+        })
+        .map(|request| format!("{} {}", request.method, request.uri))
+        .collect();
+    assert!(others.is_empty(), "requests the server saw that no call sent: {others:?}");
 }
 
 /// Every request the server saw arrived over HTTP/2.
@@ -329,15 +357,15 @@ async fn a_burst_at_a_refusing_port_fails_every_call_and_ends() {
     assert_eq!(typesafe_sdk::__internals::open_streams(&client), 0);
 }
 
-/// A call waiting for a connect fails when the call that started it gives
-/// up before a connection exists. The first call opens, and its TLS handshake
-/// waits at a server that accepts and never answers; the second waits at the
-/// gate. When the first is dropped at its deadline, the second fails at once
-/// with a connection error that says so, well before its own deadline,
-/// instead of starting a connect of its own at a server that has just failed
-/// to answer one: the server accepts one connection.
+/// A call waiting for a connect outlives the call that started it. The first
+/// call starts the connect, whose TLS handshake waits at a server that
+/// accepts and never answers, and the second waits at the gate. The first
+/// gives up at its deadline; the connect runs on, bounded by the client's
+/// deadline of 10 s, and the second waits for it until its own deadline,
+/// where it fails with its own timeout. It never starts a connect of its own
+/// at a server that has not answered one: the server accepts one connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_waiting_call_fails_when_the_call_that_opened_gives_up() {
+async fn a_waiting_call_outlives_the_call_that_opened_and_ends_at_its_own_deadline() {
     const FIRST: Duration = Duration::from_millis(300);
     const SECOND: Duration = Duration::from_millis(1500);
 
@@ -381,16 +409,14 @@ async fn a_waiting_call_fails_when_the_call_that_opened_gives_up() {
         "the first call times out at its deadline: {first:?}"
     );
     assert!(first_ended >= FIRST, "the first call ended after {first_ended:?}");
-    assert!(matches!(second.kind(), ErrorKind::Connection), "{second:?}");
-    assert_eq!(
-        second.to_string(),
-        "Connection error: the connect this request waited for was given up: the request that \
-         started it was dropped before a connection existed"
+    assert!(
+        matches!(second.kind(), ErrorKind::Timeout { timeout } if *timeout == SECOND),
+        "the second call times out at its own deadline, not with the first: {second:?}"
     );
     assert!(
-        (FIRST..FIRST + Duration::from_millis(500)).contains(&second_ended),
-        "the second call ended {second_ended:?} after the start, not with the first at its \
-         deadline of {FIRST:?}; its own was {SECOND:?}"
+        (SECOND..SECOND + Duration::from_millis(500)).contains(&second_ended),
+        "the second call ended {second_ended:?} after the start, not at its own deadline of \
+         {SECOND:?}; the first's was {FIRST:?}"
     );
     assert_eq!(
         server.accepted_connections(),
@@ -648,5 +674,157 @@ async fn the_waiting_requests_go_once_the_connection_exists_not_after_the_respon
             )
         });
     assert_eq!(server.request_count(), BURST);
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
+}
+
+/// AC16: a cold burst's server sees the burst's calls and nothing else. The
+/// transport opens the connection with a request hyper refuses before it
+/// writes a frame of it: no `CONNECT`, and no request but a call's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cold_burst_sends_the_server_nothing_but_its_calls() {
+    let server = tls_server().await;
+    let client = one_attempt_client_for(&server);
+
+    concurrently(&client, &questions(), 64).await;
+    assert_only_calls(&server);
+    assert_eq!(server.request_count(), 64, "one request per call: {:#?}", server.connections());
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
+}
+
+/// AC13: at an endpoint whose TLS and HTTP/2 handshake end 1.5 s after it
+/// accepted the connection, 64 calls with a deadline of 1 s and a connect
+/// timeout of 2 s all succeed on one connection under the default retry
+/// policy. Every first attempt ends at its deadline while the connect runs
+/// on, bounded by the connect timeout; the retries wait for that connect and
+/// are served on it, each call sent once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_handshake_serves_the_retries_of_the_calls_that_gave_up_on_one_connection() {
+    const HANDSHAKE: Duration = Duration::from_millis(1500);
+
+    let server = slow_tls_server(HANDSHAKE).await;
+    let client = builder_for(&server)
+        .timeout(Duration::from_secs(1))
+        .connect_timeout(Duration::from_secs(2))
+        .build()
+        .expect("the client builds");
+
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(10), concurrently(&client, &questions(), 64))
+        .await
+        .unwrap_or_else(|_| {
+            panic!("the burst did not end within 10 s: {:#?}", server.connections())
+        });
+    let elapsed = started.elapsed();
+    assert!(elapsed >= HANDSHAKE, "the burst ended after {elapsed:?}, before the handshake");
+    assert_only_calls(&server);
+    assert_eq!(server.request_count(), 64, "each call sent once, by its retry");
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
+}
+
+/// AC15: a call whose own deadline is longer than the client's keeps the
+/// connect it started running past the client's deadline. 64 calls with a
+/// deadline of 5 s each, on a client whose deadline is 1 s and that does
+/// not retry, at an endpoint whose handshake ends after 1.5 s: every call
+/// succeeds, on one connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_call_deadline_above_the_client_deadline_keeps_the_connect_it_started() {
+    const HANDSHAKE: Duration = Duration::from_millis(1500);
+    const CALLS: usize = 64;
+
+    let server = slow_tls_server(HANDSHAKE).await;
+    let client = builder_for(&server)
+        .timeout(Duration::from_secs(1))
+        .retry(RetryPolicy::default().max_retries(0))
+        .build()
+        .expect("the client builds");
+    let questions = questions();
+    let calls: Vec<_> = (0..CALLS)
+        .map(|index| {
+            let (client, questions) = (client.clone(), questions.clone());
+            tokio::spawn(async move {
+                client
+                    .system_one("hello", &questions)
+                    .timeout(Duration::from_secs(5))
+                    .send()
+                    .await
+                    .map(|response| response.answers().len())
+                    .map_err(|error| format!("call {index}: {error:?}"))
+            })
+        })
+        .collect();
+
+    for call in calls {
+        let answers = tokio::time::timeout(Duration::from_secs(10), call)
+            .await
+            .expect("the call ended within 10 s")
+            .expect("the task ran")
+            .unwrap_or_else(|error| panic!("{error}: {:#?}", server.connections()));
+        assert_eq!(answers, 3);
+    }
+    assert_only_calls(&server);
+    assert_eq!(server.request_count(), CALLS);
+    assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
+}
+
+/// AC14: calls their callers cancel, under the SDK's defaults, do not take
+/// the connect down for the calls after them. 32 calls start 30 ms apart at
+/// an endpoint whose handshake ends 600 ms after it accepted the connection,
+/// and each caller gives up on its call after 500 ms: the first calls, the
+/// one that started the connect among them, are cancelled before the
+/// connection exists, and the connect runs on for the later ones, which are
+/// served on it. A call cancelled after its request was sent is seen by the
+/// server and not counted as served.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn calls_cancelled_by_their_callers_leave_the_connect_to_the_calls_after_them() {
+    const HANDSHAKE: Duration = Duration::from_millis(600);
+    const CANCEL: Duration = Duration::from_millis(500);
+    const SPACING: Duration = Duration::from_millis(30);
+    const CALLS: usize = 32;
+    const SERVED_AT_LEAST: usize = 24;
+
+    let server = slow_tls_server(HANDSHAKE).await;
+    let client = client_for(&server);
+    let questions = questions();
+    let mut calls = Vec::with_capacity(CALLS);
+    for _ in 0..CALLS {
+        let (client, questions) = (client.clone(), questions.clone());
+        calls.push(tokio::spawn(async move {
+            tokio::time::timeout(CANCEL, client.system_one("hello", &questions).send()).await
+        }));
+        tokio::time::sleep(SPACING).await;
+    }
+
+    let mut served = 0;
+    let mut cancelled = Vec::new();
+    for (index, call) in calls.into_iter().enumerate() {
+        match tokio::time::timeout(Duration::from_secs(10), call)
+            .await
+            .expect("the call ended within 10 s")
+            .expect("the task ran")
+        {
+            Ok(Ok(response)) => {
+                assert_eq!(response.answers().len(), 3, "call {index}");
+                served += 1;
+            }
+            Ok(Err(error)) => panic!("call {index} failed instead of being served: {error:?}"),
+            Err(_) => cancelled.push(index),
+        }
+    }
+    assert!(
+        served >= SERVED_AT_LEAST,
+        "{served} of {CALLS} calls served, at least {SERVED_AT_LEAST} expected; cancelled by \
+         their callers: {cancelled:?}; {:#?}",
+        server.connections()
+    );
+    assert!(
+        cancelled.contains(&0),
+        "the call that started the connect was cancelled: {cancelled:?}"
+    );
+    assert_only_calls(&server);
+    assert!(
+        server.request_count() >= served,
+        "{} requests for {served} served calls",
+        server.request_count()
+    );
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }

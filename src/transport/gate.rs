@@ -37,9 +37,14 @@ use std::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     task::{Context, Poll, ready},
+    time::Duration,
 };
 
-use http::{Request, Response, Uri};
+use http::{
+    HeaderValue, Method, Request, Response, Uri,
+    header::CONTENT_LENGTH,
+    uri::{self, PathAndQuery},
+};
 use hyper::{
     body::Incoming,
     rt::{Read, ReadBufCursor, Write},
@@ -48,7 +53,7 @@ use hyper_util::client::legacy::{
     self,
     connect::{Connect, Connected, Connection, capture_connection},
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, oneshot};
 use tower_service::Service;
 
 use super::{Body, CONNECTION_PREFIX, connection_message};
@@ -102,6 +107,9 @@ pub(super) struct Gate {
     failed: Mutex<Option<Failed>>,
     /// Notified when the opener gives its turn back.
     changed: Notify,
+    /// How long a connect may run once the request that started it is gone,
+    /// counted from when it began; with `None` it ends with that request.
+    bound: Option<Duration>,
 }
 
 /// A turn that ended without a connection.
@@ -121,6 +129,9 @@ enum Failure {
     Connect(Arc<str>),
     /// The request that opened was dropped before a connection existed.
     GivenUp,
+    /// The request that started the connect was gone, and the connect had
+    /// run for this long, the gate's bound, without a connection.
+    Bound(Duration),
 }
 
 /// What a request finds at the gate.
@@ -134,6 +145,12 @@ enum Entry {
 }
 
 impl Gate {
+    /// A gate whose connect may run for `bound` once the request that
+    /// started it is gone; with `None` the connect ends with that request.
+    pub(super) fn new(bound: Option<Duration>) -> Self {
+        Self { bound, ..Self::default() }
+    }
+
     /// Whether a request can go to the pool without waiting: a request was
     /// given a pooled connection since the last connect began, and a stream
     /// is still open.
@@ -228,14 +245,18 @@ struct Opener {
 /// How an opener's turn ended, as its `Drop` reads it.
 enum Ending {
     /// Nothing recorded yet. An opener dropped in this state was dropped
-    /// before a connection existed: its caller's deadline passed, or its task
-    /// was dropped.
+    /// before a connection existed: the request that started the connect
+    /// gave up on a gate with no bound, or the runtime dropped the task that
+    /// ran the connect.
     Pending,
     /// The opener's connect failed with this chain of messages.
     ConnectFailed(Arc<str>),
     /// The opener was given a connection, whether its response then
     /// succeeded or failed on it.
     Connected,
+    /// The request that started the connect was gone, and the connect ran
+    /// for the gate's bound without a connection.
+    Bound(Duration),
 }
 
 impl Opener {
@@ -249,6 +270,12 @@ impl Opener {
     fn connected(mut self) {
         self.ending = Ending::Connected;
     }
+
+    /// Gives the turn back because the connect ran for `bound` after the
+    /// request that started it was gone.
+    fn bound(mut self, bound: Duration) {
+        self.ending = Ending::Bound(bound);
+    }
 }
 
 impl Drop for Opener {
@@ -260,6 +287,7 @@ impl Drop for Opener {
         let failure = match std::mem::replace(&mut self.ending, Ending::Connected) {
             Ending::Pending => Some(Failure::GivenUp),
             Ending::ConnectFailed(chain) => Some(Failure::Connect(chain)),
+            Ending::Bound(bound) => Some(Failure::Bound(bound)),
             Ending::Connected => None,
         };
         if let Some(failure) = failure {
@@ -290,6 +318,11 @@ impl fmt::Display for WaitedConnectFailed {
                 "the connect this request waited for was given up: the request that started it \
                  was dropped before a connection existed",
             ),
+            Failure::Bound(bound) => write!(
+                formatter,
+                "the connect this request waited for did not complete within {bound:?} after the \
+                 request that started it gave up"
+            ),
         }
     }
 }
@@ -305,78 +338,180 @@ pub(super) enum SendError {
     Waited(WaitedConnectFailed),
 }
 
-/// Sends `request` through `gate`: it waits while another request opens a
-/// connection, then goes to the pool as any request does, or opens the
-/// connection itself.
+/// How the connect of a turn ended, as the task that ran it tells the
+/// request that started it.
+enum Outcome {
+    /// hyper-util put the connection in the pool.
+    Connected,
+    /// The connect failed. The error is hyper-util's own, which cannot be
+    /// copied, so only the request that started the connect carries it.
+    Failed(legacy::Error),
+}
+
+/// Sends `request` through `gate`: it waits while a connect is in flight,
+/// then goes to the pool as any request does. A request that finds no
+/// connect in flight starts one in a task of its own, which no request owns,
+/// and waits for it like the others.
 ///
-/// The opener gives its turn back as soon as hyper-util reports the
-/// connection it was given, before the response arrives. Hyper-util reports
-/// it right after it has put a new connection in the pool, so every request
-/// released then finds it there. A response that fails before there was a
-/// connection - in the connect, the HTTP/2 handshake after TLS included -
-/// fails every waiting request with it, and so does an opener dropped before
-/// there was one; a response that is `Ok`, or fails on a connection, gives
-/// the turn back without failing anyone, and marks the pool only when it is
-/// `Ok`.
+/// The connect therefore outlives the request that started it: a request
+/// that gives up - its deadline passed, or its task was dropped - no longer
+/// ends the connect the other requests are waiting for; [`open`] says when
+/// it ends instead. The request itself is sent only once the connection is
+/// in the pool, so a request that gave up before then was never sent.
 pub(super) async fn send<C>(
     gate: Arc<Gate>,
     client: legacy::Client<C, Body>,
-    mut request: Request<Body>,
+    request: Request<Body>,
 ) -> Result<Response<Incoming>, SendError>
 where
     C: Connect + Clone + Send + Sync + 'static,
 {
-    let opener = match gate.enter().await {
-        Entry::Pool => return client.request(request).await.map_err(SendError::Own),
-        Entry::Failed(failed) => return Err(SendError::Waited(failed)),
-        Entry::Open(opener) => opener,
-    };
-    let mut capture = capture_connection(&mut request);
-    let mut response = client.request(request);
+    loop {
+        let opener = match gate.enter().await {
+            Entry::Pool => return client.request(request).await.map_err(SendError::Own),
+            Entry::Failed(failed) => return Err(SendError::Waited(failed)),
+            Entry::Open(opener) => opener,
+        };
+        let (outcome, outcome_rx) = oneshot::channel();
+        // The task runs on the runtime this request is polled on, as the
+        // connection tasks hyper-util spawns through `TokioExecutor` do.
+        tokio::spawn(open(opener, client.clone(), probe(&request), outcome));
+        match outcome_rx.await {
+            // The connection is in the pool: go to it, as a request that
+            // waited does.
+            Ok(Outcome::Connected) => {}
+            Ok(Outcome::Failed(error)) => return Err(SendError::Own(error)),
+            // The runtime dropped the task before the connect ended, as it
+            // does when it shuts down; the task's turn ended as given up.
+            Err(_) => return Err(SendError::Waited(WaitedConnectFailed(Failure::GivenUp))),
+        }
+    }
+}
+
+/// The request the task that connects sends for `request`: a `CONNECT` to
+/// the scheme and authority of its URI, which are hyper-util's pool key for
+/// it, declaring a body of one byte and sending none. Nothing else of
+/// `request` is taken.
+///
+/// hyper's HTTP/2 client refuses a `CONNECT` whose declared length is not
+/// zero before it writes a frame of it, and hyper-util reports the refusal
+/// with the connection it was made on, which stays in the pool: the connect
+/// runs as for any request, and no request reaches the server.
+fn probe(request: &Request<Body>) -> Request<Body> {
+    let uri = request.uri();
+    let mut parts = uri::Parts::default();
+    parts.scheme = uri.scheme().cloned();
+    parts.authority = uri.authority().cloned();
+    parts.path_and_query = Some(PathAndQuery::from_static("/"));
+    // `from_parts` refuses an authority without a scheme, which hyper-util
+    // would refuse as well; the default URI, `/`, has no authority, so
+    // hyper-util fails the probe before any connect, as it fails the
+    // caller's own request.
+    let mut probe = Request::new(Body::empty());
+    *probe.uri_mut() = Uri::from_parts(parts).unwrap_or_default();
+    *probe.method_mut() = Method::CONNECT;
+    // No header but this one, never the caller's credentials or headers: a
+    // hyper release that did send the probe would send them to the server.
+    probe.headers_mut().insert(CONTENT_LENGTH, HeaderValue::from_static("1"));
+    probe
+}
+
+/// What the task that connects saw first.
+enum Seen {
+    /// The probe's response, before hyper-util reported a connection.
+    Response(Result<Response<Incoming>, legacy::Error>),
+    /// hyper-util reported the probe's connection.
+    Connection,
+    /// The request that started the connect is gone, and the gate's bound
+    /// has passed since the connect began, or the gate has none.
+    Abandoned,
+}
+
+/// The task that runs the connect of a turn, holding the turn: it sends
+/// `probe` and gives the turn back as soon as hyper-util reports the
+/// connection it was given, before any response. hyper-util reports it
+/// right after it has put a new connection in the pool, so every request
+/// released then finds it there.
+///
+/// A connect that fails - TCP, TLS or the HTTP/2 handshake - fails every
+/// waiting request with it, and the request that started it with
+/// hyper-util's own error. The connect is never given up while the request
+/// that started it waits, whatever the gate's bound: that request may have a
+/// deadline of its own longer than the client's. Once that request is gone,
+/// the connect is given up when the gate's bound has passed since it began,
+/// failing every waiting request with the bound; a gate with no bound gives
+/// it up at once, as the request would have given up a connect of its own.
+async fn open<C>(
+    opener: Opener,
+    client: legacy::Client<C, Body>,
+    mut probe: Request<Body>,
+    mut starter: oneshot::Sender<Outcome>,
+) where
+    C: Connect + Clone + Send + Sync + 'static,
+{
+    let gate = Arc::clone(&opener.gate);
+    // `sleep` fixes its deadline when it is made, not when it is first
+    // polled, so the bound counts from before the connect begins.
+    let mut bound = pin!(gate.bound.map(tokio::time::sleep));
+    let mut capture = capture_connection(&mut probe);
+    let mut response = client.request(probe);
     let mut connected = pin!(capture.wait_for_connection_metadata());
     let mut capture_ended = false;
-    let first = poll_fn(|cx| {
+    let seen = poll_fn(|cx| {
         if let Poll::Ready(result) = Pin::new(&mut response).poll(cx) {
-            return Poll::Ready(Some(result));
+            return Poll::Ready(Seen::Response(result));
         }
         if !capture_ended && let Poll::Ready(metadata) = connected.as_mut().poll(cx) {
             // The guard holds a read lock of hyper-util's watch channel, so it
             // is read and dropped here. A capture that ended without a
             // connection is done: it is never polled again.
             if metadata.is_some() {
-                return Poll::Ready(None);
+                return Poll::Ready(Seen::Connection);
             }
             capture_ended = true;
         }
-        Poll::Pending
+        // Registers this task to be woken when the request that started the
+        // connect is dropped; the bound is looked at only after that.
+        ready!(starter.poll_closed(cx));
+        match bound.as_mut().as_pin_mut() {
+            Some(sleep) => sleep.poll(cx).map(|()| Seen::Abandoned),
+            None => Poll::Ready(Seen::Abandoned),
+        }
     })
     .await;
-    match first {
-        Some(Ok(response)) => {
+    // In the poll that saw the connection: hyper skips a request whose
+    // response is gone, and a hyper that sent the probe would reset it.
+    drop(response);
+    // A `send` to a starter that is gone fails, and there is no one to tell.
+    match seen {
+        Seen::Connection | Seen::Response(Ok(_)) => {
             gate.mark_pooled();
             opener.connected();
-            Ok(response)
+            let _ = starter.send(Outcome::Connected);
         }
-        Some(Err(error)) => {
+        Seen::Response(Err(error)) => {
             // `connect_info()` is the info of the connection on which the
             // error occurred: hyper-util attaches it to every error that
             // happened on a connection, and to none that happened before
             // there was one. `None` is therefore a failed connect, including
             // a failed HTTP/2 handshake after TLS, which hyper-util reports
             // as a `SendRequest` error, not a connect error, so that
-            // `is_connect()` alone would miss it.
+            // `is_connect()` alone would miss it. `Some` is hyper refusing
+            // the probe on the connection it was given, which is pooled.
             if error.connect_info().is_none() {
                 opener.fail(quoted(&error));
+                let _ = starter.send(Outcome::Failed(error));
             } else {
+                gate.mark_pooled();
                 opener.connected();
+                let _ = starter.send(Outcome::Connected);
             }
-            Err(SendError::Own(error))
         }
-        None => {
-            gate.mark_pooled();
-            opener.connected();
-            response.await.map_err(SendError::Own)
-        }
+        Seen::Abandoned => match gate.bound {
+            Some(bound) => opener.bound(bound),
+            // Dropped as it is, the turn ends as given up.
+            None => drop(opener),
+        },
     }
 }
 

@@ -114,6 +114,10 @@ pub(crate) struct TransportSettings {
     /// DER-encoded certificates trusted in addition to the operating system's.
     pub(crate) extra_roots: Vec<Vec<u8>>,
     pub(crate) connect_timeout: Option<Duration>,
+    /// The client's deadline of one attempt, `None` without one. Without a
+    /// connect timeout, it is how long a connect under `Http2Only` runs on
+    /// once the request that started it is gone.
+    pub(crate) attempt_deadline: Option<Duration>,
 }
 
 /// The transport a client uses unless it is given another: a pooled HTTP/1.1
@@ -153,7 +157,8 @@ impl HyperTransport {
     /// the certificate verifier cannot be built: an added root is not a
     /// certificate, or the operating system's roots cannot be loaded.
     pub(crate) fn new(settings: TransportSettings) -> Result<Self, Error> {
-        let TransportSettings { version, extra_roots, connect_timeout } = settings;
+        let TransportSettings { version, extra_roots, connect_timeout, attempt_deadline } =
+            settings;
         let root_count = extra_roots.len();
         let tls = tls_config(extra_roots.into_iter().map(CertificateDer::from).collect())?;
 
@@ -183,8 +188,13 @@ impl HyperTransport {
             .http2_keep_alive_while_idle(true)
             .http2_only(version == HttpVersion::Http2Only);
 
+        // The connect timeout bounds the whole connect once the request that
+        // started it is gone - TCP, TLS and the HTTP/2 handshake - where the
+        // TCP connector above bounds the TCP connect alone. Without either
+        // bound the connect ends with that request: a connect nothing bounds
+        // at an endpoint that never answers would hold every later request.
         let shared = Arc::new(Shared {
-            gate: Arc::new(Gate::default()),
+            gate: Arc::new(Gate::new(connect_timeout.or(attempt_deadline))),
             version,
             extra_roots: root_count,
             connect_timeout,
