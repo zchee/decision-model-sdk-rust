@@ -16,7 +16,8 @@ A panic, an abort (a stack overflow included), an input that runs past
 This directory is a cargo workspace of its own and is excluded from the
 repository's. `cargo check --manifest-path fuzz/Cargo.toml` works on the
 stable toolchain (it builds libFuzzer's C++ runtime, so a C++ compiler is
-needed). CI runs it on Linux (the "Fuzz targets compile" step), so that a
+needed). CI runs it on Linux (the "Fuzz targets compile" step, and again with
+the `sonic` feature, see [The sonic backend](#the-sonic-backend)), so that a
 change to the SDK's hidden `__internals` seam cannot break the targets
 unnoticed, and checks the directory's dependency policy against the
 repository's `deny.toml` (`cargo deny --manifest-path fuzz/Cargo.toml check`,
@@ -37,6 +38,41 @@ The first corpus directory is where libFuzzer writes the inputs it finds, so
 it is a scratch directory; `corpus/<target>` holds the committed seeds and is
 only read. A crash reproducer lands in `artifacts/<target>/`, which is
 ignored by git: keep it and report it rather than committing it.
+
+## The sonic backend
+
+The SDK decodes JSON with serde_json unless its `sonic` feature selects
+sonic-rs, a SIMD parser that carries `unsafe`; the one finding so far was a
+panic inside it. This crate's feature of the same name turns the SDK's on:
+
+```sh
+cd fuzz
+mkdir -p /tmp/finds/decode_response-sonic
+cargo +nightly fuzz run --features sonic decode_response /tmp/finds/decode_response-sonic \
+  corpus/decode_response -- -max_total_time=300 -timeout=10 -rss_limit_mb=2048
+```
+
+Run a target against the backend through this feature: it is the spelling CI
+compiles. Declaring it is what puts sonic-rs and its dependencies into
+`Cargo.lock`, at the versions the repository's own lock file has, and
+`cargo deny` judges each crate of that tree that a supported target compiles
+(`deny.toml` turns on every feature of the crate it checks and limits the
+graph to the supported targets). Without the feature,
+`--features typesafe-sdk-rust/sonic` builds as well, but cargo resolves that
+tree outside the lock file, at the newest versions the index has, even under
+`--locked` (seen with cargo 1.98.1), and the dependency policy does not see
+it. With the feature declared, both spellings build the locked versions. CI
+compiles both builds under `--locked`: "Fuzz targets compile" without the
+feature and "Fuzz targets compile with the sonic backend" with it.
+
+With the feature, every decoder `decode_response` drives parses through
+sonic-rs instead of serde_json: the System One answers into `Answers` and into
+a derived answer set, the models list and the error-body reader, including the
+raw JSON they keep and the positions and syntax classification the codec
+rebuilds its errors from. A run without it exercises the same decoders over
+serde_json, so it is the control. The depth guard and the UTF-8 check are the
+codec's own and run before either parser, so both builds cover them alike.
+`retry_after` reads no JSON, so the feature changes nothing for it.
 
 ## Seeds
 

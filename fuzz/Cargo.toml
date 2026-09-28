@@ -24,6 +24,17 @@ typesafe-sdk-rust = { path = "..", features = ["internals"] }
 bytes = "1.12.1"
 http = "1.5.0"
 
+[features]
+# The SDK's sonic-rs JSON backend, whose SIMD parser carries far more `unsafe`
+# code than serde_json: `cargo fuzz run --features sonic <target>`. It is a
+# feature of this crate because a feature declared here is what puts sonic-rs
+# and its dependencies into this workspace's lock file, where `--locked` holds
+# their versions and `cargo deny` judges the ones a supported target builds.
+# Without it, `--features typesafe-sdk-rust/sonic` on the command line builds
+# as well, but cargo resolves that tree outside the lock file, at the newest
+# versions the index has, and neither check sees it.
+sonic = ["typesafe-sdk-rust/sonic"]
+
 # An empty table makes this directory a workspace root of its own, so cargo
 # stops here instead of walking up into the repository's workspace.
 [workspace]

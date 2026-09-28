@@ -180,6 +180,17 @@ jobs:
         if: matrix.os == 'ubuntu-26.04'
         run: cargo check --locked --manifest-path fuzz/Cargo.toml
 
+      # The step above builds the targets against serde_json, the default
+      # backend. sonic-rs carries far more `unsafe` code than serde_json (its
+      # SIMD parser), and that is the backend a fuzzing run is most for, so the
+      # targets are checked against it too: a target that no longer builds
+      # with it breaks here, not on the next fuzzing run. The fuzz crate's own
+      # `sonic` feature is what holds sonic-rs to the committed lock file under
+      # `--locked`.
+      - name: Fuzz targets compile with the sonic backend
+        if: matrix.os == 'ubuntu-26.04'
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --features sonic
+
   coverage:
     name: coverage
     runs-on: ubuntu-26.04
