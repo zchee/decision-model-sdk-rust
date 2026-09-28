@@ -45,6 +45,11 @@ attempts, and HTTP/2 keep-alive pings run on a timer. `#[tokio::main]` and
 `Builder::enable_all()` / `enable_time()` enable it; Tokio panics when a timer is created on a
 runtime without it.
 
+Under `HttpVersion::Http2Only`, the connect that opens a client's connection runs in a task
+spawned on the runtime of the call that starts it, and it makes progress only while that runtime
+is driven: a wrapper that drives a current-thread runtime only inside a `block_on` per call sees
+the connect progress only during calls.
+
 ## Quickstart
 
 A call asks a set of named questions about a state. The set is validated and serialized once by
@@ -420,12 +425,19 @@ pings every 30 s.
   or, without one, the client's deadline of one attempt (10 s by default). The requests still
   waiting then fail, with `ErrorKind::Timeout` carrying the connect timeout, or with an
   `ErrorKind::Connection` that says the connect `did not complete within` the deadline; each
-  keeps its own deadline too. A client with `no_timeout()` and no `connect_timeout` gives the
-  connect up with the request that started it, and the requests waiting for it fail at once
-  (`the connect this request waited for was given up`): a connect that nothing bounds, at an
-  endpoint that never answers, would hold every later request. Set a `connect_timeout` to let the
-  connect outlive that request on such a client. A waiting request never takes the connect over:
-  it would start a connect at an endpoint that has not answered one, once per waiting call.
+  keeps its own deadline too. A request that arrives after the bound's deadline opens a new
+  connect instead: it is never failed by that bound, even when nothing drove the runtime while
+  the bound passed. A retry wave therefore opens one connection only when its retries start
+  within one bound of each other, as the default backoff and the default 10 s deadline
+  guarantee; with a deadline shorter than the backoff's spread (about 250 ms) a wave opens as
+  many as hyper-util alone would: at an endpoint that never answers, 64 calls with 2 retries and
+  a 100 ms or 50 ms deadline open 6 to 11 connections, and 1 with `connect_timeout(2 s)`. A
+  client with `no_timeout()` and no `connect_timeout` gives the connect up with the request that
+  started it, and the requests waiting for it fail at once (`the connect this request waited for
+  was given up`): a connect that nothing bounds, at an endpoint that never answers, would hold
+  every later request. Set a `connect_timeout` to let the connect outlive that request on such a
+  client. A waiting request never takes the connect over: it would start a connect at an endpoint
+  that has not answered one, once per waiting call.
 - What that buys, measured (ledger S2d): at an endpoint whose TLS and HTTP/2 handshake end 1.5 s
   after it accepted the connection, 64 calls with a 1 s deadline and the default retry policy all
   succeed on one connection with `connect_timeout(2 s)`, the first after about 1.5 s: the retries

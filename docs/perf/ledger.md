@@ -763,19 +763,24 @@ probe's response in that poll. The connect is never given up while the request t
 request is gone, it is given up when `connect_timeout` has passed since it began (under `Http2Only` that bounds the
 whole connect: TCP, TLS and the HTTP/2 handshake), else the client's deadline of one attempt; the waiting requests then
 fail with `ErrorKind::Timeout` carrying the connect timeout, or with a connection error that says the connect did not
-complete within the deadline. A client with `no_timeout()` and no `connect_timeout` keeps the rule of S2c. A call's
+complete within the deadline. A client with `no_timeout()` and no `connect_timeout` keeps the rule of S2c. The bound
+is a timer in the task, acted on only when the task is polled, so on a runtime that nothing drives between calls (a
+current-thread runtime and a `block_on` per call) a bound can pass unseen until the next call: the failure carries the
+bound's deadline, and a request that began waiting after it opens a new connect instead of failing with it. A call's
 future over the default transport keeps its size (2,328 / 2,312 / 2,312 / 2,016 bytes, macOS arm64 and Linux arm64,
-both profiles), and the warm calls' allocation counts are unchanged; the cold path allocates a 1,336-byte box and a
-task whose future is 1,608 bytes (and a oneshot), where it allocated one 1,704-byte box before the change.
+both profiles), and the warm calls' allocation counts are unchanged; the cold path allocates a 1,368-byte box and a
+task whose future is 1,680 bytes (and a oneshot), where it allocated one 1,704-byte box before the change.
 
 **How it was measured.** On 2026-09-28, 15:42-16:13 JST, before the change and with it alternating run by run, on the
 macOS arm64 host (M3 Max) and in a Docker Desktop linux/arm64 container with 4 CPUs (`--cpuset-cpus=0-3`), each build
 on a current-thread runtime and on a multi-thread runtime with 4 workers, 3 runs of each (1 run of each for the price
-table). The record is `.omc/handoffs/artifacts/t2/lead/runs-077e278/`: `ac-record.md`, `tables.md` (every row), the raw
-`mac.txt` and `linux.txt`, and `A-parallel3.txt`, `B-contended8.txt`, `C-idle2.txt`. A cell is the calls that
-succeeded, the connections the server accepted, and the first success (or the last call's end) in ms from the burst's
-start, over all runs of both runtimes. "Connect timeout 2 s" is the same build with `connect_timeout(2 s)`: before the
-change it covers the TCP connect only. Ledger section written 2026-09-28.
+table). The record is the maintainers' run record of 2026-09-28: 284 rows per system, one per run, scenario, build and
+runtime, each with the calls that succeeded, the connections accepted, the times and the requests each server served,
+and the logs of the three cold-burst configurations. A cell is the calls that succeeded, the connections the server
+accepted, and the first success (or the last call's end) in ms from the burst's start, over all runs of both runtimes.
+"Connect timeout 2 s" is the same build with `connect_timeout(2 s)`: before the change it covers the TCP connect only.
+Every runtime here was driven throughout, so the rule for a bound that passed unseen, added after these runs, changes
+none of them. Ledger section written 2026-09-28, amended 2026-09-28.
 
 A slow endpoint: TCP accepted at once, TLS and the HTTP/2 handshake finished 1.5 s later; 64 calls, a 1 s deadline.
 
@@ -851,6 +856,25 @@ the last call ended.
 Every call ended within its deadline plus 100 ms. With a connect timeout of 2 s a waiting call ends at its own deadline
 (the last of a spread burst, started at 63 ms, at 1,064-1,067 ms) instead of with the first, and a retry wave waits for
 the connect still running instead of opening one of its own: 2 connections instead of 3.
+
+A retry wave opens one connection only when its retries start within one bound of each other: a retry that starts
+after the wave's connect was given up opens one of its own. The default backoff and the default 10 s deadline guarantee
+it; a deadline shorter than the backoff's spread (about 250 ms) does not, before the change and with it alike. From the
+verification of 2026-09-28 (macOS, both runtimes): an endpoint that never answers, 64 calls, 2 retries; the connections
+the server accepted.
+
+| calls | deadline | before the change | with the change | with the change, connect timeout 2 s |
+| --- | --- | ---: | ---: | ---: |
+| all at once | 100 ms or 50 ms | 7-11 | 7-11 | 1 |
+| 1 ms apart | 100 ms | 6-7 | 6-7 | 1 |
+
+A bound that passes while nothing drives the runtime: one current-thread runtime driven only inside a `block_on` per
+call, an endpoint that holds the first connection without a byte and serves every later one, the client's deadline
+1 s. The first call's caller gives up after 300 ms, the runtime then sits undriven for 1.5 s, and a second call
+follows. From the same verification: before the change the second call was served on a new connection in 10-47 ms;
+with a first form of the change it failed in 0-1 ms with the stale bound's error (with a connect timeout of 2 s, a
+`Timeout` carrying it), and with the rule above it is served on a new connection again, in 8-12 ms on macOS in the
+test suite (`tests/connection_reuse.rs` `a_call_after_a_bound_that_passed_unpolled_opens_a_new_connect`).
 
 A connect that fails: TCP accepted, closed 200 ms later; 64 calls, none succeeds. The connections, and when the calls
 ended.

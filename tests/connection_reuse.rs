@@ -677,7 +677,7 @@ async fn the_waiting_requests_go_once_the_connection_exists_not_after_the_respon
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
 
-/// AC16: a cold burst's server sees the burst's calls and nothing else. The
+/// A cold burst's server sees the burst's calls and nothing else. The
 /// transport opens the connection with a request hyper refuses before it
 /// writes a frame of it: no `CONNECT`, and no request but a call's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -691,7 +691,7 @@ async fn a_cold_burst_sends_the_server_nothing_but_its_calls() {
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
 
-/// AC13: at an endpoint whose TLS and HTTP/2 handshake end 1.5 s after it
+/// At an endpoint whose TLS and HTTP/2 handshake end 1.5 s after it
 /// accepted the connection, 64 calls with a deadline of 1 s and a connect
 /// timeout of 2 s all succeed on one connection under the default retry
 /// policy. Every first attempt ends at its deadline while the connect runs
@@ -721,7 +721,7 @@ async fn a_slow_handshake_serves_the_retries_of_the_calls_that_gave_up_on_one_co
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
 
-/// AC15: a call whose own deadline is longer than the client's keeps the
+/// A call whose own deadline is longer than the client's keeps the
 /// connect it started running past the client's deadline. 64 calls with a
 /// deadline of 5 s each, on a client whose deadline is 1 s and that does
 /// not retry, at an endpoint whose handshake ends after 1.5 s: every call
@@ -766,7 +766,7 @@ async fn a_call_deadline_above_the_client_deadline_keeps_the_connect_it_started(
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
 
-/// AC14: calls their callers cancel, under the SDK's defaults, do not take
+/// Calls their callers cancel, under the SDK's defaults, do not take
 /// the connect down for the calls after them. 32 calls start 30 ms apart at
 /// an endpoint whose handshake ends 600 ms after it accepted the connection,
 /// and each caller gives up on its call after 500 ms: the first calls, the

@@ -73,9 +73,10 @@ pub enum HttpVersion {
     /// server closed an idle connection and the client has seen the close -
     /// one connect opens it and every request started meanwhile waits for
     /// it, so they share it too. The connect runs in a task of the
-    /// transport's own, and its request is one hyper refuses before it sends
-    /// a byte of it, so the server sees the connection and the callers'
-    /// requests only. When a connection ends while requests are in flight,
+    /// transport's own, spawned on the runtime of the call that starts it and
+    /// making progress only while that runtime is driven, and its request is
+    /// one hyper refuses before it sends a byte of it, so the server sees the
+    /// connection and the callers' requests only. When a connection ends while requests are in flight,
     /// hyper-util replaces it on its own, and a burst at that moment can
     /// still open a second connection, which is closed at once.
     ///
@@ -104,7 +105,14 @@ pub enum HttpVersion {
     /// requests still waiting then fail, with `ErrorKind::Timeout` carrying
     /// the connect timeout, or with an `ErrorKind::Connection` error that
     /// says the connect did not complete within the deadline. Each waiting
-    /// request keeps its own deadline. A client with
+    /// request keeps its own deadline. A request that arrives after the
+    /// bound's deadline opens a new connect instead: it is never failed by
+    /// that bound, even when nothing drove the runtime while the bound
+    /// passed. A retry wave therefore opens one connection only when its
+    /// retries start within one bound of each other, as the default backoff
+    /// and the default 10 s deadline guarantee; with a deadline shorter than
+    /// the backoff's spread (about 250 ms) a wave opens as many connections
+    /// as hyper-util alone would. A client with
     /// [`no_timeout`](crate::ClientBuilder::no_timeout) and no connect
     /// timeout gives the connect up with the request that started it, and
     /// the requests waiting for it fail at once with an
