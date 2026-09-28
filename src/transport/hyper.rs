@@ -234,8 +234,9 @@ impl Service<Request<Body>> for HyperTransport {
     fn call(&mut self, request: Request<Body>) -> HyperResponseFuture {
         // Under `Http2Only`, two atomic loads decide whether the pool holds a
         // connection, and a request sent while it does is handed to
-        // hyper-util with no reference count taken here; only a request sent
-        // while it does not goes through the gate, which costs one boxed
+        // hyper-util with no reference count taken by the transport itself
+        // (hyper-util clones its client for every request); only a request
+        // sent while it does not goes through the gate, which costs one boxed
         // future and a clone of the client. `Auto` never waits: it needs a
         // connection per concurrent HTTP/1.1 request.
         let shared = &*self.shared;

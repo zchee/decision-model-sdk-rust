@@ -666,9 +666,11 @@ three settings (the HTTP version, the count of added roots, the connect timeout)
 held for the gate (`e08280c`), which took 32 bytes back: 2,328 / 2,312 / 2,312 / 2,016, measured on macOS arm64 and
 Linux arm64 in both profiles, with the bounds, the futures over a custom transport and every allocation count
 unchanged; the model listing's future is now under tokio's 2,048-byte debug box threshold. A request sent while the
-pool holds a connection pays one pointer dereference more for its settings and no atomic operation beyond the two
-loads: the connect timeout is still copied into the response future by value, and only the gated path clones the
-gate's `Arc`.
+pool holds a connection pays one pointer dereference more for its settings and no atomic operation more than before:
+`call` does the two loads, takes no reference count and copies the connect timeout into the response future by value.
+hyper-util's `Client::request` still clones its client for every request, and with it the connector's `Arc<Gate>` (an
+increment, and a decrement when the request ends), as before the move. A request sent through the gate also clones the
+gate's `Arc` once more.
 
 What it does not cover: a connection that ends while requests are in flight is replaced inside hyper-util, which
 resends a request that had not started (`retry_canceled_requests`) without passing the gate, so a burst at that

@@ -200,8 +200,8 @@ fn the_future_of_every_call_is_send() {
 /// call clones; moving the transport's settings behind the reference count
 /// it holds gave 32 back. The System One futures stay over the threshold
 /// (hyper's response future is the larger one). The models listing's is now
-/// under it while its bound is not, so this test does not see it grow back
-/// into a boxed future. Targets other than macOS and Linux (Windows among
+/// under it while its bound is not, so this test does not see it grow into
+/// a boxed future. Targets other than macOS and Linux (Windows among
 /// them) have not been measured, so their bounds are looser. Raising a bound
 /// is a decision to state, not a number to bump.
 #[test]
