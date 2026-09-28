@@ -199,11 +199,12 @@ fn the_future_of_every_call_is_send() {
 /// transport and one held by its connector, both inside the transport the
 /// call clones; moving the transport's settings behind the reference count
 /// it holds gave 32 back. The System One futures stay over the threshold
-/// (hyper's response future is the larger one). The models listing's is now
-/// under it while its bound is not, so this test does not see it grow into
-/// a boxed future. Targets other than macOS and Linux (Windows among
-/// them) have not been measured, so their bounds are looser. Raising a bound
-/// is a decision to state, not a number to bump.
+/// (hyper's response future is the larger one). The models listing's is
+/// under it, and its bound IS the threshold - its measured size plus 32 -
+/// so a change that makes a model listing boxed fails here. Targets other
+/// than macOS and Linux (Windows among them) have not been measured, so
+/// their bounds are looser. Raising a bound is a decision to state, not a
+/// number to bump.
 #[test]
 fn the_future_of_every_call_stays_small() {
     // Tokio 1.53.1 `runtime/mod.rs`: the debug build's `BOX_FUTURE_THRESHOLD`.
@@ -212,7 +213,7 @@ fn the_future_of_every_call_stays_small() {
     // 2344 and 2048 while the transport kept its settings inline), `ask` the
     // same as `typed`; over a custom transport 2040, 2024 and 1728.
     #[cfg(all(feature = "hyper", any(target_os = "macos", target_os = "linux")))]
-    const DEFAULT_TRANSPORT: [usize; 4] = [2376, 2360, 2360, 2064];
+    const DEFAULT_TRANSPORT: [usize; 4] = [2376, 2360, 2360, 2048];
     #[cfg(all(feature = "hyper", not(any(target_os = "macos", target_os = "linux"))))]
     const DEFAULT_TRANSPORT: [usize; 4] = [2816, 2816, 2816, 2560];
     #[cfg(feature = "hyper")]

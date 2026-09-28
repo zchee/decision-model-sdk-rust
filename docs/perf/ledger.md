@@ -665,7 +665,9 @@ reference count in the transport and in its connector): 2,344 / 2,328 / 2,328 / 
 three settings (the HTTP version, the count of added roots, the connect timeout) then moved behind the `Arc` it already
 held for the gate (`e08280c`), which took 32 bytes back: 2,328 / 2,312 / 2,312 / 2,016, measured on macOS arm64 and
 Linux arm64 in both profiles, with the bounds, the futures over a custom transport and every allocation count
-unchanged; the model listing's future is now under tokio's 2,048-byte debug box threshold. A request sent while the
+unchanged; the model listing's future is now under tokio's 2,048-byte debug box threshold, and its bound was then
+lowered to 2,048 - that threshold, and the measured size plus 32 as every bound - so that a model listing boxed in a
+debug build fails `tests/static_assertions.rs`. A request sent while the
 pool holds a connection pays one pointer dereference more for its settings and no atomic operation more than before:
 `call` does the two loads, takes no reference count and copies the connect timeout into the response future by value.
 hyper-util's `Client::request` still clones its client for every request, and with it the connector's `Arc<Gate>` (an
