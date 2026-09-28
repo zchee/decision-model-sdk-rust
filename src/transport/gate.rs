@@ -109,7 +109,26 @@ pub(super) struct Gate {
     changed: Notify,
     /// How long a connect may run once the request that started it is gone,
     /// counted from when it began; with `None` it ends with that request.
-    bound: Option<Duration>,
+    bound: Option<Bound>,
+}
+
+/// How long a connect may run once the request that started it is gone, and
+/// which of the client's settings says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Bound {
+    /// The client's connect timeout: a connect that runs past it is a
+    /// timeout, as it is for the request that started it.
+    ConnectTimeout(Duration),
+    /// The client's deadline of one attempt.
+    AttemptDeadline(Duration),
+}
+
+impl Bound {
+    fn duration(self) -> Duration {
+        match self {
+            Self::ConnectTimeout(duration) | Self::AttemptDeadline(duration) => duration,
+        }
+    }
 }
 
 /// A turn that ended without a connection.
@@ -130,8 +149,8 @@ enum Failure {
     /// The request that opened was dropped before a connection existed.
     GivenUp,
     /// The request that started the connect was gone, and the connect had
-    /// run for this long, the gate's bound, without a connection.
-    Bound(Duration),
+    /// run for the gate's bound without a connection.
+    Bound(Bound),
 }
 
 /// What a request finds at the gate.
@@ -147,7 +166,7 @@ enum Entry {
 impl Gate {
     /// A gate whose connect may run for `bound` once the request that
     /// started it is gone; with `None` the connect ends with that request.
-    pub(super) fn new(bound: Option<Duration>) -> Self {
+    pub(super) fn new(bound: Option<Bound>) -> Self {
         Self { bound, ..Self::default() }
     }
 
@@ -256,7 +275,7 @@ enum Ending {
     Connected,
     /// The request that started the connect was gone, and the connect ran
     /// for the gate's bound without a connection.
-    Bound(Duration),
+    Bound(Bound),
 }
 
 impl Opener {
@@ -273,7 +292,7 @@ impl Opener {
 
     /// Gives the turn back because the connect ran for `bound` after the
     /// request that started it was gone.
-    fn bound(mut self, bound: Duration) {
+    fn bound(mut self, bound: Bound) {
         self.ending = Ending::Bound(bound);
     }
 }
@@ -320,14 +339,28 @@ impl fmt::Display for WaitedConnectFailed {
             ),
             Failure::Bound(bound) => write!(
                 formatter,
-                "the connect this request waited for did not complete within {bound:?} after the \
-                 request that started it gave up"
+                "the connect this request waited for did not complete within {:?} after the \
+                 request that started it gave up",
+                bound.duration()
             ),
         }
     }
 }
 
 impl StdError for WaitedConnectFailed {}
+
+impl WaitedConnectFailed {
+    /// The client's connect timeout, when the connect this request waited
+    /// for ran past it after the request that started it was gone.
+    pub(super) fn connect_timeout(&self) -> Option<Duration> {
+        match self.0 {
+            Failure::Bound(Bound::ConnectTimeout(timeout)) => Some(timeout),
+            Failure::Bound(Bound::AttemptDeadline(_)) | Failure::Connect(_) | Failure::GivenUp => {
+                None
+            }
+        }
+    }
+}
 
 /// Why a request sent through the gate failed.
 pub(super) enum SendError {
@@ -452,7 +485,7 @@ async fn open<C>(
     let gate = Arc::clone(&opener.gate);
     // `sleep` fixes its deadline when it is made, not when it is first
     // polled, so the bound counts from before the connect begins.
-    let mut bound = pin!(gate.bound.map(tokio::time::sleep));
+    let mut bound = pin!(gate.bound.map(|bound| tokio::time::sleep(bound.duration())));
     let mut capture = capture_connection(&mut probe);
     let mut response = client.request(probe);
     let mut connected = pin!(capture.wait_for_connection_metadata());

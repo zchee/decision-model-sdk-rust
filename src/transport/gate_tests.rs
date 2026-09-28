@@ -516,7 +516,7 @@ struct Held {
 impl Held {
     /// A gate whose connect may run for `bound` once the request that
     /// started it is gone.
-    async fn new(bound: Option<Duration>) -> Self {
+    async fn new(bound: Option<Bound>) -> Self {
         let server = TestServer::start(Protocol::H2c, |_request| async {
             json_response(StatusCode::OK, r#"{"models":[]}"#)
         })
@@ -598,7 +598,7 @@ async fn outcome_of(
 /// and is served on it.
 #[tokio::test]
 async fn the_connect_outlives_the_request_that_started_it_and_serves_a_later_one() {
-    let held = Held::new(Some(Duration::from_secs(30))).await;
+    let held = Held::new(Some(Bound::AttemptDeadline(Duration::from_secs(30)))).await;
     let starter = held.send();
     held.until_called(1).await;
 
@@ -632,7 +632,7 @@ async fn the_connect_outlives_the_request_that_started_it_and_serves_a_later_one
 async fn a_starter_that_gives_up_fails_no_one_before_the_bound() {
     const BOUND: Duration = Duration::from_millis(600);
 
-    let held = Held::new(Some(BOUND)).await;
+    let held = Held::new(Some(Bound::AttemptDeadline(BOUND))).await;
     let started = Instant::now();
     let starter = held.send();
     held.until_called(1).await;
@@ -667,7 +667,7 @@ async fn a_starter_that_gives_up_fails_no_one_before_the_bound() {
 async fn a_connect_is_given_up_once_its_starter_is_gone_and_the_bound_has_passed() {
     const BOUND: Duration = Duration::from_millis(200);
 
-    let held = Held::new(Some(BOUND)).await;
+    let held = Held::new(Some(Bound::AttemptDeadline(BOUND))).await;
     let started = Instant::now();
     let starter = held.send();
     held.until_called(1).await;
@@ -686,6 +686,11 @@ async fn a_connect_is_given_up_once_its_starter_is_gone_and_the_bound_has_passed
          that started it gave up"
     );
     assert!(elapsed >= BOUND, "the waiter failed {elapsed:?} after the connect began");
+    assert_eq!(
+        failed.connect_timeout(),
+        None,
+        "the attempt deadline's bound is no connect timeout"
+    );
 
     let later = held.send();
     held.until_called(2).await;
@@ -708,7 +713,7 @@ async fn a_connect_is_given_up_once_its_starter_is_gone_and_the_bound_has_passed
 async fn the_bound_passing_while_the_starter_waits_does_not_end_the_connect() {
     const BOUND: Duration = Duration::from_millis(100);
 
-    let held = Held::new(Some(BOUND)).await;
+    let held = Held::new(Some(Bound::AttemptDeadline(BOUND))).await;
     let starter = held.send();
     held.until_called(1).await;
     let waiter = held.send();
@@ -773,7 +778,7 @@ async fn the_connect_ends_when_the_connection_is_reported_not_at_the_response() 
     let server = TestServer::start(Protocol::H2c, |_request| std::future::pending())
         .await
         .expect("the test server starts");
-    let gate = Arc::new(Gate::new(Some(Duration::from_secs(30))));
+    let gate = Arc::new(Gate::new(Some(Bound::AttemptDeadline(Duration::from_secs(30)))));
     let client = legacy::Client::builder(TokioExecutor::new())
         .http2_only(true)
         .build(Counting::new(HttpConnector::new(), Arc::clone(&gate)));
@@ -800,4 +805,33 @@ async fn the_connect_ends_when_the_connection_is_reported_not_at_the_response() 
     );
     assert!(gate.is_warm(), "the connection is pooled and its stream open");
     assert_eq!(gate.turns.load(Ordering::Relaxed) & HELD, 0, "the turn was given back");
+}
+
+/// A connect bounded by the client's connect timeout fails the request
+/// waiting for it with that timeout, which the transport reports as the
+/// timeout it reports for the request that started a connect that ran past
+/// it.
+#[tokio::test]
+async fn a_connect_past_the_connect_timeout_fails_its_waiter_with_that_timeout() {
+    const TIMEOUT: Duration = Duration::from_millis(200);
+
+    let held = Held::new(Some(Bound::ConnectTimeout(TIMEOUT))).await;
+    let starter = held.send();
+    held.until_called(1).await;
+    let waiter = held.send();
+    settle().await;
+
+    starter.abort();
+    let waiter = outcome_of(waiter).await;
+    let Err(SendError::Waited(failed)) = &waiter else {
+        panic!("the waiter fails with the connect timeout, not {}", ended(&waiter));
+    };
+    assert_eq!(failed.connect_timeout(), Some(TIMEOUT));
+    assert_eq!(
+        failed.to_string(),
+        "the connect this request waited for did not complete within 200ms after the request \
+         that started it gave up"
+    );
+    assert_eq!(held.calls(), 1);
+    assert!(held.requests().is_empty(), "{:?}", held.requests());
 }

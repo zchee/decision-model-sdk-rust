@@ -46,7 +46,7 @@ use tower_service::Service;
 
 use super::{
     Body, BoxError,
-    gate::{self, Counting, Gate, SendError},
+    gate::{self, Bound, Counting, Gate, SendError, WaitedConnectFailed},
 };
 use crate::{error::Error, text};
 
@@ -194,7 +194,11 @@ impl HyperTransport {
         // bound the connect ends with that request: a connect nothing bounds
         // at an endpoint that never answers would hold every later request.
         let shared = Arc::new(Shared {
-            gate: Arc::new(Gate::new(connect_timeout.or(attempt_deadline))),
+            gate: Arc::new(Gate::new(
+                connect_timeout
+                    .map(Bound::ConnectTimeout)
+                    .or(attempt_deadline.map(Bound::AttemptDeadline)),
+            )),
             version,
             extra_roots: root_count,
             connect_timeout,
@@ -303,7 +307,7 @@ impl Future for HyperResponseFuture {
             Poll::Ready(Err(SendError::Own(error))) => {
                 Poll::Ready(Err(failure(error, this.connect_timeout)))
             }
-            Poll::Ready(Err(SendError::Waited(error))) => Poll::Ready(Err(Box::new(error))),
+            Poll::Ready(Err(SendError::Waited(error))) => Poll::Ready(Err(waited(error))),
         }
     }
 }
@@ -358,6 +362,17 @@ fn failure(error: legacy::Error, connect_timeout: Option<Duration>) -> BoxError 
             Box::new(Error::timeout(timeout))
         }
         _ => Box::new(error),
+    }
+}
+
+/// What a request that waited for another request's connect fails with: a
+/// timeout carrying the connect timeout when that connect ran past it, as
+/// [`failure`] reports it for the request that started the connect; the
+/// waited error otherwise.
+fn waited(error: WaitedConnectFailed) -> BoxError {
+    match error.connect_timeout() {
+        Some(timeout) => Box::new(Error::timeout(timeout)),
+        None => Box::new(error),
     }
 }
 

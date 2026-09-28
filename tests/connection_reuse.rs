@@ -828,3 +828,105 @@ async fn calls_cancelled_by_their_callers_leave_the_connect_to_the_calls_after_t
     );
     assert_eq!(server.accepted_connections(), 1, "{:#?}", server.connections());
 }
+
+/// A call waiting for a connect that is given up - its starter gone and the
+/// bound passed since the connect began - fails with the bound's kind. With
+/// a connect timeout, the bound is that timeout, and the call fails as the
+/// call that starts a connect fails when it runs past it: with a timeout
+/// carrying it. Without one, the bound is the client's deadline, and the
+/// call fails with a connection error that names it. The first call starts
+/// the connect at a server that accepts and never answers, and gives up
+/// after 150 ms; the second waits for it with a deadline of its own of 5 s,
+/// and fails once the bound of 600 ms has passed, without a connect of its
+/// own.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_waiting_call_fails_with_the_bound_of_a_connect_its_starter_left() {
+    const STARTER: Duration = Duration::from_millis(150);
+    const WAITER: Duration = Duration::from_secs(5);
+    const BOUND: Duration = Duration::from_millis(600);
+
+    for with_connect_timeout in [true, false] {
+        let server = SilentServer::start().await.expect("the silent server starts");
+        let builder = Client::builder()
+            .api_key("test-key")
+            .base_url(format!("https://{}", server.addr()))
+            .http_version(HttpVersion::Http2Only)
+            .retry(RetryPolicy::default().max_retries(0));
+        let client = if with_connect_timeout {
+            builder.connect_timeout(BOUND)
+        } else {
+            builder.timeout(BOUND)
+        }
+        .build()
+        .expect("the client builds");
+        let questions = questions();
+        let started = Instant::now();
+        let timed = |deadline: Duration| {
+            let (client, questions) = (client.clone(), questions.clone());
+            tokio::spawn(async move {
+                let error = client
+                    .system_one("hello", &questions)
+                    .timeout(deadline)
+                    .send()
+                    .await
+                    .expect_err("the server never answers");
+                (started.elapsed(), error)
+            })
+        };
+
+        let first = timed(STARTER);
+        let connected = async {
+            while server.accepted_connections() == 0 {
+                tokio::task::yield_now().await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(5), connected)
+            .await
+            .unwrap_or_else(|_| panic!("the first call did not connect within 5 s: {server:?}"));
+        let second = timed(WAITER);
+        let ((_, first), (second_ended, second)) =
+            tokio::time::timeout(Duration::from_secs(10), async {
+                (
+                    first.await.expect("the first task ran"),
+                    second.await.expect("the second task ran"),
+                )
+            })
+            .await
+            .expect("both calls ended within 10 s");
+
+        let label = if with_connect_timeout { "connect_timeout" } else { "timeout" };
+        assert!(
+            matches!(first.kind(), ErrorKind::Timeout { timeout } if *timeout == STARTER),
+            "{label}: the first call times out at its own deadline: {first:?}"
+        );
+        if with_connect_timeout {
+            assert!(
+                matches!(second.kind(), ErrorKind::Timeout { timeout } if *timeout == BOUND),
+                "{label}: the second call fails with the connect timeout: {second:?}"
+            );
+            assert_eq!(second.to_string(), "Request timed out (timeout=0.6s).", "{label}");
+        } else {
+            assert!(matches!(second.kind(), ErrorKind::Connection), "{label}: {second:?}");
+            assert_eq!(
+                second.to_string(),
+                "Connection error: the connect this request waited for did not complete within \
+                 600ms after the request that started it gave up",
+                "{label}"
+            );
+        }
+        assert!(
+            cause::<hyper_util::client::legacy::Error>(&second).is_none(),
+            "{label}: the failure is quoted, not carried: {second:?}"
+        );
+        assert!(
+            (BOUND..BOUND + Duration::from_millis(500)).contains(&second_ended),
+            "{label}: the second call ended {second_ended:?} after the start, not once the bound \
+             of {BOUND:?} had passed; its own deadline was {WAITER:?}"
+        );
+        assert_eq!(
+            server.accepted_connections(),
+            1,
+            "{label}: the second call did not connect on its own: {server:?}"
+        );
+    }
+}
