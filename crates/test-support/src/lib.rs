@@ -259,6 +259,8 @@ struct Connection {
     /// Notified by [`TestServer::close_connections`]. A notification sent
     /// before the task waits on it is kept, so none is lost.
     close: Notify,
+    /// Held without a byte read or written, instead of served.
+    silent: bool,
 }
 
 impl Connection {
@@ -282,6 +284,9 @@ struct State {
     connections: Mutex<Vec<Arc<Connection>>>,
     /// How long after accepting a connection the server starts serving it.
     delay: Duration,
+    /// Whether the first connection is held without a byte instead of
+    /// served.
+    first_silent: bool,
 }
 
 /// Locks `mutex` even when a panicking thread poisoned it: what it holds is
@@ -332,7 +337,7 @@ impl TestServer {
         F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = TestResponse> + Send + 'static,
     {
-        Self::start_slow(protocol, Duration::ZERO, handler).await
+        Self::start_with(protocol, Duration::ZERO, false, handler).await
     }
 
     /// Starts serving `protocol` as [`start`](Self::start) does, but begins
@@ -347,6 +352,40 @@ impl TestServer {
     pub async fn start_slow<F, Fut>(
         protocol: Protocol,
         delay: Duration,
+        handler: F,
+    ) -> Result<Self, Error>
+    where
+        F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResponse> + Send + 'static,
+    {
+        Self::start_with(protocol, delay, false, handler).await
+    }
+
+    /// Starts serving `protocol` as [`start`](Self::start) does, but holds
+    /// the first connection it accepts without reading or writing a byte,
+    /// until the server is dropped or
+    /// [`close_connections`](Self::close_connections) is called: a first
+    /// connect that stalls while a later one is served at once. The first
+    /// connection's record shows [`Tls::InProgress`] (or [`Tls::None`] on
+    /// cleartext) and no request.
+    ///
+    /// # Errors
+    ///
+    /// As [`start`](Self::start).
+    pub async fn start_first_silent<F, Fut>(protocol: Protocol, handler: F) -> Result<Self, Error>
+    where
+        F: Fn(RecordedRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = TestResponse> + Send + 'static,
+    {
+        Self::start_with(protocol, Duration::ZERO, true, handler).await
+    }
+
+    /// [`start`](Self::start) with each connection served `delay` after it
+    /// was accepted, and the first one held silent when `first_silent`.
+    async fn start_with<F, Fut>(
+        protocol: Protocol,
+        delay: Duration,
+        first_silent: bool,
         handler: F,
     ) -> Result<Self, Error>
     where
@@ -370,6 +409,7 @@ impl TestServer {
             requests: Mutex::new(Vec::new()),
             connections: Mutex::new(Vec::new()),
             delay,
+            first_silent,
         });
 
         let (shutdown, shutdown_rx) = watch::channel(false);
@@ -506,13 +546,16 @@ async fn accept_loop(
                 Err(_) => continue,
             },
         };
+        let mut connections = lock(&state.connections);
         let connection = Arc::new(Connection {
             peer,
             tls: Mutex::new(if acceptor.is_some() { Tls::InProgress } else { Tls::None }),
             requests: AtomicUsize::new(0),
             close: Notify::new(),
+            silent: state.first_silent && connections.is_empty(),
         });
-        lock(&state.connections).push(Arc::clone(&connection));
+        connections.push(Arc::clone(&connection));
+        drop(connections);
         // Nagle's algorithm would add latency to the small request/response
         // pairs these tests measure.
         let _ = stream.set_nodelay(true);
@@ -545,6 +588,12 @@ async fn serve_connection(
     state: Arc<State>,
     connection: Arc<Connection>,
 ) {
+    if connection.silent {
+        // The stream is held, unread, until this future is dropped: by
+        // `close_connections` or with the server.
+        let _held = stream;
+        return std::future::pending().await;
+    }
     if !state.delay.is_zero() {
         tokio::time::sleep(state.delay).await;
     }

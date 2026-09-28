@@ -930,3 +930,70 @@ async fn a_waiting_call_fails_with_the_bound_of_a_connect_its_starter_left() {
         );
     }
 }
+
+/// A connect's bound that passed while nothing drove the runtime fails only
+/// the calls that waited before it passed. One current-thread runtime is
+/// driven only inside a `block_on` per call, as a blocking wrapper drives
+/// one; the server, on a runtime of its own, holds the first connection
+/// without a byte and serves every later one. The first call's caller gives
+/// up after 300 ms while its connect waits at the silent connection; then
+/// nothing drives the runtime for 1.5 s, past the connect's bound, the
+/// client's deadline of 1 s. The second call, the first thing the runtime
+/// does after that, sees the connect's task give the turn up at that bound,
+/// and since it began waiting after the bound's deadline, it opens a new
+/// connect and is served on the second connection instead of failing with a
+/// bound that was never its own.
+#[test]
+fn a_call_after_a_bound_that_passed_unpolled_opens_a_new_connect() {
+    const GIVE_UP: Duration = Duration::from_millis(300);
+    const IDLE: Duration = Duration::from_millis(1500);
+    const DEADLINE: Duration = Duration::from_secs(1);
+
+    let servers = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .expect("a runtime for the server");
+    let server = servers
+        .block_on(TestServer::start_first_silent(Protocol::Http2Tls, |request| async move {
+            answer(&request)
+        }))
+        .expect("the test server starts");
+    let client = builder_for(&server)
+        .timeout(DEADLINE)
+        .retry(RetryPolicy::default().max_retries(0))
+        .build()
+        .expect("the client builds");
+    let calls = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime for the calls");
+    let questions = questions();
+
+    // Made inside the runtime: a timer needs its time driver.
+    let first = calls.block_on(async {
+        tokio::time::timeout(GIVE_UP, client.system_one("hello", &questions).send()).await
+    });
+    assert!(first.is_err(), "the first call's caller gave up while its connect waited");
+    std::thread::sleep(IDLE);
+
+    let started = Instant::now();
+    let second = calls.block_on(client.system_one("hello", &questions).send());
+    let elapsed = started.elapsed();
+    let second = second.unwrap_or_else(|error| {
+        panic!(
+            "the second call is served on a new connection, not failed after {elapsed:?} with \
+             {error:?}: {:#?}",
+            server.connections()
+        )
+    });
+    println!("the second call was served {elapsed:?} after it started");
+    assert_eq!(second.answers().len(), 3);
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "the second call took {elapsed:?}: it waited for something other than its own connect"
+    );
+    assert_only_calls(&server);
+    assert_eq!(server.request_count(), 1, "the second call's request only");
+    assert_eq!(server.accepted_connections(), 2, "{:#?}", server.connections());
+}

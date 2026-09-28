@@ -688,3 +688,35 @@ async fn a_slow_server_starts_the_tls_handshake_only_after_its_delay() {
         "one connection, which carried the request"
     );
 }
+
+#[tokio::test]
+async fn a_first_silent_server_holds_its_first_connection_and_serves_the_next() {
+    let server = TestServer::start_first_silent(Protocol::H2c, |_request| async {
+        text_response(StatusCode::OK, "ok")
+    })
+    .await
+    .expect("a first-silent h2c server binds on loopback");
+
+    let mut held = TcpStream::connect(server.addr()).await.expect("the server accepts");
+    let request = Request::get(format!("{}/v1/models", server.base_url()))
+        .body(Full::new(Bytes::new()))
+        .expect("the request parts are valid");
+    let response =
+        tokio::time::timeout(Duration::from_secs(5), cleartext_client(true).request(request))
+            .await
+            .expect("the second connection is served within 5 s")
+            .expect("the server answers on its second connection");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // The first connection is still open and has not seen a byte from the
+    // server: a read waits.
+    let mut buffer = [0; 16];
+    let read = tokio::time::timeout(Duration::from_millis(200), held.read(&mut buffer)).await;
+    assert!(read.is_err(), "the held connection said something: {read:?}");
+    assert_eq!(
+        server.connections().iter().map(ConnectionRecord::requests).collect::<Vec<_>>(),
+        [0, 1],
+        "the first connection held without a request, the second served: {:#?}",
+        server.connections()
+    );
+}

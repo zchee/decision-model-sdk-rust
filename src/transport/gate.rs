@@ -68,13 +68,21 @@ use hyper_util::client::legacy::{
     self,
     connect::{Connect, Connected, Connection, capture_connection},
 };
-use tokio::sync::{Notify, oneshot};
+use tokio::{
+    sync::{Notify, oneshot},
+    time::Instant,
+};
 use tower_service::Service;
 
 use super::{Body, CONNECTION_PREFIX, connection_message};
 
 /// The bit of [`Gate::turns`] that says a request holds the turn to open.
 const HELD: u64 = 1;
+
+/// How far ahead the deadline of a bound too long for an `Instant` is put:
+/// about 30 years, as tokio's `sleep` does with such a duration, since some
+/// platforms cannot represent an instant 100 years ahead.
+const FAR_FUTURE: Duration = Duration::from_secs(86_400 * 365 * 30);
 
 /// Whether the pool of one transport holds a connection, and which request
 /// may open one when it does not.
@@ -167,8 +175,18 @@ enum Failure {
     /// the runtime dropped the task that ran it.
     GivenUp,
     /// The request that started the connect was gone, and the connect had
-    /// run for the gate's bound without a connection.
-    Bound(Bound),
+    /// run for the gate's bound without a connection, until `deadline`.
+    Bound { bound: Bound, deadline: Instant },
+}
+
+impl Failure {
+    /// Whether this is a bound whose deadline passed before `instant`.
+    fn expired_before(&self, instant: Instant) -> bool {
+        match self {
+            Self::Bound { deadline, .. } => *deadline < instant,
+            Self::Connect(_) | Self::GivenUp => false,
+        }
+    }
 }
 
 /// What a request finds at the gate.
@@ -204,7 +222,9 @@ impl Gate {
     /// Waits until a request may go: to the pool once the gate is warm, or
     /// with the turn to open a connection when no other request holds it.
     /// A request that is waiting when the opener's turn ends without a
-    /// connection fails with it; one that comes after finds the turn free.
+    /// connection fails with it, unless the turn ended at a bound whose
+    /// deadline had passed before the request began waiting; one that comes
+    /// after finds the turn free.
     async fn enter(self: &Arc<Self>) -> Entry {
         loop {
             // Registered before the state is read, so that a turn given back
@@ -237,8 +257,15 @@ impl Gate {
             } else {
                 turns >> 1
             };
+            // A timer in a task that nobody polls fires late, so the bound's
+            // deadline, not the moment its failure is seen, decides whether it
+            // applies to this request: one that began waiting after the
+            // deadline takes the next turn instead.
+            let waiting_since = Instant::now();
             changed.await;
-            if let Some(failure) = self.failed_after(ended) {
+            if let Some(failure) = self.failed_after(ended)
+                && !failure.expired_before(waiting_since)
+            {
                 return Entry::Failed(WaitedConnectFailed(failure));
             }
         }
@@ -292,8 +319,8 @@ enum Ending {
     /// succeeded or failed on it.
     Connected,
     /// The request that started the connect was gone, and the connect ran
-    /// for the gate's bound without a connection.
-    Bound(Bound),
+    /// for the gate's bound without a connection, until this deadline.
+    Bound(Bound, Instant),
 }
 
 impl Opener {
@@ -308,10 +335,10 @@ impl Opener {
         self.ending = Ending::Connected;
     }
 
-    /// Gives the turn back because the connect ran for `bound` after the
-    /// request that started it was gone.
-    fn bound(mut self, bound: Bound) {
-        self.ending = Ending::Bound(bound);
+    /// Gives the turn back because the connect ran for `bound`, until
+    /// `deadline`, after the request that started it was gone.
+    fn bound(mut self, bound: Bound, deadline: Instant) {
+        self.ending = Ending::Bound(bound, deadline);
     }
 }
 
@@ -324,7 +351,7 @@ impl Drop for Opener {
         let failure = match std::mem::replace(&mut self.ending, Ending::Connected) {
             Ending::Pending => Some(Failure::GivenUp),
             Ending::ConnectFailed(chain) => Some(Failure::Connect(chain)),
-            Ending::Bound(bound) => Some(Failure::Bound(bound)),
+            Ending::Bound(bound, deadline) => Some(Failure::Bound { bound, deadline }),
             Ending::Connected => None,
         };
         if let Some(failure) = failure {
@@ -356,7 +383,7 @@ impl fmt::Display for WaitedConnectFailed {
                 "the connect this request waited for was given up: the request that started it \
                  was dropped before a connection existed",
             ),
-            Failure::Bound(bound) => write!(
+            Failure::Bound { bound, .. } => write!(
                 formatter,
                 "the connect this request waited for did not complete within {:?} after the \
                  request that started it gave up",
@@ -373,10 +400,10 @@ impl WaitedConnectFailed {
     /// for ran past it after the request that started it was gone.
     pub(super) fn connect_timeout(&self) -> Option<Duration> {
         match self.0 {
-            Failure::Bound(Bound::ConnectTimeout(timeout)) => Some(timeout),
-            Failure::Bound(Bound::AttemptDeadline(_)) | Failure::Connect(_) | Failure::GivenUp => {
-                None
-            }
+            Failure::Bound { bound: Bound::ConnectTimeout(timeout), .. } => Some(timeout),
+            Failure::Bound { bound: Bound::AttemptDeadline(_), .. }
+            | Failure::Connect(_)
+            | Failure::GivenUp => None,
         }
     }
 }
@@ -502,9 +529,14 @@ async fn open<C>(
     C: Connect + Clone + Send + Sync + 'static,
 {
     let gate = Arc::clone(&opener.gate);
-    // `sleep` fixes its deadline when it is made, not when it is first
-    // polled, so the bound counts from before the connect begins.
-    let mut bound = pin!(gate.bound.map(|bound| tokio::time::sleep(bound.duration())));
+    // The bound counts from before the connect begins, and its deadline is
+    // fixed here: it is also the one a waiting request compares with the
+    // instant it began waiting.
+    let deadline = gate.bound.map(|bound| {
+        let now = Instant::now();
+        (bound, now.checked_add(bound.duration()).unwrap_or(now + FAR_FUTURE))
+    });
+    let mut bound = pin!(deadline.map(|(_, deadline)| tokio::time::sleep_until(deadline)));
     let mut capture = capture_connection(&mut probe);
     let mut response = client.request(probe);
     let mut connected = pin!(capture.wait_for_connection_metadata());
@@ -559,8 +591,8 @@ async fn open<C>(
                 let _ = starter.send(Outcome::Connected);
             }
         }
-        Seen::Abandoned => match gate.bound {
-            Some(bound) => opener.bound(bound),
+        Seen::Abandoned => match deadline {
+            Some((bound, deadline)) => opener.bound(bound, deadline),
             // Dropped as it is, the turn ends as given up.
             None => drop(opener),
         },

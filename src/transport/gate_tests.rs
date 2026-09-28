@@ -835,3 +835,141 @@ async fn a_connect_past_the_connect_timeout_fails_its_waiter_with_that_timeout()
     assert_eq!(held.calls(), 1);
     assert!(held.requests().is_empty(), "{:?}", held.requests());
 }
+
+/// A bound's deadline, not the moment its failure is seen, decides whom it
+/// fails: a request that began waiting before the deadline fails with it,
+/// and one that began waiting after it takes the next turn, as it would
+/// have had the task that holds the turn seen the bound on time.
+#[test]
+fn a_bound_fails_only_the_requests_that_waited_before_its_deadline() {
+    let gate = Arc::new(Gate::default());
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let opener = take_the_turn(&gate, &waker);
+    let mut early = pin!(gate.enter());
+    assert!(poll_once(early.as_mut(), &waker).is_pending(), "the early request waits");
+    let deadline = tokio::time::Instant::now();
+    // Two reads of the clock can be equal; the late request has to begin
+    // waiting strictly after the deadline.
+    std::thread::sleep(Duration::from_millis(2));
+    let mut late = pin!(gate.enter());
+    assert!(poll_once(late.as_mut(), &waker).is_pending(), "the late request waits");
+
+    opener.bound(Bound::AttemptDeadline(Duration::from_secs(1)), deadline);
+    assert_eq!(
+        outcome(&poll_once(early.as_mut(), &waker)),
+        "failed: the connect this request waited for did not complete within 1s after the \
+         request that started it gave up",
+        "the request that waited before the deadline"
+    );
+    let polled = poll_once(late.as_mut(), &waker);
+    assert!(
+        matches!(polled, Poll::Ready(Entry::Open(_))),
+        "the request that began waiting after the deadline takes the next turn, not {}",
+        outcome(&polled)
+    );
+}
+
+/// The bound counts from the connect's start, not from the moment the
+/// request that started it gives up: a starter that waits past the bound
+/// and then gives up leaves a connect whose bound has already passed, so the
+/// request waiting for it fails as soon as the drop is seen.
+#[tokio::test]
+async fn the_bound_counts_from_the_connects_start_not_from_the_starters_drop() {
+    const BOUND: Duration = Duration::from_millis(150);
+
+    let held = Held::new(Some(Bound::AttemptDeadline(BOUND))).await;
+    let starter = held.send();
+    held.until_called(1).await;
+    let waiter = held.send();
+    tokio::time::sleep(BOUND * 2).await;
+    assert!(!waiter.is_finished(), "the bound does not apply while the starter waits");
+
+    let dropped = Instant::now();
+    starter.abort();
+    let waiter = outcome_of(waiter).await;
+    let after_drop = dropped.elapsed();
+    let Err(SendError::Waited(failed)) = &waiter else {
+        panic!("the waiter fails with the bound, not {}", ended(&waiter));
+    };
+    assert_eq!(
+        failed.to_string(),
+        "the connect this request waited for did not complete within 150ms after the request \
+         that started it gave up"
+    );
+    assert!(
+        after_drop < BOUND / 2,
+        "the waiter failed {after_drop:?} after the starter's drop; the bound had passed {:?} \
+         before it",
+        BOUND
+    );
+}
+
+/// A bound too long for an instant - a client whose deadline is the largest
+/// `Duration` - is one that never passes: the connect goes on for the
+/// request waiting for it, and nothing panics.
+#[tokio::test]
+async fn a_bound_too_long_for_an_instant_never_passes() {
+    let held = Held::new(Some(Bound::AttemptDeadline(Duration::MAX))).await;
+    let starter = held.send();
+    held.until_called(1).await;
+    let waiter = held.send();
+    settle().await;
+
+    starter.abort();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!waiter.is_finished(), "the waiter still waits for the connect");
+
+    held.release();
+    let waiter = outcome_of(waiter).await;
+    assert!(
+        matches!(&waiter, Ok(response) if response.status() == StatusCode::OK),
+        "the waiter is served, not {}",
+        ended(&waiter)
+    );
+    assert_eq!(held.calls(), 1);
+}
+
+/// A runtime that shuts down drops the task that runs a connect: the request
+/// that started the connect, polled on after that, fails as given up, as the
+/// request waiting beside it does. Both are polled by hand, the starter first
+/// inside the runtime that it spawns the task on, and both after that runtime
+/// is gone, so the order is exact.
+#[test]
+fn a_starter_whose_connect_task_the_runtime_dropped_fails_as_given_up() {
+    const GIVEN_UP: &str = "the waited error: the connect this request waited for was given up: \
+                            the request that started it was dropped before a connection existed";
+
+    let runtime =
+        tokio::runtime::Builder::new_current_thread().enable_all().build().expect("a runtime");
+    let gate = Arc::new(Gate::new(Some(Bound::AttemptDeadline(Duration::from_secs(30)))));
+    // A connector whose connects never go: nothing is reached, and the task
+    // never gets further than its first poll, if it is polled at all.
+    let (_go, never) = watch::channel(false);
+    let connector = HeldConnect {
+        inner: HttpConnector::new(),
+        go: never,
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let client = legacy::Client::builder(TokioExecutor::new())
+        .http2_only(true)
+        .build(Counting::new(connector, Arc::clone(&gate)));
+    let request =
+        || Request::get("http://127.0.0.1:9/v1/models").body(Body::empty()).expect("a request");
+    let waker = Waker::from(Arc::new(Wakes::default()));
+    let mut starter = Box::pin(send(Arc::clone(&gate), client.clone(), request()));
+    let mut waiter = Box::pin(send(Arc::clone(&gate), client, request()));
+
+    {
+        let _entered = runtime.enter();
+        assert!(poll_once(starter.as_mut(), &waker).is_pending(), "the starter spawned the task");
+    }
+    assert!(poll_once(waiter.as_mut(), &waker).is_pending(), "the waiter waits for the turn");
+    drop(runtime);
+
+    for (name, request) in [("the starter", &mut starter), ("the waiter", &mut waiter)] {
+        match poll_once(request.as_mut(), &waker) {
+            Poll::Ready(result) => assert_eq!(ended(&result), GIVEN_UP, "{name}"),
+            Poll::Pending => panic!("{name} still waits after the runtime was dropped"),
+        }
+    }
+}
