@@ -382,18 +382,23 @@ impl http_body::Body for ResponseBody {
 /// that ran out, the client's own error otherwise.
 fn failure(error: legacy::Error, connect_timeout: Option<Duration>) -> BoxError {
     match connect_timeout {
-        Some(timeout) if error.is_connect() && timed_out(&error) => {
-            Box::new(Error::timeout(timeout))
-        }
+        Some(timeout) if connect_timed_out(&error) => Box::new(Error::timeout(timeout)),
         _ => Box::new(error),
     }
+}
+
+/// Whether `error` is a connect that ran out of time: a connect error with an
+/// I/O error that timed out in its chain, as the TCP connector's connect
+/// timeout reports it.
+pub(super) fn connect_timed_out(error: &legacy::Error) -> bool {
+    error.is_connect() && timed_out(error)
 }
 
 /// What a request that waited for another request's connect fails with: a
 /// timeout carrying the connect timeout when that connect ran past it, as
 /// [`failure`] reports it for the request that started the connect; the
 /// waited error otherwise.
-fn waited(error: WaitedConnectFailed) -> BoxError {
+pub(super) fn waited(error: WaitedConnectFailed) -> BoxError {
     match error.connect_timeout() {
         Some(timeout) => Box::new(Error::timeout(timeout)),
         None => Box::new(error),

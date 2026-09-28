@@ -74,7 +74,7 @@ use tokio::{
 };
 use tower_service::Service;
 
-use super::{Body, CONNECTION_PREFIX, connection_message};
+use super::{Body, CONNECTION_PREFIX, connection_message, hyper::connect_timed_out};
 
 /// The bit of [`Gate::turns`] that says a request holds the turn to open.
 const HELD: u64 = 1;
@@ -514,7 +514,8 @@ enum Seen {
 ///
 /// A connect that fails - TCP, TLS or the HTTP/2 handshake - fails every
 /// waiting request with it, and the request that started it with
-/// hyper-util's own error. The connect is never given up while the request
+/// hyper-util's own error; one that ran out of the connect timeout, when
+/// that is the gate's bound, ends as the bound. The connect is never given up while the request
 /// that started it waits, whatever the gate's bound: that request may have a
 /// deadline of its own longer than the client's. Once that request is gone,
 /// the connect is given up when the gate's bound has passed since it began,
@@ -583,7 +584,18 @@ async fn open<C>(
             // `is_connect()` alone would miss it. `Some` is hyper refusing
             // the probe on the connection it was given, which is pooled.
             if error.connect_info().is_none() {
-                opener.fail(quoted(&error));
+                match deadline {
+                    // The TCP connector's own connect timeout fires at the
+                    // bound's instant and is seen first: a connect that ran
+                    // out of time ends as the bound, so that every request
+                    // waiting gets the timeout the one that started it gets.
+                    Some((bound @ Bound::ConnectTimeout(_), deadline))
+                        if connect_timed_out(&error) =>
+                    {
+                        opener.bound(bound, deadline);
+                    }
+                    Some(_) | None => opener.fail(quoted(&error)),
+                }
                 let _ = starter.send(Outcome::Failed(error));
             } else {
                 gate.mark_pooled();
