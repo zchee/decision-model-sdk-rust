@@ -413,7 +413,7 @@ def test_second_row_for_one_test_fails(run: Run, repository: Path) -> None:
 
 def test_reworded_deviation_fails(run: Run, repository: Path) -> None:
     """A deviation cell the README's table does not hold fails."""
-    cell = "Timeout per httpx phase; `httpx.Timeout` objects"
+    cell = "Timeout per httpx2 phase; `httpx2.Timeout` objects"
     line = line_of(pristine_matrix(repository), "| `test_timeout_object` |")
 
     status, out = run(

@@ -76,7 +76,7 @@ Each of their functions is listed, with the file's reason, in the last section,
 | `test_invalid_api_key` | 32 | `src/config_tests.rs::a_key_outside_printable_ascii_is_refused_without_repeating_it` |
 | `test_empty_env_unset` | 2 | `src/config_tests.rs::blank_environment_values_count_as_unset_and_the_log_level_is_never_read` |
 | `test_invalid_timeout` | 8 | `src/config_tests.rs::a_zero_timeout_is_the_upstream_error_and_any_positive_one_is_kept`, `src/request_tests.rs::a_deadline_is_the_clients_a_calls_or_none_and_never_zero` |
-| `test_timeout_object` | 2 | Deviation: "Timeout per httpx phase; `httpx.Timeout` objects" |
+| `test_timeout_object` | 2 | Deviation: "Timeout per httpx2 phase; `httpx2.Timeout` objects" |
 | `test_http_client_timeout_precedence` | 16 | Deviation: "`http_client.timeout` takes precedence" |
 
 ## `tests/test_errors.py`

@@ -1094,8 +1094,8 @@ async fn held(protocol: Protocol, body: &'static [u8]) -> Held {
 
 /// Upstream `test_transport_errors[ConnectTimeout, ReadTimeout]`: an attempt
 /// past its deadline is a timeout carrying that deadline. (README deviation
-/// row "Timeout per httpx phase; `httpx.Timeout` objects": one deadline covers
-/// the whole attempt, not each httpx phase.)
+/// row "Timeout per httpx2 phase; `httpx2.Timeout` objects": one deadline covers
+/// the whole attempt, not each httpx2 phase.)
 #[tokio::test]
 async fn an_attempt_past_its_deadline_is_a_timeout_with_that_deadline() {
     for protocol in Protocol::ALL {

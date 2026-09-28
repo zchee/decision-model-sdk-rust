@@ -1385,9 +1385,9 @@ struct Document {
 /// `test_system_one_retry_recovers_with_overrides`: a call with its own model,
 /// deadline and headers times out, is rate limited, then succeeds; every
 /// attempt sends the same body and headers, and the next call without
-/// overrides is back on the client's settings. Upstream's `httpx.Timeout`
+/// overrides is back on the client's settings. Upstream's `httpx2.Timeout`
 /// parametrization is a per-phase deadline this SDK does not have (README
-/// deviation row "Timeout per httpx phase; `httpx.Timeout` objects"): the Rust
+/// deviation row "Timeout per httpx2 phase; `httpx2.Timeout` objects"): the Rust
 /// call has one deadline per attempt, 50 ms here so the first attempt times
 /// out in real time, and what the server can observe is asserted instead of
 /// the transport's own timeout settings.
@@ -1522,7 +1522,7 @@ async fn concurrent_calls_keep_their_own_policies_as_upstream_test_concurrent_sy
 }
 
 /// `test_exhausted_transport_retry`, `ReadTimeout`: every attempt times out,
-/// and the call fails with the last timeout. Upstream also finds httpx's own
+/// and the call fails with the last timeout. Upstream also finds httpx2's own
 /// `ReadTimeout` as the cause; the Rust deadline is the SDK's own, so a
 /// timeout has no cause, and it carries the deadline it was given.
 #[cfg(feature = "hyper")]
