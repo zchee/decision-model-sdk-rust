@@ -19,6 +19,7 @@ use test_support::{Protocol, TestServer, json_response};
 use tokio::{net::TcpStream, sync::watch, task::JoinHandle};
 
 use super::*;
+use crate::ErrorKind;
 
 /// A waker that counts how often it was woken.
 #[derive(Default)]
@@ -974,14 +975,16 @@ fn a_starter_whose_connect_task_the_runtime_dropped_fails_as_given_up() {
     }
 }
 
-/// A connector whose connect fails after `delay` with an I/O error that timed
-/// out, as the TCP connector fails once its connect timeout has passed.
+/// A connector whose connect fails after `delay` with an I/O error of
+/// `kind`: `TimedOut` as the TCP connector fails once its connect timeout has
+/// passed, `ConnectionRefused` as it fails when nothing listens.
 #[derive(Clone)]
-struct TimesOut {
+struct ConnectFails {
     delay: Duration,
+    kind: io::ErrorKind,
 }
 
-impl Service<Uri> for TimesOut {
+impl Service<Uri> for ConnectFails {
     type Response = TokioIo<TcpStream>;
     type Error = Box<dyn StdError + Send + Sync>;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -991,13 +994,113 @@ impl Service<Uri> for TimesOut {
     }
 
     fn call(&mut self, _: Uri) -> Self::Future {
-        let delay = self.delay;
+        let (delay, kind) = (self.delay, self.kind);
         Box::pin(async move {
             tokio::time::sleep(delay).await;
-            Err(io::Error::new(io::ErrorKind::TimedOut, "tcp connect error: deadline has elapsed")
-                .into())
+            Err(io::Error::new(kind, "tcp connect error").into())
         })
     }
+}
+
+/// A connector whose connect succeeds after `delay` and hands over a stream
+/// on which every write fails with an I/O error of `kind`: the HTTP/2
+/// handshake fails on it, which hyper-util reports as no connect error.
+#[derive(Clone)]
+struct HandshakeFails {
+    delay: Duration,
+    kind: io::ErrorKind,
+}
+
+impl Service<Uri> for HandshakeFails {
+    type Response = FailingStream;
+    type Error = Box<dyn StdError + Send + Sync>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _: Uri) -> Self::Future {
+        let (delay, kind) = (self.delay, self.kind);
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            Ok(FailingStream(kind))
+        })
+    }
+}
+
+/// The stream of [`HandshakeFails`]: nothing to read, and every write fails
+/// with its kind of I/O error.
+struct FailingStream(io::ErrorKind);
+
+impl Read for FailingStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        _: ReadBufCursor<'_>,
+    ) -> Poll<io::Result<()>> {
+        Poll::Pending
+    }
+}
+
+impl Write for FailingStream {
+    fn poll_write(self: Pin<&mut Self>, _: &mut Context<'_>, _: &[u8]) -> Poll<io::Result<usize>> {
+        Poll::Ready(Err(io::Error::from(self.0)))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl Connection for FailingStream {
+    fn connected(&self) -> Connected {
+        Connected::new()
+    }
+}
+
+/// On a gate with `bound`, a request that starts a connect through
+/// `connector` and one that waits for it, spawned in this order on the
+/// current-thread runtime of a test so that the first takes the turn and the
+/// second waits; what each ended with, in that order.
+async fn starter_and_waiter<C>(
+    connector: C,
+    bound: Bound,
+) -> [Result<Response<Incoming>, SendError>; 2]
+where
+    Counting<C>: Connect + Clone + Send + Sync + 'static,
+{
+    let gate = Arc::new(Gate::new(Some(bound)));
+    let client = legacy::Client::builder(TokioExecutor::new())
+        .http2_only(true)
+        .build(Counting::new(connector, Arc::clone(&gate)));
+    let request =
+        || Request::get("http://127.0.0.1:9/v1/models").body(Body::empty()).expect("a request");
+    let starter = tokio::spawn(send(Arc::clone(&gate), client.clone(), request()));
+    let waiter = tokio::spawn(send(Arc::clone(&gate), client, request()));
+    [outcome_of(starter).await, outcome_of(waiter).await]
+}
+
+/// The error the request that waited in `ended` fails with, as the transport
+/// reports it.
+fn waited_error(ended: Result<Response<Incoming>, SendError>) -> crate::Error {
+    match ended {
+        Err(SendError::Waited(failed)) => {
+            crate::transport::connection(super::super::hyper::waited(failed))
+        }
+        other => panic!("the waiter fails with the waited error, not {}", self::ended(&other)),
+    }
+}
+
+/// Whether an I/O error that timed out is in the chain of `error`.
+fn chain_timed_out(error: &legacy::Error) -> bool {
+    std::iter::successors(error.source(), |cause: &&(dyn StdError + 'static)| (*cause).source())
+        .filter_map(|cause| cause.downcast_ref::<io::Error>())
+        .any(|io| io.kind() == io::ErrorKind::TimedOut)
 }
 
 /// A connect that ran out of the connect timeout ends as the bound when the
@@ -1010,39 +1113,25 @@ async fn a_connect_that_ran_out_of_the_connect_timeout_ends_as_that_bound() {
     const TIMEOUT: Duration = Duration::from_millis(400);
 
     for bound in [Bound::ConnectTimeout(TIMEOUT), Bound::AttemptDeadline(TIMEOUT)] {
-        let gate = Arc::new(Gate::new(Some(bound)));
-        let client = legacy::Client::builder(TokioExecutor::new())
-            .http2_only(true)
-            .build(Counting::new(TimesOut { delay: TIMEOUT / 4 }, Arc::clone(&gate)));
-        let request =
-            || Request::get("http://127.0.0.1:9/v1/models").body(Body::empty()).expect("a request");
-
-        // Spawned in this order on a current-thread runtime, the first takes
-        // the turn and the second waits for it.
-        let starter = tokio::spawn(send(Arc::clone(&gate), client.clone(), request()));
-        let waiter = tokio::spawn(send(Arc::clone(&gate), client, request()));
-        let starter = outcome_of(starter).await;
-        let waiter = outcome_of(waiter).await;
+        let connector = ConnectFails { delay: TIMEOUT / 4, kind: io::ErrorKind::TimedOut };
+        let [starter, waiter] = starter_and_waiter(connector, bound).await;
 
         let Err(SendError::Own(own)) = &starter else {
             panic!("{bound:?}: the starter fails with its own error, not {}", ended(&starter));
         };
         assert!(connect_timed_out(own), "{bound:?}: hyper-util's error timed out: {own:?}");
-        let Err(SendError::Waited(failed)) = waiter else {
-            panic!("{bound:?}: the waiter fails with the waited error, not {}", ended(&waiter));
-        };
-        let error = crate::transport::connection(super::super::hyper::waited(failed));
+        let error = waited_error(waiter);
         match bound {
             Bound::ConnectTimeout(_) => {
                 assert!(
-                    matches!(error.kind(), crate::ErrorKind::Timeout { timeout } if *timeout == TIMEOUT),
+                    matches!(error.kind(), ErrorKind::Timeout { timeout } if *timeout == TIMEOUT),
                     "{bound:?}: the waiter gets the connect timeout: {error:?}"
                 );
                 assert_eq!(error.to_string(), "Request timed out (timeout=0.4s).", "{bound:?}");
             }
             Bound::AttemptDeadline(_) => {
                 assert!(
-                    matches!(error.kind(), crate::ErrorKind::Connection),
+                    matches!(error.kind(), ErrorKind::Connection),
                     "{bound:?}: the waiter gets the failed connect: {error:?}"
                 );
                 assert_eq!(
@@ -1055,5 +1144,48 @@ async fn a_connect_that_ran_out_of_the_connect_timeout_ends_as_that_bound() {
                 );
             }
         }
+    }
+}
+
+/// Only a connect error that timed out ends as the connect-timeout bound:
+/// a connect refused (a connect error that did not time out), and an HTTP/2
+/// handshake that failed on a write that timed out (a timed-out chain that is
+/// no connect error), are quoted to the request waiting for them, as any
+/// failed connect is, while the bound is the connect timeout.
+#[tokio::test]
+async fn only_a_connect_that_timed_out_ends_as_the_connect_timeout_bound() {
+    const TIMEOUT: Duration = Duration::from_millis(400);
+    const BOUND: Bound = Bound::ConnectTimeout(TIMEOUT);
+
+    let refused = ConnectFails { delay: TIMEOUT / 4, kind: io::ErrorKind::ConnectionRefused };
+    let handshake = HandshakeFails { delay: TIMEOUT / 4, kind: io::ErrorKind::TimedOut };
+    let cases = [
+        ("a refused connect", starter_and_waiter(refused, BOUND).await, true, false),
+        ("a handshake that timed out", starter_and_waiter(handshake, BOUND).await, false, true),
+    ];
+    for (case, [starter, waiter], is_connect, timed_out) in cases {
+        let Err(SendError::Own(own)) = &starter else {
+            panic!("{case}: the starter fails with its own error, not {}", ended(&starter));
+        };
+        assert_eq!(
+            (own.is_connect(), chain_timed_out(own)),
+            (is_connect, timed_out),
+            "{case}: whether hyper-util calls it a connect error, and whether its chain timed \
+             out: {own:?}"
+        );
+        assert!(!connect_timed_out(own), "{case}: no connect that ran out of time: {own:?}");
+        let error = waited_error(waiter);
+        assert!(
+            matches!(error.kind(), ErrorKind::Connection),
+            "{case}: the waiter gets the failed connect, not the bound: {error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "Connection error: the connect this request waited for failed: {}",
+                quoted(own)
+            ),
+            "{case}"
+        );
     }
 }
