@@ -759,17 +759,22 @@ Its request is a `CONNECT` to the base URL's scheme and authority, declaring a o
 hyper 1.11.1's HTTP/2 client refuses before it writes a frame (`proto/h2/client.rs:716-729`); hyper-util reports the
 refusal with the connection, which stays pooled. The task releases every waiting request, the one that started the
 connect included, when hyper-util reports the connection, as before the change (`capture_connection`), and drops the
-probe's response in that poll. The connect is never given up while the request that started it waits. Once that
-request is gone, it is given up when `connect_timeout` has passed since it began (under `Http2Only` that bounds the
-whole connect: TCP, TLS and the HTTP/2 handshake), else the client's deadline of one attempt; the waiting requests then
-fail with `ErrorKind::Timeout` carrying the connect timeout, or with a connection error that says the connect did not
-complete within the deadline. A client with `no_timeout()` and no `connect_timeout` keeps the rule of S2c. The bound
-is a timer in the task, acted on only when the task is polled, so on a runtime that nothing drives between calls (a
-current-thread runtime and a `block_on` per call) a bound can pass unseen until the next call: the failure carries the
-bound's deadline, and a request that began waiting after it opens a new connect instead of failing with it. A call's
-future over the default transport keeps its size (2,328 / 2,312 / 2,312 / 2,016 bytes, macOS arm64 and Linux arm64,
-both profiles), and the warm calls' allocation counts are unchanged; the cold path allocates a 1,368-byte box and a
-task whose future is 1,680 bytes (and a oneshot), where it allocated one 1,704-byte box before the change.
+probe's response in that poll. The connect is never given up while the request that started it waits. Once that request
+is gone, it is given up when `connect_timeout` has passed since it began (under `Http2Only` that bounds the whole
+connect: TCP, TLS and the HTTP/2 handshake), else the client's deadline of one attempt; the waiting requests then fail
+with `ErrorKind::Timeout` carrying the connect timeout, or with a connection error that says the connect did not
+complete within the deadline. A TCP connect that runs past the connect timeout ends the same way, for the request that
+started it and every request waiting: the TCP connector's own connect timeout fires at the bound's instant and is seen
+first, and a connect that failed with a timed-out chain while the bound is the connect timeout ends as that bound. (A
+first form of the change quoted that failure as a connection error to the waiting requests; the verification of
+2026-09-28 saw it at an endpoint that drops the TCP handshake, 10 of 10 on Linux.) A client with `no_timeout()` and no
+`connect_timeout` keeps the rule of S2c. The bound is a timer in the task, acted on only when the task is polled, so on
+a runtime that nothing drives between calls (a current-thread runtime and a `block_on` per call) a bound can pass unseen
+until the next call: the failure carries the bound's deadline, and a request that began waiting after it opens a new
+connect instead of failing with it. A call's future over the default transport keeps its size (2,328 / 2,312 / 2,312 /
+2,016 bytes, macOS arm64 and Linux arm64, both profiles), and the warm calls' allocation counts are unchanged; the cold
+path allocates a 1,368-byte box and a task whose future is 1,680 bytes (and a oneshot), where it allocated one
+1,704-byte box before the change.
 
 **How it was measured.** On 2026-09-28, 15:42-16:13 JST, before the change and with it alternating run by run, on the
 macOS arm64 host (M3 Max) and in a Docker Desktop linux/arm64 container with 4 CPUs (`--cpuset-cpus=0-3`), each build
@@ -873,8 +878,9 @@ call, an endpoint that holds the first connection without a byte and serves ever
 1 s. The first call's caller gives up after 300 ms, the runtime then sits undriven for 1.5 s, and a second call
 follows. From the same verification: before the change the second call was served on a new connection in 10-47 ms;
 with a first form of the change it failed in 0-1 ms with the stale bound's error (with a connect timeout of 2 s, a
-`Timeout` carrying it), and with the rule above it is served on a new connection again, in 8-12 ms on macOS in the
-test suite (`tests/connection_reuse.rs` `a_call_after_a_bound_that_passed_unpolled_opens_a_new_connect`).
+`Timeout` carrying it), and with the rule above it is served on a new connection again, in a few to about twenty
+milliseconds (2-21 ms measured) in the test suite (`tests/connection_reuse.rs`
+`a_call_after_a_bound_that_passed_unpolled_opens_a_new_connect`).
 
 A connect that fails: TCP accepted, closed 200 ms later; 64 calls, none succeeds. The connections, and when the calls
 ended.

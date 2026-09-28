@@ -359,11 +359,13 @@ impl ClientBuilder {
     /// up: the connect goes on for the calls waiting for it until this long
     /// after it began, and those still waiting then fail with
     /// `ErrorKind::Timeout` carrying this value. While the call that started
-    /// it waits, it bounds the TCP connect only, as above. Without it, the
-    /// client's [`timeout`](Self::timeout) bounds the connect in the same
-    /// way, and with [`no_timeout`](Self::no_timeout) nothing does, so the
-    /// connect is given up with the call that started it: set a connect
-    /// timeout to let the connect outlive that call.
+    /// it waits, it bounds the TCP connect only, as above, and a TCP connect
+    /// that runs past it fails the calls waiting for it with that same
+    /// `ErrorKind::Timeout`. Without it, the client's
+    /// [`timeout`](Self::timeout) bounds the connect in the same way, and
+    /// with [`no_timeout`](Self::no_timeout) nothing does, so the connect is
+    /// given up with the call that started it: set a connect timeout to let
+    /// the connect outlive that call.
     ///
     /// Set above the deadline of an attempt, it lets the retries of the calls
     /// that gave up at an endpoint slower than that deadline be served on the

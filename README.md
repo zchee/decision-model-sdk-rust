@@ -412,9 +412,11 @@ pings every 30 s.
   it fails at once, without a connect of its own. Its error is an `ErrorKind::Connection` whose
   message quotes the failure (`Connection error: the connect this request waited for failed:`,
   then the failure's own messages). A downcast of its sources finds no hyper-util error: that
-  error cannot be copied, so only the request that started the connect carries it. The kinds can
-  differ: a request that started a connect whose TCP connect ran past the `connect_timeout`
-  reports `ErrorKind::Timeout`, and the requests that waited report `Connection`.
+  error cannot be copied, so only the request that started the connect carries it. A TCP connect
+  that runs past the `connect_timeout` ends as a timeout instead: the request that started it and
+  every request waiting for it report `ErrorKind::Timeout` carrying the connect timeout, as the
+  requests waiting for a TLS or HTTP/2 handshake that runs past it do once the request that
+  started it has given up (below).
 - The connect outlives the request that started it. When that request gives up before a
   connection exists - its deadline passes, or its caller drops it - the connect goes on for the
   requests waiting for it, and a request that comes after, a retry of one that gave up included,
@@ -437,7 +439,9 @@ pings every 30 s.
   was given up`): a connect that nothing bounds, at an endpoint that never answers, would hold
   every later request. Set a `connect_timeout` to let the connect outlive that request on such a
   client. A waiting request never takes the connect over: it would start a connect at an endpoint
-  that has not answered one, once per waiting call.
+  that has not answered one, once per waiting call. Dropping every clone of the `Client` does not
+  cancel a connect in flight either: it completes or reaches its bound, and the connection is then
+  closed.
 - What that buys, measured (ledger S2d): at an endpoint whose TLS and HTTP/2 handshake end 1.5 s
   after it accepted the connection, 64 calls with a 1 s deadline and the default retry policy all
   succeed on one connection with `connect_timeout(2 s)`, the first after about 1.5 s: the retries

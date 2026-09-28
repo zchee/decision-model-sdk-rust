@@ -76,9 +76,10 @@ pub enum HttpVersion {
     /// transport's own, spawned on the runtime of the call that starts it and
     /// making progress only while that runtime is driven, and its request is
     /// one hyper refuses before it sends a byte of it, so the server sees the
-    /// connection and the callers' requests only. When a connection ends while requests are in flight,
-    /// hyper-util replaces it on its own, and a burst at that moment can
-    /// still open a second connection, which is closed at once.
+    /// connection and the callers' requests only. When a connection ends
+    /// while requests are in flight, hyper-util replaces it on its own, and a
+    /// burst at that moment can still open a second connection, which is
+    /// closed at once.
     ///
     /// When that one connect fails - TCP, TLS or the HTTP/2 handshake - every
     /// request that waited for it fails at once, without a connect of its
@@ -86,10 +87,12 @@ pub enum HttpVersion {
     /// error whose message quotes the failure. A downcast of its
     /// [`source`](std::error::Error::source) chain finds no hyper-util error:
     /// that error cannot be copied, so only the request that started the
-    /// connect carries it. A request that started a connect whose TCP connect
-    /// ran past the connect timeout reports
-    /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout), while the requests
-    /// that waited report `Connection`.
+    /// connect carries it. A TCP connect that runs past the connect timeout
+    /// ends as a timeout instead: the request that started it and every
+    /// request waiting for it report
+    /// [`ErrorKind::Timeout`](crate::ErrorKind::Timeout) carrying the connect
+    /// timeout, as the requests waiting for a TLS or HTTP/2 handshake that
+    /// runs past it do once the request that started it has given up.
     ///
     /// The connect outlives the request that started it. When that request
     /// gives up before a connection exists - its deadline passes, or its
@@ -120,7 +123,9 @@ pub enum HttpVersion {
     /// bounds, at an endpoint that never answers, would hold every later
     /// request. A waiting request never takes the connect over: it would
     /// start a connect at an endpoint that has not answered one, once per
-    /// waiting call.
+    /// waiting call. Dropping every clone of the client does not cancel a
+    /// connect in flight either: it completes or reaches its bound, and the
+    /// connection is then closed.
     Http2Only,
     /// HTTP/2 or HTTP/1.1 as the server chooses through ALPN on `https`, and
     /// HTTP/1.1 on `http`.
