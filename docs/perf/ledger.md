@@ -914,6 +914,75 @@ A cold call's latency: 100 single calls per run, each on a new client, the serve
 Within the run-to-run spread: the task hop costs no round trip, because the waiting requests go on when hyper-util
 reports the connection, before any response.
 
+## S2e - the Python SDK in the same scenarios
+
+**Why it was measured.** The README's deviations table says how the two SDKs differ in choosing a protocol and in
+opening a connection; this is the record behind those rows. The Python SDK measured is `typesafe-sdk` 0.7.2 installed
+with its `http2` extra (httpx2 2.13.1, httpcore2 2.13.1, h2 4.4.1, Python 3.14). 0.7.2 differs from the ported 0.7.1 in
+its packaging only - the extra, and the documents that name it - and `src/` and `tests/` are identical in both.
+
+**How it was measured.** On 2026-09-29, 01:47-02:22 JST, on the macOS arm64 host (M3 Max), 3 runs of each row, the
+server in the client's process and event loop. The server offers `h2` and `http/1.1` through ALPN and speaks the one
+selected; for the slow endpoint it accepts TCP at once and starts the TLS handshake 1.5 s later. "Default" is a client
+built as the SDK builds its own when it is given none (`httpx2.AsyncClient` without `http2`, so ALPN is offered
+`http/1.1` alone), passed as `http_client` so that it trusts the test server; "HTTP/2" is
+`http_client=httpx2.AsyncClient(http2=True)`, as the SDK's usage guide gives it. For the slow endpoint both had
+`timeout=1.0`, which httpx2 applies to each phase and httpcore2 to the TCP connect and to the TLS handshake each; this
+endpoint accepts TCP at once, so the TLS handshake has 1 s. "Connect timeout 2 s" is `httpx2.Timeout(1.0, connect=2.0)`.
+The Python SDK's calls are `models.list()`. The rows of this crate are S2c's and S2d's, on the same host, except the
+slow endpoint with no retry, which S2d gives as one range over macOS and Linux; S2d's calls are `POST /v1/systemone`.
+A cell is the calls that succeeded, the connections the server accepted, and the first success (or the last call's
+end) in ms from the burst's start. Ledger section written 2026-09-29.
+
+A healthy endpoint, 64 calls at once.
+
+| client | protocol | cold client | after one call |
+| --- | --- | --- | --- |
+| Python, default | `http/1.1` | 64/64, 64 connections | 64/64, 64 connections, the first call's reused |
+| Python, HTTP/2 | `h2` | 64/64, 1 connection | 64/64, 1 connection |
+| this crate, `Http2Only` (S2c) | `h2` | 64/64, 1 connection | 64/64, 1 connection |
+
+The slow endpoint, 64 calls at once, a 1 s timeout.
+
+| client | retries | result | with a connect timeout of 2 s |
+| --- | ---: | --- | --- |
+| Python, default | 0 | 0/64, 64, ends 1,028-1,046 | 64/64, 64, first ok 1,564-1,593 |
+| Python, default | 2 | 0/64, 192, ends 4,517-4,536 | 64/64, 64, first ok 1,556-1,602 |
+| Python, HTTP/2 | 0 | 0/64, 64, ends 64,148-64,329 | 64/64, 1, first ok 1,523-1,537 |
+| Python, HTTP/2 | 2 | 0/64, 118-119, ends 64,216-64,314 | 64/64, 1, first ok 1,523-1,535 |
+| this crate | 0 | 0/64, 1, ends 1,001-1,009 | 0/64, 1, ends 1,001-1,006 |
+| this crate | 2 | 0/64, 3, ends 4,136-4,143 | 64/64, 1, first ok 1,504-1,514 |
+
+With a connect timeout longer than the handshake both SDKs serve the burst, the Python SDK without a retry: it has no
+deadline of an attempt, so nothing ends a call at 1 s while its connect goes on. This crate's deadline of an attempt
+does, and its calls are served by their retries, on the connect their first attempts started.
+
+With the calls 1 ms apart, a 1 s connect timeout and 2 retries: Python, default 0/64, 192, ends 4,477-4,540; Python,
+HTTP/2 0/64, 119-120, ends 64,282-64,304. Over HTTP/2 httpcore2 gives the burst one connection, whose connect the
+first request makes while the others wait for it; when that connect times out, the next request makes a connect of
+its own, and so on, one after another. The connect timeout is counted for each connect, and no timeout covers the wait
+for the requests ahead, so the last of 64 calls with a 1 s timeout ends 64 s after it started. It is the cost this
+crate's gate was refused for in its first form (S2c: a waiting request never takes the connect over).
+
+Callers that give up early: the slow endpoint, 300 calls 10 ms apart, a 10 s timeout, each cancelled by its caller
+after 1 s: the Python SDK with no retry (`asyncio.wait_for`), this crate with its default 2 retries (S2d,
+`tokio::time::timeout`).
+
+| client | result |
+| --- | --- |
+| Python, default | 0/300, 300, ends 3,992-3,993 |
+| Python, HTTP/2 | 0-1/300, 226-299, ends 3,992-3,993 |
+| this crate, before S2d's change | 0/300, 3, ends 3,024-3,028 |
+| this crate | 248-249/300, 1, first ok 1,507-1,517 |
+
+In both Python clients a cancelled call stops its connect: no TLS handshake completed in 5 of the 6 runs. The one in
+the sixth was made by a call whose cancellation did not take effect: repeated with each call's start and end recorded
+(the verification of 2026-09-29), 1 of 15 runs over HTTP/2 had one call that ran 2,507 ms against its caller's 1 s
+limit and succeeded, while every call of the other 14, and of 15 runs with the default client, ended within 1,122 ms.
+
+What it does not cover: Linux, a network that is not loopback, the synchronous client, and an endpoint of which only
+some backends are slow, where the default client's connections, one per request, do not share one fate.
+
 ## S4 - the server's HTTP/2 SETTINGS
 
 ```sh
