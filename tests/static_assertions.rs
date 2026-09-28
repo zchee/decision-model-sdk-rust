@@ -191,23 +191,26 @@ fn the_future_of_every_call_is_send() {
 /// Over a custom transport the bound IS that threshold, on every platform: a
 /// call spawned in a debug build is not boxed, and a change that makes it
 /// boxed fails here rather than passing under a looser number. Over the
-/// default transport the futures are over the threshold anyway (hyper's
-/// response future is the larger one), so what is guarded there is growth:
-/// the bounds are the sizes measured on macOS arm64 and Linux x86_64 -
-/// identical on both, in both profiles, 24 bytes less each without the
-/// default features - plus 32 bytes. The transport's wait for the first
-/// connection of a client took 16 of those bytes: a reference count held by
-/// the transport and one held by its connector, both inside the transport
-/// the call clones. Targets other than macOS and Linux (Windows among them)
-/// have not been measured, so their bounds are looser. Raising a bound is a
-/// decision to state, not a number to bump.
+/// default transport what is guarded is growth: the bounds are the sizes
+/// measured on macOS arm64 and Linux x86_64 when they were set - identical
+/// on both, in both profiles, 24 bytes less each without the default
+/// features - plus 32 bytes. The transport's wait for the first connection
+/// of a client took 16 of those bytes, a reference count held by the
+/// transport and one held by its connector, both inside the transport the
+/// call clones; moving the transport's settings behind the reference count
+/// it holds gave 32 back. The System One futures stay over the threshold
+/// (hyper's response future is the larger one). The models listing's is now
+/// under it while its bound is not, so this test does not see it grow back
+/// into a boxed future. Targets other than macOS and Linux (Windows among
+/// them) have not been measured, so their bounds are looser. Raising a bound
+/// is a decision to state, not a number to bump.
 #[test]
 fn the_future_of_every_call_stays_small() {
     // Tokio 1.53.1 `runtime/mod.rs`: the debug build's `BOX_FUTURE_THRESHOLD`.
     const TOKIO_DEBUG_BOX: usize = 2048;
-    // Measured over the default transport: 2360, 2344 and 2048 bytes (2344,
-    // 2328 and 2032 before the wait for the first connection), `ask` the same
-    // as `typed`; over a custom transport 2040, 2024 and 1728.
+    // Measured over the default transport: 2328, 2312 and 2016 bytes (2360,
+    // 2344 and 2048 while the transport kept its settings inline), `ask` the
+    // same as `typed`; over a custom transport 2040, 2024 and 1728.
     #[cfg(all(feature = "hyper", any(target_os = "macos", target_os = "linux")))]
     const DEFAULT_TRANSPORT: [usize; 4] = [2376, 2360, 2360, 2064];
     #[cfg(all(feature = "hyper", not(any(target_os = "macos", target_os = "linux"))))]

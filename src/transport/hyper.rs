@@ -125,6 +125,16 @@ pub(crate) struct TransportSettings {
 pub struct HyperTransport {
     client: legacy::Client<Counting<HttpsConnector<HttpConnector>>, Body>,
     /// Shared by every clone, as the pool is.
+    shared: Arc<Shared>,
+}
+
+/// The gate and the settings the transport was built with.
+///
+/// The settings sit behind the one pointer the transport keeps for the gate
+/// anyway, because every call's future holds a clone of the transport: a
+/// pointer there is smaller than the settings themselves.
+#[derive(Debug)]
+struct Shared {
     gate: Arc<Gate>,
     version: HttpVersion,
     extra_roots: usize,
@@ -173,13 +183,15 @@ impl HyperTransport {
             .http2_keep_alive_while_idle(true)
             .http2_only(version == HttpVersion::Http2Only);
 
-        let gate = Arc::new(Gate::default());
-        Ok(Self {
-            client: builder.build(Counting::new(connector, Arc::clone(&gate))),
-            gate,
+        let shared = Arc::new(Shared {
+            gate: Arc::new(Gate::default()),
             version,
             extra_roots: root_count,
             connect_timeout,
+        });
+        Ok(Self {
+            client: builder.build(Counting::new(connector, Arc::clone(&shared.gate))),
+            shared,
         })
     }
 
@@ -187,13 +199,13 @@ impl HyperTransport {
     /// dropped yet.
     #[cfg(feature = "internals")]
     pub(crate) fn open_streams(&self) -> usize {
-        self.gate.open_streams()
+        self.shared.gate.open_streams()
     }
 
     /// Whether a request sent now goes straight to the pool.
     #[cfg(feature = "internals")]
     pub(crate) fn pool_is_warm(&self) -> bool {
-        self.gate.is_warm()
+        self.shared.gate.is_warm()
     }
 }
 
@@ -202,9 +214,9 @@ impl fmt::Debug for HyperTransport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("HyperTransport")
-            .field("http_version", &self.version)
-            .field("extra_roots", &self.extra_roots)
-            .field("connect_timeout", &self.connect_timeout)
+            .field("http_version", &self.shared.version)
+            .field("extra_roots", &self.shared.extra_roots)
+            .field("connect_timeout", &self.shared.connect_timeout)
             .finish()
     }
 }
@@ -221,16 +233,22 @@ impl Service<Request<Body>> for HyperTransport {
 
     fn call(&mut self, request: Request<Body>) -> HyperResponseFuture {
         // Under `Http2Only`, two atomic loads decide whether the pool holds a
-        // connection; only a request sent while it does not goes through the
-        // gate, which costs one boxed future and a clone of the client.
-        // `Auto` never waits: it needs a connection per concurrent HTTP/1.1
-        // request.
-        let inner = if self.version == HttpVersion::Http2Only && !self.gate.is_warm() {
-            Sent::Gated(Box::pin(gate::send(Arc::clone(&self.gate), self.client.clone(), request)))
+        // connection, and a request sent while it does is handed to
+        // hyper-util with no reference count taken here; only a request sent
+        // while it does not goes through the gate, which costs one boxed
+        // future and a clone of the client. `Auto` never waits: it needs a
+        // connection per concurrent HTTP/1.1 request.
+        let shared = &*self.shared;
+        let inner = if shared.version == HttpVersion::Http2Only && !shared.gate.is_warm() {
+            Sent::Gated(Box::pin(gate::send(
+                Arc::clone(&shared.gate),
+                self.client.clone(),
+                request,
+            )))
         } else {
             Sent::Direct(self.client.request(request))
         };
-        HyperResponseFuture { inner, connect_timeout: self.connect_timeout }
+        HyperResponseFuture { inner, connect_timeout: shared.connect_timeout }
     }
 }
 
