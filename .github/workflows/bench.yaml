@@ -5,7 +5,8 @@ name: Benchmarks
 # its regression reports, and runs on pull requests are what it reports on.
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
   # CodSpeed starts manual runs itself to measure older commits.
   workflow_dispatch:

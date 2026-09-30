@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
 
 # A superseded run tells nobody anything, so the newest push on a branch
@@ -37,7 +38,9 @@ jobs:
         # `windows-2025` is left out while its run takes about twice as long as
         # the other two (12 to 15 minutes against 7 to 9) and holds every push
         # that long; it goes back in once its run is as quick as theirs.
-        os: [ubuntu-26.04, xcode-27]
+        os:
+          - ubuntu-26.04
+          - xcode-27
     steps:
       # No later step fetches or pushes through git with the job's token, so
       # it is not left in `.git/config`, where every build script and proc
