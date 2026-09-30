@@ -84,10 +84,11 @@ jobs:
       # sonic-simd and sonic-number compile their x86_64 code there, but
       # sonic-rs's own parser code (the in-string mask and the whitespace
       # skip) needs PCLMULQDQ beside AVX2 and stays portable, since the level
-      # does not include it. `x86-64-v3+pclmulqdq` adds it, which is what
-      # `-C target-cpu=native` gives on a CPU that has both. AVX-512 is no
-      # choice: sonic-rs compiles it only under its `avx512` feature, which
-      # the SDK does not turn on.
+      # does not include it. `x86-64-v3+pclmulqdq` adds it, and so compiles
+      # the sonic modules that `-C target-cpu=native` compiles on a CPU that
+      # has both (a native build turns on more than that, such as `aes`).
+      # AVX-512 is no choice: sonic-rs compiles it only under its `avx512`
+      # feature, which the SDK does not turn on.
       - name: Check the inputs
         run: |
           case "${FUZZ_TARGET}" in
@@ -307,8 +308,13 @@ jobs:
       # The committed seeds are only read: libFuzzer writes what it finds to
       # the first corpus directory alone, a scratch one outside the checkout.
       # One job per core; each writes fuzz-<n>.log into the working directory,
-      # and libFuzzer copies it into this step's output when the job ends. The
-      # same features, target directory and flags as the build above, so
+      # and libFuzzer copies it into its own output when the job ends. That
+      # output repeats every job log, over 98 % of a 900 s run's log, so it
+      # goes to console.log beside them (uploaded with them), and this step
+      # prints each job's exit line and, when the fuzzer fails, cargo-fuzz's
+      # "Failing input" blocks, or the last 200 lines when there are none (a
+      # job killed for memory, a cargo error), so a failure is never silent.
+      # The same features, target directory and flags as the build above, so
       # nothing is compiled again.
       - name: Fuzz
         id: fuzz
@@ -320,13 +326,25 @@ jobs:
           corpus="${RUNNER_TEMP}/corpus/${FUZZ_TARGET}"
           mkdir -p "${corpus}"
           cd "${RUNNER_TEMP}/fuzz-logs"
+          console="${RUNNER_TEMP}/fuzz-logs/console.log"
           jobs="$(nproc)"
+          echo "${jobs} jobs for ${FUZZ_TIME} s each; the fuzzer's output goes to console.log"
           status=0
           cargo +nightly fuzz run --fuzz-dir "${GITHUB_WORKSPACE}/fuzz" "${features[@]}" "${FUZZ_TARGET}" \
             "${corpus}" "${GITHUB_WORKSPACE}/fuzz/corpus/${FUZZ_TARGET}" -- \
-            -max_total_time="${FUZZ_TIME}" -timeout=10 -rss_limit_mb=2048 -jobs="${jobs}" -workers="${jobs}" ||
-            status=$?
+            -max_total_time="${FUZZ_TIME}" -timeout=10 -rss_limit_mb=2048 -jobs="${jobs}" -workers="${jobs}" \
+            > "${console}" 2>&1 || status=$?
           echo "${status}" > "${RUNNER_TEMP}/fuzz-exit"
+          grep -E 'Job [0-9]+ exited with exit code' "${console}" || true
+          if [ "${status}" != 0 ]; then
+            first="$(awk '/^Failing input:/ { print NR; exit }' "${console}")"
+            if [ -n "${first}" ]; then
+              tail -n "+${first}" "${console}"
+            else
+              echo "console.log has no \"Failing input\" block; its last 200 lines:"
+              tail -n 200 "${console}"
+            fi
+          fi
           exit "${status}"
 
       # A statistics line is `#<executions>`, a kind (`NEW`, `REDUCE`, `DONE`,

@@ -95,18 +95,19 @@ sonic-rs's own parser code (the mask of what is inside a string, and the skip
 over whitespace) is compiled for x86_64 only when `pclmulqdq` is on beside
 `avx2` and `sse2`, and the x86-64-v3 level does not include PCLMULQDQ. So
 `x86-64-v3` fuzzes the build the SDK's README names to its users, and
-`x86-64-v3+pclmulqdq` the one `-C target-cpu=native` gives on a CPU that has
-both. AVX-512 is not reachable: sonic-rs compiles its AVX-512 code only under
-its own `avx512` feature, which the SDK does not turn on. With `backend` set to
+`x86-64-v3+pclmulqdq` the sonic modules that `-C target-cpu=native` compiles on
+a CPU that has both (a native build turns on more than that, such as `aes`).
+AVX-512 is not reachable: sonic-rs compiles its AVX-512 code only under its
+own `avx512` feature, which the SDK does not turn on. With `backend` set to
 `default`, no sonic-rs code is compiled and the run is the serde_json control.
 
 Before it fuzzes, a run refuses a CPU that lacks one of the target features
 the flags turn on (the binary would die with SIGILL, which reads like a
 finding), prints the `target_feature` lines rustc gives for the flags, checks
 that exactly those flags reach the rustc command lines of the SDK and of the
-sonic crates, and puts the table above, for the choice made, into the run's
-summary. It builds against `Cargo.lock`: `cargo fetch --locked` first, then
-with no network.
+sonic crates, and puts a table of the modules each sonic crate compiles into
+the run's summary. It builds against `Cargo.lock`: `cargo fetch --locked`
+first, then with no network.
 
 The workflow never runs on its own: no push, pull request or schedule starts
 it. Start it from the Actions tab or with the GitHub CLI:
@@ -119,7 +120,8 @@ gh workflow run fuzz.yaml -f target=decode_response -f backend=sonic -f cpu=x86-
 `sonic` (the default) or `default`, and `seconds` is the fuzzing time, a whole
 number from 60 to 3300 (900 by default); the run starts one job per core of
 the runner, each for that long. The run's summary names the CPU model and the
-nightly, and gives each job's last statistics line and the totals.
+nightly, and gives each job's last statistics line, the executions of all jobs
+together, and the highest `cov` and `ft` of any job.
 
 A run fails when the fuzzer exits with anything but 0, leaves a reproducer, or
 ran on a build that changed `Cargo.lock`. The fuzzer's logs are uploaded as
