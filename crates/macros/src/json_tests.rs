@@ -2,8 +2,9 @@
 //! question sets against the bytes the runtime builder writes.
 //!
 //! The expected question-set strings are the runtime builder's output for the
-//! same questions, copied from `src/question_tests.rs` where a test there
-//! pins them; the main crate's `tests/derive.rs` compares the two directly.
+//! same questions, copied from `crates/sdk/src/question_tests.rs` where a test
+//! there pins them; the main crate's `crates/sdk/tests/derive.rs` compares the
+//! two directly.
 
 use proc_macro2::Span;
 use proptest::prelude::*;

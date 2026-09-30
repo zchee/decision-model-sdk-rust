@@ -1,0 +1,179 @@
+[package]
+name = "typesafe-sdk-rust"
+version = "0.2.0"
+categories = ["api-bindings", "asynchronous"]
+edition.workspace = true
+# A release ships the library, its examples, the README the crate docs embed
+# and the licenses; nothing else of the repository. The tests and benches stay
+# here: they build against the test-support crate, which is never published.
+include = ["/src", "/examples", "/README.md", "/LICENSE", "/LICENSE-THIRD-PARTY"]
+keywords = ["typesafe", "ai", "llm", "sdk", "async"]
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Async Rust SDK for the TypeSafe AI System One API"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+# The package is `typesafe-sdk-rust` because `typesafe-sdk` is taken on
+# crates.io, but callers write `use typesafe_sdk::...`.
+[lib]
+name = "typesafe_sdk"
+
+[features]
+default = ["hyper", "macros", "tracing"]
+# The built-in transport and its TLS stack. `tokio/sync` is the transport's
+# wait for the first connection of a client; hyper-util compiles it anyway.
+hyper = ["dep:hyper", "dep:hyper-rustls", "dep:hyper-util", "dep:rustls", "dep:rustls-platform-verifier", "tokio/sync"]
+# Exposes `typesafe_sdk::__internals`, the seam the allocation tests and the
+# benchmarks measure through. It carries no semver promise and is never on by
+# default.
+internals = []
+# `#[derive(QuestionSet)]`: questions declared as a struct and serialized at
+# compile time.
+macros = ["dep:typesafe-sdk-rust-macros"]
+# A SIMD parser that carries `unsafe`; off by default.
+sonic = ["dep:sonic-rs"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+bytes = { workspace = true }
+# The names a response owns (model, answer, choice pick and option names): a
+# name of up to 24 bytes is stored inline, so decoding one allocates nothing.
+compact_str = { workspace = true }
+# The random draw of the retry backoff's jitter.
+fastrand = { workspace = true }
+http = { workspace = true }
+# The request body type implements this crate's version of `http_body::Body`,
+# the one bound a custom transport shares with the SDK.
+http-body = { workspace = true }
+# `Limited` collects a response body under the size cap.
+http-body-util = { workspace = true }
+# Used only to read `Retry-After` when a server answers it with an HTTP date
+# rather than a count of seconds.
+httpdate = { workspace = true }
+# The default transport: hyper-util's pooled client over hyper-rustls, with the
+# trust anchors from the operating system through rustls-platform-verifier.
+hyper = { workspace = true, optional = true }
+hyper-rustls = { workspace = true, optional = true }
+hyper-util = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+# Held for the client's API key: it is kept as a secret until the one place
+# that turns it into an `Authorization` header value, so no formatting of a
+# client or its configuration can print it.
+secrecy = { workspace = true }
+serde = { workspace = true }
+# The default JSON backend; its raw-value protocol preserves wire text.
+serde_json = { workspace = true }
+# A normal dependency rather than a dev one: the decode failure path uses it to
+# turn a position into a field path, and that path is part of the errors the
+# SDK reports at runtime.
+serde_path_to_error = { workspace = true }
+sonic-rs = { workspace = true, optional = true }
+thiserror = { workspace = true }
+# The per-attempt deadline, and the runtime the default transport runs on.
+tokio = { workspace = true }
+# The seam a custom transport is plugged into: `tower::Service` without the
+# rest of `tower`.
+tower-service = { workspace = true }
+tracing = { workspace = true, optional = true }
+# An exact version: the derive's expansion names this crate's hidden
+# `__private` module, which carries no semver promise, so the two are only
+# ever used at the versions they were released together.
+typesafe-sdk-rust-macros = { version = "=0.1.0", path = "../macros", optional = true }
+
+[dev-dependencies]
+# divan with CodSpeed's instrumentation: it runs as plain divan under
+# `cargo bench` and reports instruction counts under `cargo codspeed run`.
+# The benches import it under the name `divan`.
+codspeed-divan-compat = { workspace = true }
+dhat = { workspace = true }
+proptest = { workspace = true }
+# The reference engine when serde_json is the SDK's backend.
+sonic-rs = { workspace = true }
+# `net` and `io-util` for the raw sockets the failure tests answer with.
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util"] }
+# Compiles the derive's misuse cases and compares rustc's messages.
+trybuild = { workspace = true }
+# Path only, no version: cargo strips a path dev-dependency when it publishes,
+# and this crate is never published.
+typesafe-sdk-rust-test-support = { path = "../test-support" }
+
+# dhat allows one profiler per process, so an allocation scenario gets a test
+# binary of its own rather than a test function in a shared one.
+[[test]]
+name = "alloc_encode"
+required-features = ["internals"]
+
+[[test]]
+name = "alloc_call"
+required-features = ["internals"]
+
+[[test]]
+name = "alloc_decode"
+required-features = ["internals"]
+
+[[test]]
+name = "differential"
+required-features = ["internals"]
+
+[[test]]
+name = "client"
+required-features = ["hyper"]
+
+[[test]]
+name = "retry"
+required-features = ["hyper"]
+
+[[test]]
+name = "models"
+required-features = ["hyper"]
+
+[[test]]
+name = "connection_reuse"
+required-features = ["hyper"]
+
+[[test]]
+name = "malformed_body"
+required-features = ["hyper"]
+
+[[test]]
+name = "derive"
+required-features = ["macros", "hyper"]
+
+[[test]]
+name = "alloc_derive"
+required-features = ["internals", "macros"]
+
+# The examples use the built-in transport; typed_answers also needs the derive.
+[[example]]
+name = "typed_answers"
+required-features = ["macros", "hyper"]
+
+[[example]]
+name = "quickstart"
+required-features = ["hyper"]
+
+[[example]]
+name = "concurrency"
+required-features = ["hyper"]
+
+# divan supplies its own `main`, so the benches opt out of libtest's harness.
+# `sdk` is the CPU-only set that CodSpeed measures; `loopback` is a real
+# socket and stays out of that run (see the file).
+[[bench]]
+harness = false
+name = "sdk"
+required-features = ["internals", "macros"]
+
+[[bench]]
+harness = false
+name = "loopback"
+required-features = ["hyper"]
+
+[lints]
+workspace = true

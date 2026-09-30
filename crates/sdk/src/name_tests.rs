@@ -114,9 +114,11 @@ fn flagged_lines(path: &Path, offends: &dyn Fn(&str) -> bool) -> Vec<String> {
 /// replacing the crate stays a change to that file alone. Three rules keep it
 /// so, and each one closes a route the others leave open:
 ///
-/// 1. No Rust file of the package other than `src/name.rs` names the crate:
-///    library, tests, benches and the workspace's other crates, because an
-///    integration test or a bench can name a dependency of the library too.
+/// 1. No Rust file of any workspace member other than `src/name.rs` names the
+///    crate: everything under the repository's `crates/`, which holds this
+///    package's library, tests, benches and examples and the workspace's
+///    other crates, because an integration test or a bench can name a
+///    dependency of the library too.
 /// 2. Inside `src/name.rs` the crate's type is only the private field of
 ///    `Name`. Outside comments, the only lines that may name the crate or its
 ///    type are the private import, the struct declaration and the two
@@ -124,27 +126,42 @@ fn flagged_lines(path: &Path, offends: &dyn Fn(&str) -> bool) -> Vec<String> {
 ///    as`, `pub use` or `pub(crate) use` of anything in the crate, a type
 ///    alias, or a signature that hands the type out would let another module
 ///    use the crate without naming it.
-/// 3. No `Cargo.toml` under the repository renames the package
+/// 3. No `Cargo.toml` of the repository (the workspace root's, every
+///    member's, the fuzz crate's) renames the package
 ///    (`other = { package = "..." }`): a renamed dependency is used under a
 ///    name the first rule does not look for.
+///
+/// Both scans are anchored at the repository root, two levels above this
+/// package, and assert that they saw named files of every member and every
+/// manifest: a layout change that moves one out of reach fails the test
+/// instead of narrowing it.
 #[test]
 fn only_this_module_names_the_small_string_crate() {
     // Spelled in pieces so this file does not name the crate or its type.
     let needle = concat!("compact", "_str");
     let type_name = concat!("Compact", "String");
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let allowed = root.join("src").join("name.rs");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // `ancestors()` yields the path itself first, so `nth(2)` is the grandparent.
+    let repository = package.ancestors().nth(2).expect("the package is two levels deep");
+    let crates = repository.join("crates");
+    let allowed = package.join("src").join("name.rs");
 
     let is_rust = |path: &Path| path.extension().is_some_and(|extension| extension == "rs");
     let mut files = Vec::new();
-    for dir in ["src", "tests", "benches", "crates"] {
-        let dir = root.join(dir);
-        if dir.is_dir() {
-            files_under(&dir, &is_rust, &mut files);
-        }
+    files_under(&crates, &is_rust, &mut files);
+    let expected_files = [
+        allowed.clone(),
+        package.join("tests").join("client.rs"),
+        package.join("benches").join("sdk").join("main.rs"),
+        package.join("examples").join("quickstart.rs"),
+        crates.join("macros").join("src").join("lib.rs"),
+        crates.join("test-support").join("src").join("lib.rs"),
+        crates.join("live-tests").join("src").join("lib.rs"),
+        crates.join("live-tests").join("tests").join("live.rs"),
+    ];
+    for expected in &expected_files {
+        assert!(files.contains(expected), "the scan did not see {}", expected.display());
     }
-    assert!(files.contains(&allowed), "the scan did not see {}", allowed.display());
-    assert!(files.len() > 20, "the scan found only {} files: {files:?}", files.len());
 
     // Rule 1.
     let names_the_crate = |line: &str| line.contains(needle);
@@ -185,12 +202,22 @@ fn only_this_module_names_the_small_string_crate() {
     // key is caught.
     let is_manifest = |path: &Path| path.file_name().is_some_and(|name| name == "Cargo.toml");
     let mut manifests = Vec::new();
-    files_under(root, &is_manifest, &mut manifests);
-    assert!(
-        manifests.contains(&root.join("Cargo.toml"))
-            && manifests.contains(&root.join("crates").join("macros").join("Cargo.toml")),
-        "the scan did not see the workspace's manifests: {manifests:?}"
-    );
+    files_under(repository, &is_manifest, &mut manifests);
+    let expected_manifests = [
+        repository.join("Cargo.toml"),
+        package.join("Cargo.toml"),
+        crates.join("macros").join("Cargo.toml"),
+        crates.join("test-support").join("Cargo.toml"),
+        crates.join("live-tests").join("Cargo.toml"),
+        repository.join("fuzz").join("Cargo.toml"),
+    ];
+    for expected in &expected_manifests {
+        assert!(
+            manifests.contains(expected),
+            "the scan did not see {}: {manifests:?}",
+            expected.display()
+        );
+    }
     let renamed_to = format!("package=\"{needle}\"");
     let renames_it = |line: &str| {
         let squeezed: String = line

@@ -10,8 +10,13 @@ export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR/llvm-cov"
 env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov clean --workspace
 env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p typesafe-sdk-rust --all-features --no-report
 env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p typesafe-sdk-rust --features internals --no-report
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report --fail-under-lines 85 --show-missing-lines
+env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report -p typesafe-sdk-rust --fail-under-lines 85 --show-missing-lines
 ```
+
+The files are named by their present paths (at `873f431` they are `src/...` at
+the repository root), and the `report` command is shown with
+`-p typesafe-sdk-rust`, which the virtual root manifest needs and the run at
+`873f431` did not pass.
 
 `--all-features` selects sonic-rs; `--features internals` selects the default
 serde_json backend and keeps the allocation-test seam. Each instrumented run
@@ -31,26 +36,26 @@ The published crate `typesafe-sdk-rust` is held to 85% line coverage by CI's
 A line counts as covered here when any test executes it in any instantiation.
 The summary reports 176 missed lines; `--show-missing-lines` lists 139 distinct
 source lines that no instantiation reaches. The two counts use different
-aggregation over instantiated code. `src/codec/backend.rs` is fully covered in
+aggregation over instantiated code. `crates/sdk/src/codec/backend.rs` is fully covered in
 the merged report (14 lines); neither backend is represented only by the other.
 
 ## Uncovered lines
 
 "Cheap to cover" marks a line a short test would reach.
 
-### `src/__internals.rs`
+### `crates/sdk/src/__internals.rs`
 
 | Lines | Why |
 | --- | --- |
 | 50-52, 124-130, 135-141, 146-151, 161-163 | Thin wrappers used by benchmarks and fuzz targets (`check_depth`, `decode_list_models`, `api_error`, `parse_retry_after`, `backoff_seconds`). Those targets do not run under this coverage command; the underlying code is covered by unit tests. |
 
-### `src/client.rs`
+### `crates/sdk/src/client.rs`
 
 | Lines | Why |
 | --- | --- |
 | 107-109 | `Client::from_env`, the wrapper around `builder().build()`. Environment resolution is tested through the injected lookup; mutating the process environment is unsafe in edition 2024 and is forbidden in this crate. |
 
-### `src/codec.rs`
+### `crates/sdk/src/codec.rs`
 
 | Lines | Why |
 | --- | --- |
@@ -66,44 +71,44 @@ the merged report (14 lines); neither backend is represented only by the other.
 | 1123 | A second entry after the raw-value token. Real serde_json raw captures contain one entry; a foreign token-keyed map can reach this guard. **Cheap to cover**. |
 | 1252-1254, 1256-1258, 1264-1266, 1282-1285, 1287-1289, 1291-1292, 1294-1296, 1298-1299 | `Render` compatibility arms for negative integers, `i128`/`u128`, `Option` and newtypes. **Cheap to cover** for a negative integer; the other shapes need foreign adapters because JSON `deserialize_any` does not yield them. |
 
-### `src/config.rs`
+### `crates/sdk/src/config.rs`
 
 | Lines | Why |
 | --- | --- |
 | 252 | The resolved configuration's `Debug` field for `log_endpoint_host(false)`. The builder's field and the event output are tested, not this `Debug`. **Cheap to cover**. |
 
-### `src/de.rs`
+### `crates/sdk/src/de.rs`
 
 | Lines | Why |
 | --- | --- |
 | 893, 906 | Level-keyed probabilities on a choice, or option-keyed probabilities on a score. The answer type chooses the shape before reading it, or the members are held raw until it is known; these mixed states keep the match exhaustive. |
 
-### `src/models.rs`
+### `crates/sdk/src/models.rs`
 
 | Lines | Why |
 | --- | --- |
 | 56-58 | `Debug` for the `Models` resource handle. **Cheap to cover** with `format!("{:?}", client.models())`. |
 
-### `src/name.rs`
+### `crates/sdk/src/name.rs`
 
 | Lines | Why |
 | --- | --- |
 | 101-103 | An owned `String` supplied to `visit_string`. The JSON parsers supply borrowed text or `&str` on this path; a foreign adapter can supply an owned string. |
 
-### `src/retry.rs`
+### `crates/sdk/src/retry.rs`
 
 | Lines | Why |
 | --- | --- |
 | 339 | A response-validation error carrying a retry delay and selected by a caller's predicate. **Cheap to cover** with a predicate test. |
 
-### `src/telemetry.rs`
+### `crates/sdk/src/telemetry.rs`
 
 | Lines | Why |
 | --- | --- |
 | 278 | An event's elapsed time without a start instant (`-`). Every recorded timed event in the tests has a start. |
 | 340 | Bytes that are not UTF-8 in a logged body, rendered as U+FFFD. **Cheap to cover** with a trace-level event fixture. |
 
-### `src/transport/hyper.rs`
+### `crates/sdk/src/transport/hyper.rs`
 
 | Lines | Why |
 | --- | --- |

@@ -274,8 +274,8 @@ def test_renamed_rust_test_fails(run: Run, repository: Path) -> None:
     status, out = run(
         lambda text: replace_once(
             text,
-            "| `test_error_mapping` | 22 | `tests/client.rs::error_mapping` |",
-            "| `test_error_mapping` | 22 | `tests/client.rs::error_mappingz` |",
+            "| `test_error_mapping` | 22 | `crates/sdk/tests/client.rs::error_mapping` |",
+            "| `test_error_mapping` | 22 | `crates/sdk/tests/client.rs::error_mappingz` |",
         )
     )
 
@@ -284,7 +284,7 @@ def test_renamed_rust_test_fails(run: Run, repository: Path) -> None:
         [
             (
                 f"{MATRIX}:{line}: tests/test_clients.py::test_error_mapping: "
-                "tests/client.rs has no test function `error_mappingz`"
+                "crates/sdk/tests/client.rs has no test function `error_mappingz`"
             )
         ],
         summary(),
@@ -298,7 +298,7 @@ def test_emptied_target_fails(run: Run, repository: Path) -> None:
     status, out = run(
         lambda text: replace_once(
             text,
-            "| `test_error_mapping` | 22 | `tests/client.rs::error_mapping` |",
+            "| `test_error_mapping` | 22 | `crates/sdk/tests/client.rs::error_mapping` |",
             "| `test_error_mapping` | 22 |  |",
         )
     )

@@ -600,7 +600,7 @@ visible here: after one warm-up request, 64 concurrent calls open zero new conne
 
 ## S2c - the cold fan-out race
 
-`tests/connection_reuse.rs` `a_cold_fan_out_opens_one_connection` (64 calls started together on a client with no
+`crates/sdk/tests/connection_reuse.rs` `a_cold_fan_out_opens_one_connection` (64 calls started together on a client with no
 connection, HTTP/2 over TLS, `Http2Only`) failed CI twice on `ubuntu-26.04`, and never on macOS. The first table below
 is the run that found the cause, before the change; the second measures the change against the code before it. Both ran
 on 2026-09-28, the test's body in a loop, each iteration with a new server, a new client and a new 4-worker runtime.
@@ -662,13 +662,13 @@ fails on a connection passes the turn to one waiter instead, and a call's deadli
 sent while the pool holds a connection pays two atomic loads; one sent while it does not pays a boxed future and a
 clone of the client. `Auto` is unchanged. Every call future over the default transport grew by 16 bytes (the gate's
 reference count in the transport and in its connector): 2,344 / 2,328 / 2,328 / 2,032 became 2,360 / 2,344 / 2,344 /
-2,048, measured on macOS arm64 in both profiles, inside the bounds of `tests/static_assertions.rs`. The transport's
+2,048, measured on macOS arm64 in both profiles, inside the bounds of `crates/sdk/tests/static_assertions.rs`. The transport's
 three settings (the HTTP version, the count of added roots, the connect timeout) then moved behind the `Arc` it already
 held for the gate (`e08280c`), which took 32 bytes back: 2,328 / 2,312 / 2,312 / 2,016, measured on macOS arm64 and
 Linux arm64 in both profiles, with the bounds, the futures over a custom transport and every allocation count
 unchanged; the model listing's future is now under tokio's 2,048-byte debug box threshold, and its bound was then
 lowered to 2,048 - that threshold, and the measured size plus 32 as every bound - so that a model listing boxed in a
-debug build fails `tests/static_assertions.rs`. A request sent while the
+debug build fails `crates/sdk/tests/static_assertions.rs`. A request sent while the
 pool holds a connection pays one pointer dereference more for its settings and no atomic operation more than before:
 `call` does the two loads, takes no reference count and copies the connect timeout into the response future by value.
 hyper-util's `Client::request` still clones its client for every request, and with it the connector's `Arc<Gate>` (an
@@ -743,7 +743,7 @@ reports as a `SendRequest` error rather than a connect error, and that form of t
 passed the turn on. The gate now fails the waiting requests on any error that happened before there was a connection,
 which hyper-util states on the error itself (it attaches no connection to it); the table above is measured with it.
 
-A connection count had a second, rarer possible source: a stranger's request. Two tests of `tests/client.rs` sent calls
+A connection count had a second, rarer possible source: a stranger's request. Two tests of `crates/sdk/tests/client.rs` sent calls
 to a port they had bound and released, and Linux hands a released port to the next `bind(0)` about once in 7,058 binds,
 so a test server started inside their retry window could count that request as a connection (seen 62 times in 18,272
 servers in a direct test, each a TLS handshake failed by a plaintext `GET /v1/models`). They now send to `127.0.0.1:1`,
@@ -829,8 +829,8 @@ What the servers saw of the connect's request, in every run above, of every buil
 | --- | --- | ---: |
 | 284 per system, macOS and Linux | the callers' `POST /v1/systemone` only (or none) | 0 |
 
-`tests/connection_reuse.rs` `a_cold_burst_sends_the_server_nothing_but_its_calls` pins it in the test suite, and a unit
-test in `src/transport/gate_tests.rs` pins the probe itself: a `CONNECT`, the base URL's scheme and authority, an empty
+`crates/sdk/tests/connection_reuse.rs` `a_cold_burst_sends_the_server_nothing_but_its_calls` pins it in the test suite, and a unit
+test in `crates/sdk/src/transport/gate_tests.rs` pins the probe itself: a `CONNECT`, the base URL's scheme and authority, an empty
 body, and no header but `content-length: 1`.
 
 The price, at an endpoint whose first connection is held silent forever while every later one is served at once: 64
@@ -879,7 +879,7 @@ call, an endpoint that holds the first connection without a byte and serves ever
 follows. From the same verification: before the change the second call was served on a new connection in 10-47 ms;
 with a first form of the change it failed in 0-1 ms with the stale bound's error (with a connect timeout of 2 s, a
 `Timeout` carrying it), and with the rule above it is served on a new connection again, in a few to about twenty
-milliseconds (2-21 ms measured) in the test suite (`tests/connection_reuse.rs`
+milliseconds (2-21 ms measured) in the test suite (`crates/sdk/tests/connection_reuse.rs`
 `a_call_after_a_bound_that_passed_unpolled_opens_a_new_connect`).
 
 A connect that fails: TCP accepted, closed 200 ms later; 64 calls, none succeeds. The connections, and when the calls
@@ -1265,7 +1265,7 @@ join_handle })` and `timeout_queue.push_back(TimeoutEntry { id, desc, timeout })
 machine the main thread can be descheduled between the spawn and those allocations, and they land in the section the
 test is measuring. The SDK's allocations did not change; the budgets were sound.
 
-**Method now used** (`tests/support/mod.rs`, shared by the four `alloc_*` tests):
+**Method now used** (`crates/sdk/tests/support/mod.rs`, shared by the four `alloc_*` tests):
 - Each asserted section runs five times after its warm-up call, and the budget is held to the **minimum**.
 - At least **three of the five** runs must equal that minimum in blocks and bytes.
 - Every run is printed (`runs of <section> blocks/bytes: ...`).
@@ -1392,7 +1392,7 @@ alone also moves some counts by up to about 1% without any change to their code 
 moved +0.5% between `0303980` and `fd22977`, and nothing in its path changed.
 
 **What the benches measure and how they can mislead** is written at the top of each bench module
-(`benches/sdk/*.rs`, `benches/loopback.rs`). In short: B1 to B5 time steady state (warm scratch, warm header map);
+(`crates/sdk/benches/sdk/*.rs`, `crates/sdk/benches/loopback.rs`). In short: B1 to B5 time steady state (warm scratch, warm header map);
 B3 rebuilds crate-private steps from the same parts and checks its body byte for byte against one a real call sent;
 B5's transport answers at once, so it contains no network at all; B6 is loopback, an upper bound on one connection's
 throughput and never a prediction for a network.
@@ -1580,7 +1580,7 @@ The verifier (`p5-verify`, at `acd4df3`) found defects that were fixed forward; 
 score answer's first level list started at it, empty ones included, with no bound: a server answering many score
 answers turned it into memory. `AnswerContext::with_levels` now holds it to 8 (`MAX_LEVEL_HINT`: 5 to 8 levels is the
 case the candidate targets), and a list reserves it only at its first entry, so an empty `{}` allocates nothing.
-`tests/alloc_level_hint.rs` asks one score of 1,000 levels, answers 500 empty and 500 one-level scores (a 90,359 B
+`crates/sdk/tests/alloc_level_hint.rs` asks one score of 1,000 levels, answers 500 empty and 500 one-level scores (a 90,359 B
 body), and holds what the response keeps to at most 2x what the same body keeps with no hint, which is what
 `f99594e`, before the hint, keeps for both (170,902 B, measured there with the same test):
 
@@ -1629,7 +1629,7 @@ macOS and Linux (Windows among them) keep the old bounds: they have not been mea
 **CI (`5a51d1f`):** the feature-powerset step runs clippy with warnings denied instead of `cargo hack check`, so a
 lint in any of the ten combinations between none and all fails CI. **D8 (`0749117`):** the unused `divan` entry is
 gone from `[workspace.dependencies]`; `Cargo.lock` did not change. **D4, D7, N1** are wording fixes in
-`benches/sdk/decode.rs`, `__internals`, and `transport/mod.rs`.
+`crates/sdk/benches/sdk/decode.rs`, `__internals`, and `transport/mod.rs`.
 
 **R17: an 8 MiB ceiling on the retained encode scratch (`codec.rs`, `MAX_RETAINED_SCRATCH`).** Candidate 7 at
 1 MiB failed AC-P1's 1 MB rows. A thread kept six times the largest string state it ever encoded, without bound (a
@@ -1652,17 +1652,16 @@ The 1 KB, 64 KB and 1 MB rows moved by less than 1% on both machines. The unit t
 ### `compact_str` for names (`821d970`)
 
 Candidate 1, adopted after the owner approved the dependency (`compact_str` 0.10.0, `default-features = false`,
-`features = ["std"]`; its `serde` feature is not used). The model name, the answer names, a choice's pick and its
-option names are a crate-private `Name` (`src/name.rs`), which stores up to 24 bytes inline on a 64-bit target. The
-legend descriptions are `Content` and did not change. `src/name.rs` is the only file that names the crate: the unit
-test `only_this_module_names_the_small_string_crate` reads every `.rs` file under `src`, `tests`, `benches` and
-`crates` and fails on any other file that does. Swapping the crate out, or going back to `String`, is a change to that
-file alone. `Name` decodes through a visitor of its own (`visit_str`, `visit_string`), so the decode never builds a
-`String` first.
+`features = ["std"]`; its `serde` feature is not used). The model name, the answer names, a choice's pick and its option
+names are a crate-private `Name` (`crates/sdk/src/name.rs`), which stores up to 24 bytes inline on a 64-bit target. The
+legend descriptions are `Content` and did not change. `crates/sdk/src/name.rs` is the only file that names the crate:
+the unit test `only_this_module_names_the_small_string_crate` reads every `.rs` file under `crates` and fails on any
+other file that does. Swapping the crate out, or going back to `String`, is a change to that file alone. `Name` decodes
+through a visitor of its own (`visit_str`, `visit_string`), so the decode never builds a `String` first.
 
 Nothing public moved: accessors return `&str`, `ChoiceAnswer::new` and `Answers: FromIterator` take `Into<String>`,
 and `size_of` is 216 / 24 / 64 / 56 bytes for `SystemOneResponse<Answers>` / `Answers` / `Answer` / `ChoiceAnswer`
-before and after (pinned in `tests/static_assertions.rs` for 64-bit targets, `Option` of the last two included). The
+before and after (pinned in `crates/sdk/tests/static_assertions.rs` for 64-bit targets, `Option` of the last two included). The
 test `long_multi_byte_and_escaped_names_decode_serialize_and_print_as_text` decodes names of 24 and 25 bytes,
 multi-byte names of 15, 27 and 33 bytes, and names written with escapes. It checks that serializing writes the body
 back byte for byte, through the codec and through serde_json, and pins the `Debug` output. The same test, run at
@@ -1772,7 +1771,7 @@ records the first bad byte up front but raises the error only after deserializat
 through the error-body reader (any non-2xx whose `RawJson` members hold such a string) and through the path-tracking
 second pass of `decode_seed` (a 200 whose score legend value is an object).
 
-**Where and the fix.** `src/codec.rs`: `as_text`, one `std::str::from_utf8` (no allocation) at the two places every
+**Where and the fix.** `crates/sdk/src/codec.rs`: `as_text`, one `std::str::from_utf8` (no allocation) at the two places every
 body enters the codec, `decode` and `decode_seed`, before the depth pre-scan. The checked `&str` then goes to
 `sonic_rs::from_str` / `Deserializer::from_str`, which skip sonic's own UTF-8 pass, and `describe_failure` takes the
 same `&str`. So a body is validated once: a `decode_seed` body was validated twice before. A failure is a
@@ -1897,7 +1896,7 @@ production policy:
 
 ### Backend behavior and positions
 
-The codec seam is `src/codec/backend.rs`. SDK decode keeps raw wire text verbatim; a caller's
+The codec seam is `crates/sdk/src/codec/backend.rs`. SDK decode keeps raw wire text verbatim; a caller's
 serde_json reload renders it back to compact JSON. The synchronous `DecoderMark` is entered
 inside `decode` and `decode_seed`, spans the failure re-read, nests by counter and clears on
 unwind. It identifies an SDK decode on the current thread, not an arbitrary deserializer's type.
@@ -1966,3 +1965,33 @@ Fresh merged coverage from sonic and serde_json is **96.09%**: 4,500 lines, 176 
 7,079 regions, 395 missed; 772 functions, 33 missed. Each instrumented SDK-only run passes
 449 tests. The commands and all uncovered source lines are in [`../uncovered-lines.md`](../uncovered-lines.md).
 The arbitrary-precision run is tested separately, not merged into that coverage report.
+
+## The SDK package moves to `crates/sdk` (2026-09-30)
+
+The commit that adds this entry moves the SDK package from the repository root to `crates/sdk` and changes no code
+the benchmarks measure. It does change what CodSpeed calls each benchmark. codspeed-divan-compat 5.0.2 names a
+benchmark `<file>::<module path>::<name>` (`src/compat/uri.rs`, `format!("{file}::{module_path}{bench_name}")`),
+and `<file>` is the source file of the benchmark as `file!()` gives it: the path rustc was handed, relative to the
+workspace root. A benchmark of the `sdk` target was `benches/sdk/decode.rs::...` before the move and is
+`crates/sdk/benches/sdk/decode.rs::...` from this commit on.
+
+**Measured:** the new form is what the binary holds. Checked on a release build of the bench target, without `--config`
+and with `RUSTFLAGS` cleared (CI builds it with `cargo codspeed build`, from the same sources and the same workspace
+root):
+
+```sh
+env -u RUSTFLAGS cargo bench --no-run --features internals --bench sdk
+strings <the sdk bench binary> | rg -c 'crates/sdk/benches/sdk/'                                  # 19 lines
+strings <the sdk bench binary> | rg -o 'crates/sdk/benches/[A-Za-z0-9_/.]+\.rs' | sort | uniq -c  # 20 paths
+strings <the sdk bench binary> | rg -c '^benches/sdk/'                                            # no match
+```
+
+The 19 lines hold 20 paths (one line holds both `retry.rs` and `encode.rs`), the locations of benchmarks and of panics:
+the six module files of the target (`assembly.rs` 2, `call.rs` 2, `decode.rs` 5, `encode.rs` 4, `retry.rs` 2,
+`service.rs` 3) and the two support modules that `main.rs` includes by `#[path]`, embedded as
+`crates/sdk/benches/sdk/../support/naive.rs` 1 and `crates/sdk/benches/sdk/../support/mod.rs` 1.
+`crates/sdk/benches/sdk/main.rs` itself only declares the modules. No line holds the old form.
+
+**Expected, not observed yet:** CodSpeed matches a benchmark across runs by its identifier, so it should show the
+benchmarks of this commit as new ones with no history before it, and the history under the old identifiers should end
+at the commit before. To be confirmed on the first run of `main` after this commit.

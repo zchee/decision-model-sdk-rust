@@ -29,7 +29,7 @@ jobs:
   # Instruction counts of the CPU benchmarks under CodSpeed's simulation
   # (valgrind). Only the `sdk` bench target runs here: `loopback` times a
   # real socket, whose instruction count follows the kernel and the
-  # scheduler rather than the SDK (see `benches/loopback.rs`).
+  # scheduler rather than the SDK (see `crates/sdk/benches/loopback.rs`).
   codspeed:
     name: codspeed
     # This job alone is not on ubuntu-26.04: CodSpeed's runner aborts there

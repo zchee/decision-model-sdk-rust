@@ -19,7 +19,7 @@ libfuzzer-sys = "0.4.13"
 # `internals` is the seam the targets reach the crate-private decoders
 # through; the default features stay on, so a derived answer set is decoded
 # too.
-typesafe-sdk-rust = { path = "..", features = ["internals"] }
+typesafe-sdk-rust = { path = "../crates/sdk", features = ["internals"] }
 # The same versions the SDK itself resolves, for building its inputs.
 bytes = "1.12.1"
 http = "1.5.0"

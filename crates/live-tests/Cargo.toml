@@ -15,7 +15,7 @@ name = "live_tests"
 
 [dependencies]
 # Default features: the typed test uses the derive.
-typesafe-sdk-rust = { path = "../.." }
+typesafe-sdk-rust = { path = "../sdk" }
 
 [dev-dependencies]
 # A criteria object for the raw-shaped question, as the Python test spells it.

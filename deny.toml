@@ -1,7 +1,8 @@
 # cargo-deny policy for the workspace and for the fuzz targets under fuzz/.
 #
-# CI runs it at the workspace root for the SDK graph and with
-# `--manifest-path fuzz/Cargo.toml` for the fuzz targets' graph.
+# CI runs it at the workspace root, where every workspace member is a root of
+# the graph (the SDK, the derive, the test server and the live tests), and
+# with `--manifest-path fuzz/Cargo.toml` for the fuzz targets' graph.
 
 [graph]
 # Restricting the graph to the supported triples keeps platform-only crates

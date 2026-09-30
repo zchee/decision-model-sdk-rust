@@ -1,7 +1,7 @@
 //! What the derive accepts, and the whole message of everything it refuses.
 //!
 //! The spans of these errors are checked by the main crate's trybuild cases
-//! (`tests/ui`); here each message is compared in full.
+//! (`crates/sdk/tests/ui`); here each message is compared in full.
 
 use syn::parse_quote;
 

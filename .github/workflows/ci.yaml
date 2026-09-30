@@ -56,9 +56,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       # The dependencies' build output is kept between runs; the crates of this
-      # repository are rebuilt every time. The key holds the toolchain and every
-      # manifest and lock file, so a changed dependency or compiler starts a
-      # cache of its own, which is why this step comes after the toolchain. The
+      # repository are rebuilt every time. The key holds the toolchain, the
+      # manifest of each package and the lock files, so a changed dependency
+      # or compiler starts a cache of its own, which is why this step comes
+      # after the toolchain. The root manifest is a virtual one, not a package,
+      # so it is not in the key: a change to `[workspace.dependencies]` that
+      # leaves Cargo.lock alone keeps the key, the old cache is restored, and
+      # cargo rebuilds what is stale, on every run until the key moves. The
       # fuzz targets are a second workspace with a target directory of their
       # own. Only a run on `main` saves: a pull request restores what `main`
       # built and cannot replace it. `~/.cargo/bin` is left out, because the
@@ -231,7 +235,7 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest -p typesafe-sdk-rust --all-features --no-report
           cargo llvm-cov nextest -p typesafe-sdk-rust --features internals --no-report
-          cargo llvm-cov report --fail-under-lines 85
+          cargo llvm-cov report -p typesafe-sdk-rust --fail-under-lines 85
 
       # The derive's entry point runs only inside rustc, never under a test
       # harness, so it counts as unreached; everything it calls is measured.
@@ -254,6 +258,20 @@ jobs:
 
       - name: Port test matrix
         run: python3 .github/scripts/port-test-matrix.py
+
+      # cargo packages only the files inside a package's directory, so the SDK
+      # carries its own README (the crate docs embed it) and licenses, and the
+      # derive its own licenses. They are copies of the root files rather than
+      # symlinks: a checkout without `core.symlinks`, the Windows default,
+      # turns a symlink into a one-line text file. A copy that differs from
+      # the root file fails here, with the first byte that differs.
+      - name: Package copies of the README and licenses
+        run: |
+          cmp README.md crates/sdk/README.md
+          cmp LICENSE crates/sdk/LICENSE
+          cmp LICENSE-THIRD-PARTY crates/sdk/LICENSE-THIRD-PARTY
+          cmp LICENSE crates/macros/LICENSE
+          cmp LICENSE-THIRD-PARTY crates/macros/LICENSE-THIRD-PARTY
 
       # pipx ships with the runner image and runs pytest from a throwaway
       # environment, so nothing is installed into the image's Python.

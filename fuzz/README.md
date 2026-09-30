@@ -134,9 +134,9 @@ finding.
 ## Seeds
 
 `corpus/decode_response` holds the repository's response fixtures
-(`tests/fixtures/*.json`, the upstream `RESULT` fixture among them), the live
-API's 403 body, the other error-body shapes the message reader knows (a
-`detail` list, a nested `error.message`, a string, `null`, non-JSON text), a
+(`crates/sdk/tests/fixtures/*.json`, the upstream `RESULT` fixture among them),
+the live API's 403 body, the other error-body shapes the message reader knows
+(a `detail` list, a nested `error.message`, a string, `null`, non-JSON text), a
 small flood of empty score answers, answers whose `type` comes last, escaped
 names, brackets inside strings, and nesting at depth 16 (accepted), 17 (the
 first depth refused), 2,000 (unclosed) and 1,000 inside an error body.
@@ -145,16 +145,17 @@ The deep case is not a 100,000-deep file: the depth guard counts brackets
 before the codec sees a byte, so anything past depth 16 is refused at the
 same point whatever its depth, and the fuzzer's inputs (4 KiB by default) can
 already nest 4,000 levels. The 100,000-deep document of the original finding
-is generated at test time by the codec's unit tests (`src/codec_tests.rs`),
-which assert that the guard refuses it without parsing it.
+is generated at test time by the codec's unit tests
+(`crates/sdk/src/codec_tests.rs`), which assert that the guard refuses it
+without parsing it.
 
 The inputs of the one finding so far - a byte that is not UTF-8 inside a
 string the decoders keep as raw text, which made the codec panic - are not
 in `corpus/`: every tracked file must be UTF-8 text (`text-hygiene.py`), and
 these are not by construction. Their exact bytes are the literals of the
-regression tests in `src/codec_tests.rs` (`NOT_UTF8`, `fuzzer_find`) and
-`tests/malformed_body.rs`; pass a directory holding them as a second corpus
-to start a run from them.
+regression tests in `crates/sdk/src/codec_tests.rs` (`NOT_UTF8`,
+`fuzzer_find`) and `crates/sdk/tests/malformed_body.rs`; pass a directory
+holding them as a second corpus to start a run from them.
 
 `corpus/retry_after` holds counts, floats, exponents, negatives, values past
 `u64`, `inf` and `NaN`, the three HTTP date formats (future and past against

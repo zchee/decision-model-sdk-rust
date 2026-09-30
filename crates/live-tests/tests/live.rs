@@ -193,11 +193,12 @@ async fn timed_list(client: &Client) -> Duration {
 /// connection idle for 60 seconds, unless it counts the client's HTTP/2 PING
 /// (sent every 30 seconds, idle or not) as activity; and the client closes a
 /// pooled connection idle for 90 seconds on its own (`POOL_IDLE_TIMEOUT` in
-/// `src/transport/hyper.rs`), after which the next call always opens a new
-/// connection and this test could tell nothing. At 75 seconds the call after
-/// the pause either finds the connection open - the load balancer counted
-/// the PINGs, and the call costs about one round trip, like a warm one - or
-/// opens a new one and costs about what the first call on a new client did.
+/// `crates/sdk/src/transport/hyper.rs`), after which the next call always
+/// opens a new connection and this test could tell nothing. At 75 seconds the
+/// call after the pause either finds the connection open - the load balancer
+/// counted the PINGs, and the call costs about one round trip, like a warm
+/// one - or opens a new one and costs about what the first call on a new
+/// client did.
 ///
 /// Which of the two happens is the load balancer's behaviour, not a defect,
 /// so the test only prints it. What it asserts is what must hold either way:
