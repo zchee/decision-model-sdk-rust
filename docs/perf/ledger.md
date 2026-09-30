@@ -1982,16 +1982,25 @@ root):
 ```sh
 env -u RUSTFLAGS cargo bench --no-run --features internals --bench sdk
 strings <the sdk bench binary> | rg -c 'crates/sdk/benches/sdk/'                                  # 19 lines
-strings <the sdk bench binary> | rg -o 'crates/sdk/benches/[A-Za-z0-9_/.]+\.rs' | sort | uniq -c  # 20 paths
+strings <the sdk bench binary> | rg -o 'crates/sdk/benches/[A-Za-z0-9_/.]+\.rs' | sort | uniq -c  # 8 files, 20 paths
 strings <the sdk bench binary> | rg -c '^benches/sdk/'                                            # no match
 ```
 
 The 19 lines hold 20 paths (one line holds both `retry.rs` and `encode.rs`), the locations of benchmarks and of panics:
 the six module files of the target (`assembly.rs` 2, `call.rs` 2, `decode.rs` 5, `encode.rs` 4, `retry.rs` 2,
-`service.rs` 3) and the two support modules that `main.rs` includes by `#[path]`, embedded as
-`crates/sdk/benches/sdk/../support/naive.rs` 1 and `crates/sdk/benches/sdk/../support/mod.rs` 1.
-`crates/sdk/benches/sdk/main.rs` itself only declares the modules. No line holds the old form.
+`service.rs` 3) and two of the three support modules that `main.rs` includes by `#[path]`, embedded as
+`crates/sdk/benches/sdk/../support/naive.rs` 1 and `crates/sdk/benches/sdk/../support/mod.rs` 1; the third,
+`../support/naive_response.rs`, is compiled too but embeds no path string. `crates/sdk/benches/sdk/main.rs` itself only
+declares the modules. No line holds the old form.
 
-**Expected, not observed yet:** CodSpeed matches a benchmark across runs by its identifier, so it should show the
-benchmarks of this commit as new ones with no history before it, and the history under the old identifiers should end
-at the commit before. To be confirmed on the first run of `main` after this commit.
+**Observed:** CodSpeed's first run of `8062d8c` (run `6abcea9e8d1242d046c5f23a`, 2026-09-30T10:55:26Z, from the
+Benchmarks workflow run 36705075195) lists 35 benchmarks, every identifier of the form
+`crates/sdk/benches/sdk/<module>.rs::...` (for example `crates/sdk/benches/sdk/decode.rs::decode::answers[20]`):
+`assembly.rs` 2, `call.rs` 5, `decode.rs` 7, `encode.rs` 15, `retry.rs` 6. The run of the commit before, `306d467` (run
+`6abca528f13b3eb4dd420ffd`), lists the same 35 names, every identifier of the form `benches/sdk/<module>.rs::...` (for
+example `benches/sdk/decode.rs::decode::answers[20]`). CodSpeed's comparison of the two runs ([`306d467` against
+`8062d8c`](https://app.codspeed.io/zchee/typesafe-sdk-rust/runs/compare/6abca528f13b3eb4dd420ffd..6abcea9e8d1242d046c5f23a))
+reports 35 benchmarks as New and 35 as Skipped, compares none (no row has a base value) and gives no overall impact: the
+history of each benchmark starts again at `8062d8c`, as expected. The values can still be compared by name across the
+two runs, for example `answers[20]` 156.3 µs at `306d467` and 155.9 µs at `8062d8c`, `sdk` (call) 103.3 µs and 102.5 µs,
+and `prepared[65536]` 821.1 µs and 820.9 µs.
