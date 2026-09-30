@@ -71,7 +71,9 @@ jobs:
       FUZZ_CPU: ${{ inputs.cpu }}
       FUZZ_SECONDS: ${{ inputs.seconds }}
       # A finding cannot be re-run on the runner under a debugger, so the
-      # panic's backtrace has to be in the log the first time.
+      # panic's backtrace has to be in the log the first time: the Fuzz step
+      # prints the panic's line and message, and the full backtrace is in the
+      # uploaded console.log.
       RUST_BACKTRACE: 1
     steps:
       # First, so that a value the run cannot use fails it before anything is
@@ -311,9 +313,13 @@ jobs:
       # and libFuzzer copies it into its own output when the job ends. That
       # output repeats every job log, over 98 % of a 900 s run's log, so it
       # goes to console.log beside them (uploaded with them), and this step
-      # prints each job's exit line and, when the fuzzer fails, cargo-fuzz's
-      # "Failing input" blocks, or the last 200 lines when there are none (a
-      # job killed for memory, a cargo error), so a failure is never silent.
+      # prints each job's exit line. When the fuzzer fails, it prints what
+      # failed: each `panicked at` line with the panic's message, and
+      # libFuzzer's `ERROR:` and `SUMMARY:` lines (a timeout and running out
+      # of memory included), at most 200 lines. Then cargo-fuzz's "Failing
+      # input" blocks, or the last 200 lines when there are none (a job killed
+      # for memory, a cargo error), so a failure is never silent. The
+      # backtraces stay in the uploaded console.log.
       # The same features, target directory and flags as the build above, so
       # nothing is compiled again.
       - name: Fuzz
@@ -337,6 +343,9 @@ jobs:
           echo "${status}" > "${RUNNER_TEMP}/fuzz-exit"
           grep -E 'Job [0-9]+ exited with exit code' "${console}" || true
           if [ "${status}" != 0 ]; then
+            echo "what failed (from console.log):"
+            awk '/panicked at/ { print; if ((getline line) > 0) print line; next }
+              /ERROR: libFuzzer|ERROR: AddressSanitizer|SUMMARY: / { print }' "${console}" | head -n 200 || true
             first="$(awk '/^Failing input:/ { print NR; exit }' "${console}")"
             if [ -n "${first}" ]; then
               tail -n "+${first}" "${console}"
