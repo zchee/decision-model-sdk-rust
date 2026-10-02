@@ -1212,3 +1212,183 @@ def test_two_upstreams_are_checked_and_named(
         f"{SYNTHETIC_NAME}: {synthetic.summary}\n"
         f"second-upstream: {synthetic_summary(rows=2, rust=1)}",
     )
+
+
+# The Python adapter's configuration, on copies of its tracked page and README.
+
+ADAPTER_MATRIX = "docs/adapter-port-test-matrix.md"
+ADAPTER_README = "crates/adapter/README.md"
+CONFIDENCE = "tests/utils/test_confidence_metrics.py"
+EXCLUDED_ROW = "excluded row"
+#: The summary line of the adapter's page, by its tallies.
+adapter_summary = partial(
+    summary, rows=71, rust=63, deviation=8, excluded=0, tests=71, files=12
+)
+
+
+@pytest.fixture
+def adapter(
+    port_test_matrix: ModuleType,
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> Scenario:
+    """The Python adapter's configuration, on copies of the tracked page and README.
+
+    It runs from the repository root, where the rows' Rust paths resolve.
+    """
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        (repository / ADAPTER_README).read_text(encoding="utf-8"), "utf-8"
+    )
+    upstream = replace(
+        port_test_matrix.ADAPTER,
+        matrix=tmp_path / "adapter-port-test-matrix.md",
+        readme=readme,
+    )
+    monkeypatch.setattr(port_test_matrix, "UPSTREAMS", (upstream,))
+    pristine = (repository / ADAPTER_MATRIX).read_text(encoding="utf-8")
+
+    row = (
+        "| `test_confidence_metrics` | 8 | "
+        "`crates/adapter/src/metrics_tests.rs::metrics_upstream_confidence` |"
+    )
+    where = (
+        f"{ADAPTER_MATRIX}:{line_of(pristine, row)}: "
+        f"{CONFIDENCE}::test_confidence_metrics"
+    )
+    counts = f"| `{CONFIDENCE}` | 1 | 8 | 1 | 0 |"
+    # One target of a row that names two Rust tests.
+    schema_target = (
+        "`crates/adapter/src/schema_tests.rs::"
+        "probability_labels_preserve_arbitrary_names`"
+    )
+    labels = "| `test_probability_labels_preserve_arbitrary_names` |"
+    labels_where = (
+        f"{ADAPTER_MATRIX}:{line_of(pristine, labels)}: tests/test_schema.py::"
+        "test_probability_labels_preserve_arbitrary_names"
+    )
+
+    def edit_row_and_counts(new_row: str, new_counts: str) -> Edit:
+        def edit(text: str) -> str:
+            text = replace_once(text, row, new_row)
+            return replace_once(text, counts, new_counts)
+
+        return edit
+
+    planted = {
+        MISSING_ROW: Planted(
+            lambda text: delete_line(text, row),
+            (
+                (
+                    f"{ADAPTER_MATRIX}: {CONFIDENCE} states 1 functions / 8 cases / "
+                    "1 Rust / 0 deviation, the rows give 0 / 0 / 0 / 0"
+                ),
+                (
+                    f"{ADAPTER_MATRIX}: upstream {CONFIDENCE}::"
+                    "test_confidence_metrics has no row"
+                ),
+            ),
+            adapter_summary(rows=70, rust=62),
+        ),
+        DANGLING_RUST_TEST: Planted(
+            lambda text: replace_once(
+                text, schema_target, schema_target.replace("_names`", "_namez`")
+            ),
+            (
+                (
+                    f"{labels_where}: crates/adapter/src/schema_tests.rs has no test "
+                    "function `probability_labels_preserve_arbitrary_namez`"
+                ),
+            ),
+            adapter_summary(),
+        ),
+        # The Counts line follows the row, so only the pin can tell.
+        CASES_OFF_THE_PIN: Planted(
+            edit_row_and_counts(
+                row.replace("| 8 |", "| 9 |"), f"| `{CONFIDENCE}` | 1 | 9 | 1 | 0 |"
+            ),
+            (f"{where}: the case count is 9, but ADAPTER_TESTS pins 8",),
+            adapter_summary(),
+        ),
+        # The Counts line follows the row, so only the empty excludable set
+        # can tell.
+        EXCLUDED_ROW: Planted(
+            edit_row_and_counts(
+                "| `test_confidence_metrics` |  | Excluded: not wanted |",
+                f"| `{CONFIDENCE}` | 1 | 0 | 0 | 0 |",
+            ),
+            (
+                (
+                    f"{where}: excluded, but no file of system-one-adapter-python "
+                    "may be excluded"
+                ),
+            ),
+            adapter_summary(rust=62, excluded=1),
+        ),
+        COUNTS_SUM: Planted(
+            lambda text: replace_once(
+                text, counts, f"| `{CONFIDENCE}` | 1 | 9 | 1 | 0 |"
+            ),
+            (
+                (
+                    f"{ADAPTER_MATRIX}: {CONFIDENCE} states 1 functions / 9 cases / "
+                    "1 Rust / 0 deviation, the rows give 1 / 8 / 1 / 0"
+                ),
+            ),
+            adapter_summary(),
+        ),
+    }
+    return Scenario(
+        upstream,
+        runner(port_test_matrix, upstream, pristine, ADAPTER_MATRIX, capsys),
+        adapter_summary(),
+        planted,
+    )
+
+
+def test_tracked_pages_pass_together(
+    port_test_matrix: ModuleType,
+    repository: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Both tracked pages pass in the form CI runs, each summary named."""
+    status = port_test_matrix.main([])
+
+    assert (status, capsys.readouterr().out) == (
+        0,
+        f"{SDK_NAME}: {summary()}\nsystem-one-adapter-python: {adapter_summary()}\n",
+    )
+
+
+def test_adapter_page_passes_untouched(adapter: Scenario) -> None:
+    """The adapter's tracked page passes on its own."""
+    status, out = adapter.run()
+
+    assert (status, out) == (0, adapter.summary + "\n")
+
+
+def test_adapter_matrix_refuses_a_deleted_row(adapter: Scenario) -> None:
+    """An upstream function of the adapter without a row fails."""
+    assert_planted_fails(adapter, MISSING_ROW)
+
+
+def test_adapter_matrix_refuses_a_renamed_rust_test(adapter: Scenario) -> None:
+    """One renamed Rust test among a row's targets fails."""
+    assert_planted_fails(adapter, DANGLING_RUST_TEST)
+
+
+def test_adapter_matrix_refuses_cases_off_the_pin(adapter: Scenario) -> None:
+    """A row whose Cases differs from the collected number fails."""
+    assert_planted_fails(adapter, CASES_OFF_THE_PIN)
+
+
+def test_adapter_matrix_refuses_an_excluded_row(adapter: Scenario) -> None:
+    """No function of the adapter's upstream may be excluded."""
+    assert_planted_fails(adapter, EXCLUDED_ROW)
+
+
+def test_adapter_matrix_refuses_a_counts_sum_that_differs(adapter: Scenario) -> None:
+    """A Counts line whose Cases differs from the rows' sum fails."""
+    assert_planted_fails(adapter, COUNTS_SUM)

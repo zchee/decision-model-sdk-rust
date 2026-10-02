@@ -33,7 +33,8 @@ It fails on:
 
 A row is one of three kinds: mapped to Rust tests, mapped to a deviation row,
 or excluded with a reason (for the Python SDK, only the functions of the
-upstream files that test the Python repository's own tooling).
+upstream files that test the Python repository's own tooling; for the Python
+adapter, none).
 
 With ``--upstream <name>=<checkout>`` it also checks the pin of the upstream
 called ``name`` itself: every ``test_*`` function the checkout's
@@ -337,8 +338,268 @@ SDK = Upstream(
     excludable=EXCLUDED_FILES,
     counts_columns=("functions", "rust", "deviation", "excluded"),
 )
+#: Every ``test_*`` function the Python adapter's upstream files define at the
+#: ported release (system-one-adapter-python e1d4cc9, v0.2.1), as
+#: ``(file, name) -> cases``: the number of cases ``uv run --offline
+#: --all-extras --all-groups pytest --collect-only -q`` collects for it. No
+#: function is excluded, so no entry is ``None``.
+ADAPTER_TESTS: Mapping[tuple[str, str], int | None] = MappingProxyType(
+    {
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_attempts_are_independent_and_replayable",
+        ): 2,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_invalid_questions_are_rejected",
+        ): 5,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_malformed_retry_exhaustion_preserves_debug",
+        ): 8,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_malformed_structure_is_retried",
+        ): 8,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_missing_provider_setting_is_rejected",
+        ): 2,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_prompted_mode_adds_schema_instructions_native_does_not",
+        ): 2,
+        ("tests/test_client_with_fake_model.py", "test_retries_are_exhausted"): 2,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_sdk_questions_and_response_serialization",
+        ): 4,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_structured_state_prompt_is_delimited_and_escapes_embedded_tags",
+        ): 1,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_transient_errors_are_retried",
+        ): 4,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_usage_separates_last_attempt_from_cumulative_totals",
+        ): 2,
+        (
+            "tests/test_client_with_fake_model.py",
+            "test_usage_totals_preserve_unknown_counts_across_corrections",
+        ): 14,
+        (
+            "tests/test_client_with_live_apis.py",
+            "test_live_models_follow_question_instructions_and_criteria",
+        ): 12,
+        (
+            "tests/test_client_with_live_apis.py",
+            "test_live_responses_match_reference_shape",
+        ): 12,
+        (
+            "tests/test_client_with_live_apis.py",
+            "test_live_typesafe_response_matches_reference_shape",
+        ): 1,
+        (
+            "tests/test_gemini_transports.py",
+            "test_gemini_incomplete_http_response_is_not_an_answer",
+        ): 2,
+        (
+            "tests/test_gemini_transports.py",
+            "test_gemini_transport_errors_obey_retry_budget",
+        ): 8,
+        (
+            "tests/test_gemini_transports.py",
+            "test_gemini_transport_preserves_corrections_and_usage",
+        ): 4,
+        (
+            "tests/test_openai_transports.py",
+            "test_concurrent_attempts_are_isolated_and_preserve_failed_responses",
+        ): 3,
+        (
+            "tests/test_openai_transports.py",
+            "test_custom_endpoint_from_environment_defaults_to_chat",
+        ): 2,
+        (
+            "tests/test_openai_transports.py",
+            "test_openai_transport_preserves_corrections_and_usage",
+        ): 16,
+        (
+            "tests/test_openai_transports.py",
+            "test_unfinished_responses_are_not_treated_as_answers",
+        ): 2,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_async_cleanup_propagates_cancellation_after_remaining_cleanup",
+        ): 3,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_cache_uses_resolved_provider_and_model_and_is_per_client",
+        ): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_cancelling_close_waiter_does_not_interrupt_cleanup",
+        ): 1,
+        ("tests/test_provider_lifecycle.py", "test_cleanup_continues_after_failure"): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_close_before_first_use_does_not_construct_providers",
+        ): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_concurrent_close_waits_for_same_cleanup",
+        ): 8,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_concurrent_first_use_reuses_pool_and_isolates_traces",
+        ): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_custom_provider_without_close_remains_supported",
+        ): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_environment_is_captured_on_first_use",
+        ): 4,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_exceptional_exit_closes_owned_sdks",
+        ): 16,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_failed_construction_is_not_cached",
+        ): 4,
+        ("tests/test_provider_lifecycle.py", "test_injected_provider_is_borrowed"): 8,
+        (
+            "tests/test_provider_lifecycle.py",
+            "test_reuses_owned_provider_and_closes_sdk_on_context_exit",
+        ): 4,
+        ("tests/test_provider_nonanswers.py", "test_anthropic_nonanswers"): 36,
+        ("tests/test_provider_nonanswers.py", "test_chat_completion_finish_reason"): 28,
+        ("tests/test_provider_nonanswers.py", "test_openai_missing_usage"): 64,
+        ("tests/test_provider_nonanswers.py", "test_openai_responses_refusal"): 8,
+        ("tests/test_provider_requests.py", "test_anthropic_output_limit"): 8,
+        (
+            "tests/test_provider_requests.py",
+            "test_anthropic_rejects_nonpositive_output_limit",
+        ): 4,
+        (
+            "tests/test_provider_requests.py",
+            "test_anthropic_request_omits_output_config_when_prompted",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_anthropic_request_puts_schema_in_output_config_when_structured",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_anthropic_result_joins_text_blocks_and_reads_usage",
+        ): 1,
+        ("tests/test_provider_requests.py", "test_build_providers_select_gemini"): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_incomplete_status_is_not_treated_as_an_answer",
+        ): 4,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_omitted_usage_is_not_treated_as_an_answer",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_request_omits_response_format_when_prompted",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_request_puts_schema_in_response_format_when_structured",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_request_sends_correction_turns_as_steps",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_gemini_result_reads_output_text_and_usage",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_openai_native_response_format_wraps_schema",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_openai_prompted_sends_no_response_format",
+        ): 1,
+        (
+            "tests/test_provider_requests.py",
+            "test_openai_result_reads_content_and_usage",
+        ): 1,
+        ("tests/test_provider_requests.py", "test_unknown_provider_is_rejected"): 1,
+        (
+            "tests/test_provider_retries.py",
+            "test_retry_policy_controls_http_attempts",
+        ): 12,
+        ("tests/test_schema.py", "test_invalid_dictionary_questions_are_rejected"): 4,
+        (
+            "tests/test_schema.py",
+            "test_output_rejects_extra_fields_and_internal_field_names",
+        ): 3,
+        (
+            "tests/test_schema.py",
+            "test_output_validation_preserves_types_bounds_and_allowed_values",
+        ): 13,
+        ("tests/test_schema.py", "test_probability_labels_preserve_arbitrary_names"): 1,
+        ("tests/test_schema.py", "test_question_ids_preserve_arbitrary_names"): 2,
+        ("tests/test_schema.py", "test_sdk_question_fields_are_revalidated"): 1,
+        ("tests/utils/test_confidence_metrics.py", "test_confidence_metrics"): 8,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_non_retryable_error_is_not_retried",
+        ): 1,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_retries_are_exhausted_and_reasons_recorded",
+        ): 1,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_retries_succeed_after_transient_error",
+        ): 1,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_status_errors_map_and_preserve_status_and_body",
+        ): 18,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_timeout_and_connection_errors_map",
+        ): 3,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_translating_context_manager_reraises_translated_error",
+        ): 1,
+        (
+            "tests/utils/test_error_handling.py",
+            "test_unknown_and_sdk_errors_pass_through",
+        ): 3,
+        (
+            "tests/utils/test_probability_normalization.py",
+            "test_probability_normalization_and_debug_data",
+        ): 3,
+    }
+)
+#: The Python adapter, ported as ``crates/adapter``.
+ADAPTER = Upstream(
+    name="system-one-adapter-python",
+    matrix=Path("docs/adapter-port-test-matrix.md"),
+    readme=Path("crates/adapter/README.md"),
+    deviations_heading="## Deviations from the Python adapter",
+    deviations_header="Deviation",
+    pin=ADAPTER_TESTS,
+    pin_name="ADAPTER_TESTS",
+    excludable=frozenset(),
+    counts_columns=("functions", "cases", "rust", "deviation"),
+)
 #: Every upstream whose matrix the checker runs over.
-UPSTREAMS: tuple[Upstream, ...] = (SDK,)
+UPSTREAMS: tuple[Upstream, ...] = (SDK, ADAPTER)
 
 
 @dataclass
