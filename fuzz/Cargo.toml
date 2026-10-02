@@ -1,7 +1,9 @@
-# libFuzzer targets for the two parsers that read bytes a server chose: the
-# response decoders and the `Retry-After` parser. The crate has a workspace of
-# its own and is excluded from the root one. Running a target needs the
-# nightly toolchain and a sanitizer. It is never published.
+# libFuzzer targets for the parsers that read bytes somebody else chose: the
+# SDK's response decoders and `Retry-After` parser (a server's bytes), and the
+# adapter's reply decoder and schema writer (a model's reply, a caller's
+# questions). The crate has a workspace of its own and is excluded from the
+# root one. Running a target needs the nightly toolchain and a sanitizer. It
+# is never published.
 [package]
 name = "typesafe-sdk-rust-fuzz"
 version = "0.0.0"
@@ -20,9 +22,16 @@ libfuzzer-sys = "0.4.13"
 # through; the default features stay on, so a derived answer set is decoded
 # too.
 typesafe-sdk-rust = { path = "../crates/sdk", features = ["internals"] }
+# Without its defaults: the two adapter targets drive two pure parsers, so
+# neither a provider nor its transport (hyper, rustls) is compiled.
+# `internals` is the seam that reaches them.
+typesafe-sdk-rust-adapter = { path = "../crates/adapter", default-features = false, features = ["internals"] }
 # The same versions the SDK itself resolves, for building its inputs.
 bytes = "1.12.1"
 http = "1.5.0"
+# The version the adapter resolves: `adapter_schema` parses the schema the
+# writer returns, to hold it to being a JSON object.
+serde_json = "1.0.151"
 
 [features]
 # The SDK's sonic-rs JSON backend, whose SIMD parser carries far more `unsafe`
@@ -49,6 +58,20 @@ bench = false
 [[bin]]
 name = "retry_after"
 path = "fuzz_targets/retry_after.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "adapter_decode"
+path = "fuzz_targets/adapter_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "adapter_schema"
+path = "fuzz_targets/adapter_schema.rs"
 test = false
 doc = false
 bench = false

@@ -1,0 +1,2 @@
+{"instruction_probe":{"type":"choice","instructions":"Return the only marker whose state is ACTIVE.","criteria":{"marker_fen":"The marker_fen catalog entry.","marker_tor":"The marker_tor catalog entry."}},"criteria_probe":{"type":"choice","instructions":"Return the correct opaque handling route for the parcel.","criteria":{"route_7q":"Use when the handling class is CLASS_CRYSTAL.","route_2m":"Use when the handling class is CLASS_STEEL."}}}
+{"answers": {"instruction_probe": "marker_tor", "criteria_probe": "route_7q"}}

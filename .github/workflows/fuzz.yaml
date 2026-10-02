@@ -14,6 +14,8 @@ on:
         options:
           - decode_response
           - retry_after
+          - adapter_decode
+          - adapter_schema
         default: decode_response
       backend:
         description: "JSON backend: sonic (sonic-rs) or default (serde_json)"
@@ -94,10 +96,10 @@ jobs:
       - name: Check the inputs
         run: |
           case "${FUZZ_TARGET}" in
-            decode_response | retry_after) ;;
+            decode_response | retry_after | adapter_decode | adapter_schema) ;;
             *)
               printf 'target: %q\n' "${FUZZ_TARGET}"
-              echo "::error::target must be decode_response or retry_after"
+              echo "::error::target must be decode_response, retry_after, adapter_decode or adapter_schema"
               exit 1
               ;;
           esac
