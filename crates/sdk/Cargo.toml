@@ -1,6 +1,6 @@
 [package]
 name = "typesafe-sdk-rust"
-version = "0.2.0"
+version = "0.2.1"
 categories = ["api-bindings", "asynchronous"]
 edition.workspace = true
 # A release ships the library, its examples, the README the crate docs embed
