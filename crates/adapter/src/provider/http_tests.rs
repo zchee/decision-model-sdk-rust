@@ -792,6 +792,50 @@ fn a_key_that_only_the_escaped_message_spells_is_withheld() {
     assert_eq!(connection(error, &key).to_string(), WITHHELD);
 }
 
+#[test]
+fn a_key_that_only_the_alternate_debug_prints_is_withheld() {
+    /// An error that prints the text it holds in its alternate `Debug`
+    /// only, as a type does that shows its details when asked with `{:#?}`.
+    struct Verbose(String);
+
+    impl fmt::Display for Verbose {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("request failed")
+        }
+    }
+
+    impl fmt::Debug for Verbose {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if formatter.alternate() {
+                write!(formatter, "Verbose {{\n    sent: {},\n}}", self.0)
+            } else {
+                formatter.write_str("Verbose")
+            }
+        }
+    }
+
+    impl StdError for Verbose {}
+
+    let key = key_header(AUTHORIZATION, true, &SecretString::from(KEY)).expect("a legal key");
+    let leak = || Verbose(format!("Bearer {KEY}"));
+
+    // The key is in the third rendering and in neither of the other two.
+    assert_eq!(occurrences(&leak().to_string(), KEY), 0);
+    assert_eq!(occurrences(&format!("{:?}", leak()), KEY), 0);
+    assert_eq!(occurrences(&format!("{:#?}", leak()), KEY), 1);
+
+    assert!(key.holds_key(&leak()));
+    let error = connection(leak(), &key);
+    assert_eq!(error.to_string(), WITHHELD);
+    assert!(error.source().is_none(), "the chain is dropped whole");
+    assert_eq!(key_occurrences(&error), 0);
+
+    // The same error without the key is kept, so it is the key that is found.
+    let harmless = connection(Verbose(String::from("Bearer another-text")), &key);
+    assert_eq!(harmless.to_string(), "Connection error: request failed");
+    assert!(harmless.source().is_some_and(|source| source.is::<Verbose>()));
+}
+
 #[tokio::test]
 async fn a_body_that_declares_no_length_is_cut_at_the_limit() {
     let frames = vec![Bytes::from_static(b"\"aaaaaaaa"), Bytes::from_static(b"aaaaaaaa\"")];
