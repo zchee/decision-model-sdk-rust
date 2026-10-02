@@ -57,6 +57,7 @@ pub use crate::provider::{
 pub use crate::provider::http::{Transport, TransportBody, TransportFuture};
 
 // The client and the requests it builds.
+pub use crate::client::{Client, ClientBuilder, Request};
 
 // The OpenAI provider, for OpenAI's API and the services that speak it.
 
