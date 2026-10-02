@@ -32,7 +32,7 @@ adapter needs neither the SDK's transport nor its derive.
 | `gemini` | on | `GeminiProvider`, `ProviderName::Gemini` and the default transport. |
 | `tracing` | on | The adapter's own events, and the SDK's retry line: the feature also turns on the SDK's `tracing` feature (see [Logging](#logging)). Without it, every event is compiled out. |
 | `macros` | off | Turns on the SDK's `macros` feature, so the re-exported `QuestionSet` is also the derive (see [Typed answers](#typed-answers)). It re-exports nothing by itself. |
-| `internals` | off | Exposes a hidden `system_one_adapter::__internals` module used by this repository's parity tests and fuzz targets. It carries **no semver promise**; do not depend on it. |
+| `internals` | off | Exposes a hidden `system_one_adapter::__internals` module used by this repository's tests and fuzz targets. It carries **no semver promise**; do not depend on it. With it, a provider reads no process environment, so its key and base URL must be given to its builder. |
 
 Without any provider feature hyper and rustls are not compiled, `ProviderName` has no variant, and
 a client still takes a provider the caller implements (see [Providers](#providers)).
@@ -67,17 +67,73 @@ client.
 The first call for a provider name and model builds that provider and reads its key from the
 environment (see [Providers](#providers)); later calls reuse it.
 
+```rust,no_run
+use system_one_adapter::{AnswerMode, Client, Noul, ProviderName, Questions, StructuredOutputs};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Connects to nothing; OPENAI_API_KEY is read at the first call.
+    let client = Client::builder(StructuredOutputs::Native, AnswerMode::Probabilities)
+        .provider(ProviderName::OpenAi)
+        .model("gpt-4o-mini")
+        .build()?;
+
+    let questions = Questions::new()
+        .noul("positive", Noul::new().instructions("The review is positive."))
+        .prepare()?;
+
+    let review = "A delightful novel; I read it twice.";
+    let response = client.system_one(review, &questions).send().await?;
+
+    if let Some(positive) = response.answers().noul("positive") {
+        println!("positive: {}", positive.noul());
+    }
+    let usage = response.usage();
+    println!("{:?} input tokens in {:?}", usage.input_tokens_total(), usage.latency());
+    Ok(())
+}
+```
+
 ## Typed answers
 
 `client.ask::<Q>(&state)` takes the questions from a type that implements the SDK's `QuestionSet`
-and returns `Response<Q>`: the answers are decoded into the fields of `Q`.
+and returns `Response<Q>`: the answers are decoded into the fields of `Q`. Answers that do not fit
+the fields fail the call with `ErrorKind::MalformedStructure`.
 
 A caller that derives question sets depends on `typesafe-sdk-rust` directly, with its `macros`
 feature, and writes a plain `#[derive(QuestionSet)]` (recommended); or it enables this crate's
 `macros` feature and points the derive at the re-exported SDK with
-`#[question_set(crate = "system_one_adapter::typesafe_sdk")]`.
+`#[question_set(crate = system_one_adapter::typesafe_sdk)]`, a path and not a string.
 The attribute is needed in the second form because the derive's expansion names `::typesafe_sdk`
 unless told otherwise, and a crate that depends on the adapter alone has no crate of that name.
+The example below is the second form, with this crate's `macros` feature on:
+
+```rust,no_run
+# #[cfg(feature = "macros")]
+# mod example {
+use system_one_adapter::{ChoiceAnswer, Client, Error, NoulAnswer, QuestionSet, ScoreAnswer};
+
+#[derive(Debug, QuestionSet)]
+#[question_set(crate = system_one_adapter::typesafe_sdk)]
+struct Review {
+    #[noul(instructions = "The review is positive.")]
+    positive: NoulAnswer,
+    #[score(instructions = "How good the book is.", levels("Bad.", "Good."))]
+    stars: ScoreAnswer,
+    #[choice(instructions = "The genre.", options("fiction" = "A story.", "nonfiction" = "Facts."))]
+    genre: ChoiceAnswer,
+}
+
+async fn classify(client: &Client, review: &str) -> Result<(), Error> {
+    let response = client.ask::<Review>(review).send().await?;
+    let review = response.answers();
+    println!("positive {}", review.positive.noul());
+    println!("stars {}, genre {}", review.stars.score(), review.genre.choice());
+    Ok(())
+}
+# }
+# fn main() {}
+```
 
 ## Client options
 
@@ -91,22 +147,30 @@ unless told otherwise, and a crate that depends on the adapter alone has no crat
 | `n_retry_malformed_structure(u32)` | `0` | How many corrective turns follow a reply that does not fit the answer schema. |
 | `retry(RetryPolicy)` | `RetryPolicy::none()` | The SDK's retry policy for provider failures (see [Retries](#retries)). |
 
+`StructuredOutputs`, `AnswerMode`, `ProviderName`, `OpenAiApi` and `ErrorKind` are
+`#[non_exhaustive]`: a `match` over one of them needs a catch-all arm.
+
 A call (`Request`, returned by `system_one` and `ask`) takes `provider`, `model`,
 `provider_instance` and `retry` as overrides. The provider of a call is resolved in this order:
 the call's `provider_instance`, else the call's `model`, else the client's `provider_instance`,
-else the client's `model`. A model name needs a provider name, from the call or else from the
-client. A call with no model, or with a model name and no provider name, fails with
-`ErrorKind::InvalidRequest` before anything is sent.
+else the client's `model`. A model name is asked of the call's provider name, else the client's.
+A call with no model, or with a model name and no provider name, fails with
+`ErrorKind::InvalidRequest` before anything is sent. A provider whose cargo feature is off has no
+`ProviderName` variant, so no call can name it.
 
-A provider that the client builds from a name and a model is kept for the life of the client,
-keyed by that pair, and shared by the client's clones. It is built on first use; concurrent first
-calls build one instance, and a build that fails is not kept, so the next call tries again. The
-providers are dropped with the last clone of the client. There is no `close`.
+A provider that the client builds from a name and a model is kept for the life of the client and
+shared by the client's clones. It is keyed by the resolved pair of provider name and model, per
+client: two calls that resolve to the same pair share one provider, wherever each named it, and
+another client built with the same options builds its own. It is built on first use, with the key
+and base URL the environment holds then; concurrent first calls wait for one build, and a build
+that fails is not kept, so the next call that resolves to the pair builds again. The providers are
+dropped with the last clone of the client. There is no `close`.
 
-Inside `send`, in this order: the provider is resolved, and built if the client owns it; a state
-that serializes to `null` is refused as `ErrorKind::InvalidRequest`; the questions are validated
-again; the latency clock starts; the model is asked. A missing provider is therefore reported
-before an invalid question.
+Inside `send`, in this order: the provider is resolved, and built if the client owns it and has
+not built it yet; the state is written as JSON, and a state that serializes to `null` or does not
+serialize at all is refused as `ErrorKind::InvalidRequest`; the questions are checked again for
+the adapter; the latency clock starts; the model is asked. A missing provider, or one that cannot
+be built, is therefore reported before an invalid state or question.
 
 ## Providers
 
@@ -120,17 +184,19 @@ connection pool. `ProviderName` parses from and prints as `openai`, `anthropic` 
 | `builder(model)` | yes | yes | yes | required |
 | `api_key(impl Into<String>)` | yes | yes | yes | the environment, below |
 | `base_url(impl AsRef<str>)` | yes | yes | yes | the environment, else the vendor host, below |
-| `api(OpenAiApi)` | yes | - | - | `OpenAiApi::Responses` when the base URL's host is exactly `api.openai.com`, else `OpenAiApi::ChatCompletions` |
+| `api(OpenAiApi)` | yes | - | - | `OpenAiApi::Responses` when the base URL's host is `api.openai.com` (letter case ignored), else `OpenAiApi::ChatCompletions` |
 | `max_tokens(u32)` | - | yes | - | 4096; 0 is refused |
-| `timeout(Duration)` | yes | yes | yes | 600 s for each attempt; zero is refused |
+| `timeout(Duration)` | yes | yes | yes | 600 s for each whole attempt; zero is refused |
 | `max_response_bytes(usize)` | yes | yes | yes | 16 MiB, the SDK's value; 0 is refused |
-| `add_root_certificate(der)` | yes | yes | yes | none; a certificate is added to the platform's roots and never replaces them |
+| `add_root_certificate(der)` | yes | yes | yes | none; a certificate is added to the platform's roots and never replaces them; the default transport only |
 | `build()` | yes | yes | yes | the default transport, `Transport` |
 | `build_with_service(service)` | yes | yes | yes | the caller's HTTP service in place of `Transport` |
 
-A refused value, a missing key, a key with a byte that is illegal in a header value and a base URL
-that breaks the rules below are each `ErrorKind::Config`, reported when the provider is built and
-never when a request is sent.
+A refused value, a missing key, a key with a byte that is illegal in a header value, a base URL
+that breaks the rules below and an environment variable that is not UTF-8 are each
+`ErrorKind::Config`, reported when the provider is built and never when a request is sent. An
+added root certificate configures the default transport only: `build_with_service` refuses one as
+`ErrorKind::Config` for OpenAI and Anthropic, and ignores it for Gemini.
 
 **Keys.** When `api_key` is not called, the key is read from the environment:
 
@@ -142,8 +208,9 @@ never when a request is sent.
 
 The environment is read once, when a provider is built: by `build()` or `build_with_service` for
 a provider built explicitly, at the first call that uses it for a provider the client owns. A
-variable changed later has no effect on a provider that exists. `GOOGLE_GEMINI_BASE_URL`, the proxy
-variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`) and `SSL_CERT_FILE` are not read.
+variable changed later has no effect on a provider that exists, and an empty variable counts as
+unset. `GOOGLE_GEMINI_BASE_URL`, the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+`NO_PROXY`) and `SSL_CERT_FILE` are not read. With the `internals` feature no variable is read.
 
 The key is sent as `authorization: Bearer` (OpenAI), `x-api-key` with
 `anthropic-version: 2023-06-01` (Anthropic) or `x-goog-api-key` (Gemini). The header value is
@@ -158,35 +225,132 @@ is not called, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` decide which host receiv
 them in any environment that also holds a key. Redirects are not followed: a 3xx answer is an API
 error after exactly one request, so a key is never sent to a host a response named.
 
+The operation's path is appended to the base URL: `/responses` or `/chat/completions` for OpenAI,
+so an OpenAI base URL ends with the version segment as `https://api.openai.com/v1` does;
+`/v1/messages` for Anthropic; `/v1beta/interactions` for Gemini. A path prefix is kept and a
+trailing slash is dropped.
+
 **The OpenAI API.** `OpenAiApi::Responses` is OpenAI's Responses API and
-`OpenAiApi::ChatCompletions` its Chat Completions API. The default follows the host, as upstream's
-does, so a service that speaks OpenAI's protocol on another host gets Chat Completions.
+`OpenAiApi::ChatCompletions` its Chat Completions API; an attempt's trace records them as
+`responses` and `chat_completions`. The default follows the host, as upstream's does, so a
+service that speaks OpenAI's protocol on another host gets Chat Completions.
 The OpenAI-compatible Chat Completions shape is not verified against a live endpoint:
 upstream recorded no exchange of it, and the code is ported from upstream's synthetic tests.
 
-**Response size.** A response body is collected under `max_response_bytes`. A success body over
-the cap is `ErrorKind::Provider` holding the SDK's `ResponseTooLarge` error with the limit; a
-failure status with a body over the cap stays an API error, as in the SDK.
+**Response size.** A response body is read under `max_response_bytes` and never past it; a
+declared length over the cap is refused before a byte is read. A success body over the cap is
+`ErrorKind::Provider` holding the SDK's `ResponseTooLarge` error with the limit. A failure status
+with a body over the cap is an API error with its status and its headers; its body is not kept,
+and its message, printed after the status, is
+`The response body was larger than the limit and is not shown.`
 
 **The default transport.** `Transport` is an opaque HTTP service over a pooled hyper-util client:
-TLS through rustls with the platform's verifier plus the added roots, HTTP/1.1 or HTTP/2 as the
-server negotiates. There is no HTTP-version setting. No hyper type is public.
+TLS through rustls with the platform's verifier plus the added roots, HTTP/2 or HTTP/1.1 as the
+server chooses through ALPN on `https`, HTTP/1.1 on `http`. There is no HTTP-version setting. No
+hyper type is public. Nothing connects until the first request.
 
 **A custom transport.** `build_with_service(service)` takes the caller's HTTP service, with the
-bound the SDK's own `build_with_service` has. The adapter never formats a header value itself, but
-a foreign service may put the request headers into its error. Under
-`build_with_service`, when a call of the service fails, the adapter looks for the key in every
-rendering of the error chain (`Display`, `Debug` and alternate `Debug` of every `source()` link)
-and, on a hit, replaces the whole chain with a fixed text.
+bound the SDK's own `build_with_service` has. The provider still bounds each attempt by its own
+deadline and reads the response under its own cap. The adapter never formats a header value
+itself, but a service may put the request headers into its error: see the next paragraph.
+
+**The key in what comes back.** A server can send the key back, and a service can put it into its
+error. So the adapter searches for the key, with every service, the default `Transport` included,
+before it keeps or shows such text:
+
+- When the service fails: every link of the error chain, up to 32, in `Display`, `Debug` and
+  alternate `Debug`, and the message built from the chain. On a hit, or for a longer chain, the
+  error is a connection error with no source and the text
+  `Connection error: the transport's error is not shown, because showing it could reveal the API key or its chain of causes was too long to search.`
+- A response with a status outside 2xx: the body as it arrived, each header name and value, and
+  then the error built from them. On a hit the API error keeps the status and nothing else: it has
+  no headers, so no request id and no `Retry-After` (a retry then waits the policy's own backoff),
+  `ApiError::is_authentication()` is true only for status 401, and `ApiError::body()` returns a
+  JSON object the adapter wrote, not the server's bytes, whose message, printed after the status,
+  is `The response's body and headers are not shown, because showing them could reveal the API key.`
+  Without a hit the body is kept as it arrived, and the vendor's message read from it may quote
+  other parts of the request.
+- A 2xx response, only when the provider reads a non-answer from it: the body as it arrived, the
+  stop reason, and the non-answer's text. On a hit a built-in provider's non-answer reads
+  `<Vendor> did not answer: the reason is not shown, because showing it could reveal the API key.`
+  with `OpenAI`, `Anthropic` or `Gemini` for `<Vendor>`, its kind stays `ErrorKind::NonAnswer`,
+  and the attempt's `finish_reason` is recorded as `null`. The trace keeps the body as received.
+  A 2xx response that yields answers is not searched.
+
+The search finds the key as written, as `Debug` of a string writes it and as a JSON string holds
+it (with a few spellings derived from these). It does not find a key transformed in another way:
+split over two links of an error chain, in hex or base64, or percent-encoded. A key cut to a
+prefix, or spelled with a JSON `\u` escape for a character that `serde_json` writes as it is, is
+not found in the bytes of a body; it is found only where the adapter or the SDK reads it, whole,
+out of the body into a text (an error message, a stop reason, a non-answer's reason), and such a
+text is cut at 200 characters. So such a key can be shown: in a member of a failure body that no
+message is read from, or as the part before the cut. The search is over the whole body, so a
+very short key hides text often: with the key `test`, any failure response whose body or headers
+hold that word loses its message, its headers and its request id; over the 26 non-answer reasons
+of this crate's test cases, the key `a` hid 26, `x` 12, `sk` 2, and `ab`, `abc` or `key` none.
+Real bodies are longer, so a short placeholder key against a local server hides more there.
 
 **A provider of your own.** `Provider` is a dyn-compatible trait with `model_name()`,
-`request(call)` returning a boxed future, and a provided `type_name()`. `request` receives a
-`ProviderCall` (the messages, the answer schema, whether structured output is asked for, and the
-attempt's `AttemptTrace`) and returns the model's text and token counts as a `ProviderResult`, a
-`NonAnswer` when the model declined or did not finish, or a `typesafe_sdk::Error` for a failure
-the retry policy may retry. `record_request` and `record_response` on the `AttemptTrace` put the
-wire JSON into the trace. `ProviderCall::new`, `AttemptTrace::default()`, `Schema::from_json` and
-`Deserialize` for `Message` exist so that such a provider can be tested outside a client.
+`request(call)` returning a boxed future, and two provided methods, `type_name()` and
+`log_uri()`. `request` receives a `ProviderCall` (the messages, the answer schema, whether
+structured output is asked for, and the attempt's `AttemptTrace`) and returns the model's text and
+token counts as a `ProviderResult`, a `NonAnswer` when the model declined or did not finish, or a
+`typesafe_sdk::Error` for a failure the retry policy may retry. `record_request` and
+`record_response` on the `AttemptTrace` put the wire JSON into the trace, and its getters
+`request()`, `api()`, `response()` and `finish_reason()` read it back. `ProviderCall::new`,
+`AttemptTrace::default()`, `Schema::from_json` and `Deserialize` for `Message` exist so that such a
+provider can be tested outside a client.
+
+The adapter does not search what a provider of your own returns: give `NonAnswer::new` a fixed
+text, such as the vendor's name and a status, never text from a response, which can hold the key.
+
+`log_uri()` names the provider's endpoint in the SDK's retry line (see [Logging](#logging)); the
+client passes it to the retry policy and to nothing else. The default is `None`, and the line
+then names the request as `POST /`; the built-in providers return their log URI. An override
+returns a `Uri` of the `http` crate, version 1, which this crate does not re-export, so its
+crate depends on `http = "1"` itself. The line prints the scheme, the host, the port and the path
+of that URI, never its query or userinfo: put no credential into a path segment.
+
+```rust,no_run
+use std::sync::Arc;
+
+use system_one_adapter::{
+    AnswerMode, BoxFuture, Client, NonAnswer, Provider, ProviderCall, ProviderResult,
+    StructuredOutputs, typesafe_sdk,
+};
+
+/// A model that runs in this process.
+#[derive(Debug)]
+struct LocalModel;
+
+impl Provider for LocalModel {
+    fn model_name(&self) -> &str {
+        "local-model"
+    }
+
+    fn request<'a>(
+        &'a self,
+        call: ProviderCall<'a>,
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+        Box::pin(async move {
+            let prompt: Vec<&str> = call.messages().iter().map(|message| message.content()).collect();
+            match generate(&prompt, call.schema().as_str()).await {
+                Some(text) => Ok(Ok(ProviderResult::new(text, None, None))),
+                // A fixed text, never the model's output.
+                None => Ok(Err(NonAnswer::new("The local model stopped before it finished."))),
+            }
+        })
+    }
+}
+
+# async fn generate(_prompt: &[&str], _schema: &str) -> Option<String> { None }
+fn client() -> Result<Client, system_one_adapter::Error> {
+    Client::builder(StructuredOutputs::Prompted, AnswerMode::Discrete)
+        .provider_instance(Arc::new(LocalModel))
+        .build()
+}
+# fn main() {}
+```
 
 ## Response and trace
 
@@ -197,9 +361,15 @@ wire JSON into the trace. `ProviderCall::new`, `AttemptTrace::default()`, `Schem
 - `usage()`: `input_tokens()` and `output_tokens()` of the last attempt; `input_tokens_total()`
   and `output_tokens_total()` over every attempt that returned a reply, `None` once any of them
   reported none;
-  `n_retries()`; `n_retries_malformed_structure()`; `latency()`, a `Duration` serialized as
-  seconds, measured from after the provider is resolved until the answers are converted.
+  `n_retries()`, the provider retries of every turn; `n_retries_malformed_structure()`;
+  `latency()`, a `Duration` serialized as seconds, measured from after the provider is resolved,
+  the state written and the questions checked until the reply's answers are converted (before
+  `ask` decodes them into its type).
 - `debug()`: the `Trace`, serialized under the member name `debug`.
+
+A choice's confidence is computed as upstream computes it, and is not clamped: labels of equal
+probability can give a negative value of rounding size, for example `-3.469446951953614e-17` for
+five labels at 0.04 each. A score's confidence is never below 0.
 
 `Trace` holds `attempts()` (serialized as `llm_attempts`), `retry_reasons()`, and the probability
 record of the reply: `max_error()`, `invalid_probs()`, `probability_errors()` and
@@ -235,15 +405,17 @@ A `RetryReason` has a `category()` (`RetryCategory::ProviderError` or `Malformed
 
 **What the trace holds, and what `Debug` prints.**
 `Response::debug()`, `Error::debug()` and their serialized form hold the caller's document and the model's text:
-every message sent, the schema, each request body and each response body. Treat a serialized
-response or trace as the data it was made from. `Debug` of `Error`, `Response`, `Trace`,
+every message sent, the schema, each request body and each response body as it was received,
+with whatever else the vendor put into it. Treat a serialized response or trace as the data it was
+made from. `Debug` of `Error`, `Response`, `Trace`,
 `Attempt`, `RetryReason`, `Message`, `ProviderResult`, `AttemptTrace` and `Schema` prints counts
 and kinds only: the model name, the usage, the number of answers, attempts, messages and retry
 reasons, retry categories, roles, `api`, `finish_reason`, `error_type` and byte lengths; never
 message content, the schema, request or response text, a retry reason's message or an attempt's
 `error` text. One exception: `ErrorKind::Provider` renders the SDK error by the SDK's own rules
 (the status, the endpoint, the vendor's message escaped and cut at 200 characters, the body as a
-byte count), and a vendor's error message may quote parts of the request.
+byte count), and a vendor's error message may quote parts of the request; a message that would
+show the key is replaced (see "The key in what comes back" under [Providers](#providers)).
 
 ## Errors
 
@@ -255,15 +427,16 @@ raised before the first attempt.
 | --- | --- |
 | `Provider(typesafe_sdk::Error)` | The request failed and the retry policy gave up: the SDK's `Api`, `Connection`, `Timeout` or `ResponseTooLarge` kind. |
 | `NonAnswer(NonAnswer)` | A 2xx answer the provider declared unfinished or refused, or a 2xx body that is not the vendor's JSON. Never retried. |
-| `MalformedStructure` | The model's output still does not fit the answer schema after the last corrective turn. |
-| `InvalidRequest` | No model, no provider, an unknown question type, fewer than two criteria, or a state that serializes to `null`. Nothing was sent. |
-| `Config` | A provider could not be built: no key, a key with a byte that is illegal in a header value, a base URL that breaks the rules, `max_tokens` of 0, `max_response_bytes` of 0, a zero `timeout`, or the TLS roots. |
+| `MalformedStructure` | The model's output still does not fit the answer schema after the last corrective turn, or, after `ask`, the answers do not fit the question set's type. |
+| `InvalidRequest` | No model, no provider, no question, an unknown question type, fewer than two criteria, or a state that serializes to `null` or does not serialize to JSON. Nothing was sent. |
+| `Config` | A provider could not be built: no key, a key with a byte that is illegal in a header value, a base URL that breaks the rules, an environment variable that is not UTF-8, `max_tokens` of 0, `max_response_bytes` of 0, a zero `timeout`, a root certificate given to `build_with_service`, or the TLS roots. |
 
 `ErrorKind` is `#[non_exhaustive]`. The `Display` of an `Error` holds no model output and no
-response text, with the exception named above for `ErrorKind::Provider`. A `NonAnswer` names the
-vendor and the status, the stop reason or the word `refusal`, escaped and cut as the SDK cuts
-server text; the refusal text and an error message from the body stay in the attempt's
-`llm_response`. The text of `MalformedStructure`, which is also the retry reason and the message
+response text, with the exception named above for `ErrorKind::Provider`. A built-in provider's
+`NonAnswer` names the vendor and the status, the stop reason or the word `refusal`, escaped and cut
+as the SDK cuts server text, or reads the fixed text of the key search; the refusal text and an
+error message from the body stay in the attempt's `llm_response`. The text of
+`MalformedStructure`, which is also the retry reason and the message
 of the corrective turn, names the expected question ids, the expected labels and the JSON type
 found, never a string the model chose; it lists at most 8 problems and counts the rest.
 
@@ -275,8 +448,8 @@ Two loops run inside one call.
 in `typesafe-sdk-rust`: which errors are retried, the backoff, `Retry-After`, and a caller's
 predicate. The default is `RetryPolicy::none()`, as upstream's default is no retry; pass
 `RetryPolicy::default()` or a policy of your own to the builder or to one call. Each retry adds a
-`RetryCategory::ProviderError` reason to the trace. A `NonAnswer` ends the call without a retry
-and never reaches the policy's predicate.
+`RetryCategory::ProviderError` reason to the trace, whose message is the failed attempt's error
+text. A `NonAnswer` ends the call without a retry and never reaches the policy's predicate.
 
 The policy's budget (30 s by default) is checked only before a retry, and each attempt has its own
 deadline (`timeout`, 600 s by default): a policy with retries makes no second attempt after an
@@ -292,17 +465,27 @@ own run of the retry policy.
 
 ## Logging
 
-With the `tracing` feature (on by default) the adapter emits one event per finished attempt at
-`DEBUG` on the target `system_one_adapter`, with these fields only: the method, the log URI, the
-status when a response arrived, the attempt number, the elapsed milliseconds, the input and output
-token counts, and on failure the name of the error kind. Never a header, a body, a message, the
-schema or an error's text.
+With the `tracing` feature (on by default) the adapter emits two kinds of events, both at `DEBUG`
+on the target `system_one_adapter`:
+
+- one per HTTP exchange of a built-in provider: the method, the log URI, the status when a
+  response arrived, the name of the error's kind when the exchange failed (`Api`, `Connection`,
+  `Timeout` or `ResponseTooLarge`), and the elapsed milliseconds;
+- one per finished attempt, from the client: the attempt's number within the call, the elapsed
+  milliseconds, the input and output token counts of a reply, and on failure the name of the
+  error's kind (`NonAnswer` among them). It has no method, URI or status. A provider of your own
+  gets this event and not the first.
+
+Neither holds a header, a body, a message, the schema or an error's text. Below the default
+transport, crates such as `hyper_util` and `h2` emit events of their own under their own targets;
+the key's header value is marked sensitive, so they print `Sensitive` in its place. rustls logs
+through the `log` crate, not `tracing`.
 
 The retry log line is the SDK's, not the adapter's: before each retry the SDK writes the method,
-the log URI and the retry number at `INFO` on the target `typesafe_sdk`. That line exists only
-when the SDK is built with its `tracing` feature, which this crate's `tracing` feature turns on;
-a build with `default-features = false` and no `tracing` has neither the events nor the retry
-line.
+the log URI that `Provider::log_uri()` returns (`POST /` for `None`) and the retry number at
+`INFO` on the target `typesafe_sdk`. That line exists only when the SDK is built with its
+`tracing` feature, which this crate's `tracing` feature turns on; a build with
+`default-features = false` and no `tracing` has neither the events nor the retry line.
 
 The log URI is the scheme, the host (and the port when it is not the scheme's default) and the
 fixed path of the operation as the vendor documents it: `/v1/responses`, `/v1/chat/completions`,
@@ -313,8 +496,15 @@ a caller's base URL.
 
 `cargo nextest run` and `cargo test`, without `--workspace`, run the workspace's default members,
 this crate among them. Its tests replay recorded and scripted HTTP exchanges against a local
-server and need neither a key nor the network; several test binaries need a feature, so
-`cargo nextest run -p typesafe-sdk-rust-adapter --all-features` runs them all.
+server and need neither a key nor the network. Several test binaries need a feature:
+`providers_openai`, `providers_anthropic`, `providers_gemini`, `cassettes`, `lifecycle`,
+`parity_schema` and `parity_metrics` need `internals` (with the default providers), under which
+the library reads no process environment, so no test can pick up a key of the machine it runs on;
+`typed` needs `macros`. `cargo nextest run -p typesafe-sdk-rust-adapter --all-features` runs them
+all, and `--features internals` all but `typed`. `docs/adapter-port-test-matrix.md` maps every
+test of the Python adapter to the Rust tests that cover it, the deviation that explains why none
+does, or the reason it was left out, and `docs/uncovered-lines.md` records this crate's measured
+line coverage and why each uncovered line is not reached.
 
 The files under `tests/fixtures/` are upstream's recorded exchanges and expected responses. A new
 or re-recorded fixture must pass `python3 .github/scripts/no-placeholders.py` and
@@ -333,6 +523,15 @@ TYPESAFE_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_AP
 
 `--no-fail-fast` because nextest otherwise stops at the first failure and the remaining cases are
 not run; `--retries 0` because a case that is run again is billed again.
+
+The crate runs upstream's two live tests for the three providers, the two structured modes and the
+two answer modes: 24 cases, each one request with no retry and no corrective turn, under a deadline
+of 120 s. The models are upstream's: `gpt-4o-mini`, `claude-haiku-4-5` and
+`gemini-3.5-flash-lite`. Each case reads its key in the test, gives it to the provider's builder
+through `api_key`, and hands the provider to the client through `provider_instance`; a
+`--workspace` build turns on `internals` for the adapter, which then reads no process
+environment. Each case writes one line to stderr, `live-request <provider> <structured> <mode>
+attempts=<n>`, so the requests a run sent can be counted from its output.
 
 ## Deviations from the Python adapter
 
@@ -371,6 +570,7 @@ repository.
 | Number text of non-string content | Instructions and criteria that are not strings are written with pydantic's `to_json` (`_schema.py:250-255`). | Their compact JSON text as the SDK prepared it, kept unparsed in member order; a number keeps the text the SDK's serializer wrote, which is not always pydantic's text for the same number. The number text of a `serde_json::Value` state differs from Python too, for `-0`, an integer beyond u64 and `1e400`: see the row `Non-finite numbers in the state`. |
 | Response-size cap | The vendor SDK clients are built with no size limit (`providers/openai.py:121`). | 16 MiB by default, as the SDK; a success body over the cap is `ErrorKind::Provider` carrying the SDK's `ResponseTooLarge` with the limit; a cap of 0 is a `Config` error. |
 | A `null` state | Refuses `state is None` with a `ValueError` before serializing (`_client.py:431-432`). | Any state that serializes to `null` (`None`, `()`, a unit struct) is `InvalidRequest`. |
+| Duplicate members | Pydantic's parser keeps the last value of a member written twice in the reply and ignores an earlier value that does not fit, but it still parses that earlier value as JSON: a lone surrogate escape, or nesting of 200 levels or more, inside an earlier duplicate makes it refuse the whole reply (no upstream line). | The last value is used too, and an earlier duplicate's value is skipped without being parsed, so such a reply is accepted. A lone surrogate escape in the last duplicate, in a member name or in a chosen label is refused by both. |
 
 ## License
 

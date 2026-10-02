@@ -25,7 +25,7 @@ pub mod __internals;
 /// question set with `#[derive(QuestionSet)]` either depends on
 /// `typesafe-sdk-rust` directly, with its `macros` feature, or enables this
 /// crate's `macros` feature and points the derive here with
-/// `#[question_set(crate = "system_one_adapter::typesafe_sdk")]`, because the
+/// `#[question_set(crate = system_one_adapter::typesafe_sdk)]`, because the
 /// derive's expansion names `::typesafe_sdk` unless told otherwise.
 pub use typesafe_sdk;
 
