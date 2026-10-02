@@ -9,9 +9,9 @@
 //!
 //! A build with the `internals` feature never reads the process environment
 //! for a provider, whether or not a replacement is in force: while none is,
-//! every variable is unset. A test that forgets [`replace`] therefore gets a
-//! provider without a key, and not one that holds the key of the machine it
-//! runs on and could send a billed request with it. The same holds for any
+//! every variable is unset. A test that forgets [`replace`] therefore sees
+//! every variable unset, and so never the key of the machine it runs on,
+//! with which it could send a billed request. The same holds for any
 //! program built with the feature: its providers take their keys and base
 //! URLs from their builders or from a replacement, never from the process
 //! environment.
