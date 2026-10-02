@@ -1345,6 +1345,50 @@ async fn no_event_of_any_target_holds_the_key_or_the_base_urls_path() {
     }
 }
 
+/// The test above reads spans too, and so guards a field of a span of
+/// another crate: this one shows that the recorder does keep them.
+#[cfg(feature = "tracing")]
+#[test]
+fn the_recorder_keeps_the_fields_of_every_span_and_at_returns_events_only() {
+    use tracing::{Level, field::Empty};
+
+    let recorder = recorder::Recorder::default();
+    let installed = recorder::install(&recorder);
+
+    // A span of another crate, as `h2` opens one per frame it writes: one
+    // field has its value when the span is opened, the other gets it later.
+    let foreign = tracing::trace_span!(
+        target: "another_crate::codec",
+        "write_frame",
+        frame = "marker-at-open-5d1c",
+        flushed = Empty,
+    );
+    // A span of the adapter's own target: `at` leaves it out for being a
+    // span, not for its target.
+    let own =
+        tracing::trace_span!(target: "system_one_adapter", "attempt", note = "marker-own-77aa");
+    foreign.record("flushed", "marker-recorded-later-8e2a");
+    own.record("note", "marker-own-later-3b90");
+    tracing::trace!(target: "system_one_adapter", note = "marker-event-c4f1");
+    drop(installed);
+
+    assert_ne!(foreign.id(), own.id(), "each span has its own id");
+    assert_eq!(
+        recorder.all(),
+        [
+            r#"another_crate::codec write_frame frame="marker-at-open-5d1c""#,
+            r#"system_one_adapter attempt note="marker-own-77aa""#,
+            r#"another_crate::codec write_frame flushed="marker-recorded-later-8e2a""#,
+            r#"system_one_adapter attempt note="marker-own-later-3b90""#,
+            r#"system_one_adapter note="marker-event-c4f1""#,
+        ]
+    );
+    assert_eq!(recorder.at(Level::TRACE), [r#" note="marker-event-c4f1""#]);
+    for level in [Level::DEBUG, Level::INFO, Level::WARN, Level::ERROR] {
+        assert!(recorder.at(level).is_empty(), "{level}");
+    }
+}
+
 // ------------------------------------------------------ the default transport
 
 #[tokio::test]
