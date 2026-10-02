@@ -1389,10 +1389,10 @@ fn sentinel_state() -> Value {
     json!({"review": format!("A delightful book. {SENTINEL}"), "reader": {"note": SENTINEL}})
 }
 
-/// The calls whose output must not hold the sentinel: an answer, a failure
-/// status whose body does not repeat the request, a non-answer, and a reply
-/// that is not the answers.
-async fn calls_with_the_sentinel() -> (Response<Answers>, Vec<Error>) {
+/// The calls whose output must not hold the sentinel: an answer, an answer
+/// after one retry, a failure status whose body does not repeat the request,
+/// a non-answer, and a reply that is not the answers.
+async fn calls_with_the_sentinel() -> (Vec<Response<Answers>>, Vec<Error>) {
     let state = sentinel_state();
     let questions = positive();
     let ask = async |status: StatusCode, reply: String| {
@@ -1408,7 +1408,36 @@ async fn calls_with_the_sentinel() -> (Response<Answers>, Vec<Error>) {
         result
     };
 
-    let response = ask(StatusCode::OK, responses_reply(ANSWER).to_string()).await.expect("answers");
+    let answered = ask(StatusCode::OK, responses_reply(ANSWER).to_string()).await.expect("answers");
+
+    // A call the retry policy retries, so that the SDK logs its retry line.
+    // The failure's message quotes the state, as a vendor's may; the call
+    // then answers, so that text reaches only the trace's retry reason.
+    let server = TestServer::start_nth(Protocol::Http1, |nth, _| match nth {
+        1 => json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": {"message": format!("unavailable for: {SENTINEL}")}}).to_string(),
+        ),
+        _ => json_response(StatusCode::OK, responses_reply(ANSWER).to_string()),
+    })
+    .await
+    .expect("a loopback server");
+    let retried = Client::builder(StructuredOutputs::Native, AnswerMode::Discrete)
+        .retry(retries(1))
+        .provider_instance(provider(server.base_url(), OpenAiApi::Responses))
+        .build()
+        .expect("the client builds")
+        .system_one(&state, &questions)
+        .send()
+        .await
+        .expect("the second request answers");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        let sent = String::from_utf8(request.body.to_vec()).expect("UTF-8");
+        assert!(sent.contains(SENTINEL), "{sent}");
+    }
+
     let errors = vec![
         ask(StatusCode::SERVICE_UNAVAILABLE, r#"{"error":{"message":"unavailable"}}"#.to_owned())
             .await
@@ -1420,32 +1449,39 @@ async fn calls_with_the_sentinel() -> (Response<Answers>, Vec<Error>) {
             .await
             .expect_err("a reply that is not the answers"),
     ];
-    (response, errors)
+    (vec![answered, retried], errors)
 }
 
 #[tokio::test]
 async fn user_data_not_printed_by_an_error_a_response_or_an_event() {
     #[cfg(feature = "tracing")]
     let events = recorder::Recorder::default();
-    let (response, errors) = {
+    let (responses, errors) = {
         #[cfg(feature = "tracing")]
         let _installed = recorder::install(&events);
         calls_with_the_sentinel().await
     };
 
-    let mut texts = vec![format!("{response:?}"), format!("{response:#?}")];
-    let mut traces = vec![response.debug()];
+    let mut texts = Vec::new();
+    // Each trace with the number of attempts it records: the retried call
+    // records its failed attempt and its answer.
+    let mut traces = Vec::new();
+    assert_eq!(responses.len(), 2);
+    for (response, attempts) in responses.iter().zip([1, 2]) {
+        texts.extend([format!("{response:?}"), format!("{response:#?}")]);
+        traces.push((response.debug(), attempts));
+    }
     assert_eq!(errors.len(), 3);
     for error in &errors {
         texts.extend([format!("{error}"), format!("{error:?}"), format!("{error:#?}")]);
         for link in chain(error) {
             texts.extend([link.to_string(), format!("{link:?}")]);
         }
-        traces.push(error.debug().expect("the error carries a trace"));
+        traces.push((error.debug().expect("the error carries a trace"), 1));
     }
-    for trace in traces {
+    for (trace, attempts) in traces {
         texts.extend([format!("{trace:?}"), format!("{trace:#?}")]);
-        assert_eq!(trace.attempts().len(), 1);
+        assert_eq!(trace.attempts().len(), attempts);
         for attempt in trace.attempts() {
             texts.extend([format!("{attempt:?}"), format!("{attempt:#?}")]);
         }
@@ -1458,6 +1494,8 @@ async fn user_data_not_printed_by_an_error_a_response_or_an_event() {
         let lines = events.all();
         assert!(!lines_of(&lines, ADAPTER_TARGET).is_empty(), "{lines:?}");
         assert!(!events.at(tracing::Level::DEBUG).is_empty(), "{lines:?}");
+        // The retried call's retry line, so that the SDK's half is checked.
+        assert!(!lines_of(&lines, SDK_TARGET).is_empty(), "{lines:?}");
         texts.extend(lines);
     }
 
