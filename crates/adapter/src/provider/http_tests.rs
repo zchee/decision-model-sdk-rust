@@ -686,6 +686,31 @@ async fn a_key_the_sdk_would_cut_out_of_a_failure_message_is_not_shown_in_part()
     assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
 }
 
+#[tokio::test]
+async fn a_key_in_a_member_of_a_failure_body_the_sdk_reads_no_message_from_is_not_shown() {
+    // The key is in a member beside the message. The SDK's error shows the
+    // message and prints no body, so no rendering of the built error holds
+    // the key: only the search of the bytes as they arrived finds it, and
+    // without it `ApiError::body()` would hand the key to the caller.
+    let body = serde_json::json!({
+        "error": { "message": "denied" },
+        "debug": { "sent": format!("Bearer {KEY}") },
+    });
+    let body = Bytes::from(body.to_string());
+    let shown = ApiError::from_response(StatusCode::FORBIDDEN, body.clone(), HeaderMap::new());
+    assert_eq!(shown.to_string(), "403 denied");
+    assert_eq!(key_occurrences(&shown), 0);
+    assert_eq!(occurrences(shown.body_text().as_ref(), KEY), 1);
+    let fixture = Fixture::new("http://scripted.invalid", limits(None));
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::FORBIDDEN, vec![body]))
+        .await
+        .expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::FORBIDDEN, KEY);
+}
+
 // ----------------------------------------------------- status, deadline, connect
 
 /// Sends one request to a server answering `status` with upstream's body and
