@@ -54,8 +54,10 @@ client.
 2. Name the model: `.provider(ProviderName::OpenAi).model("gpt-4o-mini")` on the builder, or the
    same two methods on each call. `build()` connects to nothing and reads no environment
    variable.
-3. Prepare the questions with the SDK's builder, re-exported here:
-   `Questions::new().noul("positive", Noul::new().instructions("The review is positive.")).prepare()`.
+3. Prepare the questions with the SDK's builder, re-exported here: start from `Questions::new()`,
+   add each question by name, for example
+   `.noul("positive", Noul::new().instructions("The review is positive."))`, and end with
+   `.prepare()`.
 4. Call `client.system_one(&state, &questions)`, where `state` is any value that implements
    `serde::Serialize` (the document the questions are about), optionally override `provider`,
    `model`, `provider_instance` or `retry` for this call, then `.send().await`.
@@ -85,7 +87,7 @@ unless told otherwise, and a crate that depends on the adapter alone has no crat
 | `provider(ProviderName)` | none | The built-in provider that a model name is given to. |
 | `model(impl Into<String>)` | none | The model name. |
 | `provider_instance(Arc<dyn Provider>)` | none | A provider the caller built or implemented. It is borrowed: the client never caches it. |
-| `normalize_probabilities(bool)` | `false` | Whether a probability distribution of a choice or score question whose sum is off by more than 1e-6 is rescaled to sum to 1. The trace records how far each sum was off and, for a rescaled one, the original values. |
+| `normalize_probabilities(bool)` | `false` | Whether a probability distribution of a choice or score question whose sum is off by more than 1e-6 is rescaled to sum to 1. The trace records the largest error of any distribution's sum, each error beyond 1e-6 and, for a rescaled distribution, the original values. |
 | `n_retry_malformed_structure(u32)` | `0` | How many corrective turns follow a reply that does not fit the answer schema. |
 | `retry(RetryPolicy)` | `RetryPolicy::none()` | The SDK's retry policy for provider failures (see [Retries](#retries)). |
 
@@ -159,7 +161,8 @@ error after exactly one request, so a key is never sent to a host a response nam
 **The OpenAI API.** `OpenAiApi::Responses` is OpenAI's Responses API and
 `OpenAiApi::ChatCompletions` its Chat Completions API. The default follows the host, as upstream's
 does, so a service that speaks OpenAI's protocol on another host gets Chat Completions.
-The OpenAI-compatible Chat Completions shape is not verified against a live endpoint: upstream recorded no exchange of it, and the code is ported from upstream's synthetic tests.
+The OpenAI-compatible Chat Completions shape is not verified against a live endpoint:
+upstream recorded no exchange of it, and the code is ported from upstream's synthetic tests.
 
 **Response size.** A response body is collected under `max_response_bytes`. A success body over
 the cap is `ErrorKind::Provider` holding the SDK's `ResponseTooLarge` error with the limit; a
@@ -192,7 +195,8 @@ wire JSON into the trace. `ProviderCall::new`, `AttemptTrace::default()`, `Schem
 - `model()`: the model that answered.
 - `answers()` / `into_answers()`: the SDK's `Answers`, or the caller's question set after `ask`.
 - `usage()`: `input_tokens()` and `output_tokens()` of the last attempt; `input_tokens_total()`
-  and `output_tokens_total()` over every attempt, `None` once any attempt reported none;
+  and `output_tokens_total()` over every attempt that returned a reply, `None` once any of them
+  reported none;
   `n_retries()`; `n_retries_malformed_structure()`; `latency()`, a `Duration` serialized as
   seconds, measured from after the provider is resolved until the answers are converted.
 - `debug()`: the `Trace`, serialized under the member name `debug`.
@@ -212,7 +216,8 @@ serializes with these members, in this order:
 {"messages":[{"role":..,"content":..},..],
  "model_request_parameters":{"schema":<the schema object>,"structured":<bool>},
  "llm_response":<wire body, fallback object or null>,
- "debug_info":{"model_name":..,"provider":..,"api":..,"finish_reason":..,"error":..,"error_type":..},
+ "debug_info":{"model_name":..,"provider":..,"api":..,"finish_reason":..,
+               "error":..,"error_type":..},
  "request":<the request body>}
 ```
 
@@ -335,7 +340,8 @@ Each row says what system-one-adapter-python 0.2.1 does, with the upstream line,
 crate does instead. Upstream lines are cited as `path:line` at commit `e1d4cc9`; a path that
 starts with `_` or `providers/` is relative to `src/system_one_adapter/`. A path that starts with
 `openai/`, `anthropic/`, `google/` or `httpx2/` is a file of that vendor package as upstream's
-`uv.lock` installs it.
+`uv.lock` installs it. A path that starts with `tests/` is relative to the root of upstream's
+repository.
 
 | Deviation | Python adapter | This crate |
 | --- | --- | --- |
@@ -368,8 +374,8 @@ starts with `_` or `providers/` is relative to `src/system_one_adapter/`. A path
 
 ## License
 
-This crate is licensed under the Apache License 2.0; see [`LICENSE`](LICENSE). It is a port of
+This crate is licensed under the Apache License 2.0; see `LICENSE`. It is a port of
 system-one-adapter-python 0.2.1 (commit `e1d4cc9`), which is MIT-licensed; that license text is
-reproduced, as the upstream repository ships it, in [`LICENSE-THIRD-PARTY`](LICENSE-THIRD-PARTY)
+reproduced, as the upstream repository ships it, in `LICENSE-THIRD-PARTY`
 and applies to the material derived from it, including the recorded exchanges and expected
 responses under `tests/fixtures/`.
