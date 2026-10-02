@@ -236,11 +236,13 @@ impl Error {
     /// A success response's body was larger than `limit` bytes: an
     /// [`ErrorKind::ResponseTooLarge`] carrying the limit, with no cause.
     ///
-    /// A [`RetryPolicy`](crate::RetryPolicy) never retries this kind, because
-    /// the same request gets as large an answer again. Code that reads a
-    /// response body under its own cap returns this error for a success
-    /// body over the cap, so that it reads as the SDK's own limit does. A
-    /// failure status with a large body is an [`ApiError`] instead.
+    /// The built-in rule of a [`RetryPolicy`](crate::RetryPolicy) never
+    /// retries this kind, because the same request gets as large an answer
+    /// again; only a caller's [`predicate`](crate::RetryPolicy::predicate)
+    /// can ask for a retry of it. Code that reads a response body under its
+    /// own cap returns this error for a success body over the cap, so that
+    /// it reads as the SDK's own limit does. A failure status with a large
+    /// body is an [`ApiError`] instead.
     ///
     /// ```
     /// use typesafe_sdk::{Error, ErrorKind};
