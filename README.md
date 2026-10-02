@@ -255,9 +255,9 @@ Code that sends its own requests builds the same kinds with four public construc
   `ApiError` instead.
 - `ApiError::from_response(status, body, headers)`: a response with an unsuccessful `status`,
   its message read out of `body` as `message()` describes. It names no endpoint (`endpoint()` is
-  `None`), so `Display` is the status and the message alone, as `429 Rate limit reached`; the
-  headers are kept for `retry_after()` and `request_id()`. `Error::from` turns it into an `Api`
-  error.
+  `None`), so `Display` is the status and the message, as `429 Rate limit reached`, followed by
+  ` (request_id=...)` when `headers` hold a request id (`x-typesafe-request-id`); the headers are
+  kept for `retry_after()` and `request_id()`. `Error::from` turns it into an `Api` error.
 
 A custom transport under the SDK's `Client` (see Custom transport) can fail with
 `Error::timeout` or `Error::connection`, boxed as its own error type: the SDK does not wrap an
