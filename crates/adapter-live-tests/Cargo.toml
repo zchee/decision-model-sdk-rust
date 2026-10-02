@@ -18,5 +18,9 @@ name = "adapter_live_tests"
 # Default features: every built-in provider.
 typesafe-sdk-rust-adapter = { path = "../adapter" }
 
+[dev-dependencies]
+# An async runtime for the tests (`#[tokio::test]`).
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true

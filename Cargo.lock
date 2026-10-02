@@ -2013,6 +2013,7 @@ dependencies = [
 name = "typesafe-sdk-rust-adapter-live-tests"
 version = "0.0.0"
 dependencies = [
+ "tokio",
  "typesafe-sdk-rust-adapter",
 ]
 
