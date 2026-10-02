@@ -1382,6 +1382,190 @@ async fn a_failure_body_that_repeats_the_key_is_not_shown() {
     assert_eq!(occurrences(&json, KEY), 0, "{json}");
 }
 
+// ------------------------------------------ a success reply that repeats the key
+
+/// The non-answer of a success reply that the key search has a hit for.
+const KEY_NOT_SHOWN: &str =
+    "OpenAI did not answer: the reason is not shown, because showing it could reveal the API key.";
+
+/// A made-up key longer than the 200 characters a non-answer keeps of a
+/// reason.
+fn long_key() -> String {
+    format!("sk-test-{}", "0123456789".repeat(25))
+}
+
+/// `key` as a JSON string can spell it with its last character as a `\u`
+/// escape. The escape is built here from a backslash character, so no tool
+/// that writes this file can turn it back into the letter.
+fn escaped_last_character(key: &str) -> String {
+    let last = key.chars().next_back().expect("a key is not empty");
+    let kept = &key[..key.len() - last.len_utf8()];
+    format!("{kept}{}u{:04x}", '\\', u32::from(last))
+}
+
+/// `reply` as JSON text with every `key` in it spelled as `spelled`.
+fn spelling_key(reply: &Value, key: &str, spelled: &str) -> String {
+    let body = reply.to_string().replace(key, spelled);
+    assert_eq!(occurrences(&body, key), 0, "{body}");
+    assert!(occurrences(&body, spelled) > 0, "{body}");
+    body
+}
+
+/// One call through `api` with a provider built with `key`, to a server
+/// that answers every request with `body`.
+async fn key_echo(
+    api: OpenAiApi,
+    key: &str,
+    body: String,
+) -> (Result<Response<Answers>, Error>, TestServer) {
+    let server = answering(StatusCode::OK, body).await;
+    let provider =
+        builder(server.base_url()).api_key(key).api(api).build().expect("the provider builds");
+    let result = evaluate(evaluating(false), Arc::new(provider)).await;
+    (result, server)
+}
+
+/// `error` is the non-answer [`KEY_NOT_SHOWN`] of the one attempt `server`
+/// was asked for, its recorded stop reason is cleared, `leak` occurs in none
+/// of the error's renderings, the attempt's error, `Debug` or serialized
+/// `debug_info`, and the recorded response still holds `received`, the
+/// reply's own spelling of the key.
+#[track_caller]
+fn assert_key_not_shown(error: &Error, server: &TestServer, leak: &str, received: &str) {
+    assert_eq!(non_answer_message(error), KEY_NOT_SHOWN);
+    assert_eq!(error.to_string(), KEY_NOT_SHOWN);
+    assert_eq!(server.request_count(), 1, "a non-answer is not asked for again");
+    let mut texts = Vec::new();
+    for link in chain(error) {
+        texts.extend([link.to_string(), format!("{link:?}"), format!("{link:#?}")]);
+    }
+
+    let trace = error.debug().expect("the error carries a trace");
+    assert_eq!(trace.attempts().len(), 1);
+    let attempt = &trace.attempts()[0];
+    assert_eq!(attempt.error(), Some(KEY_NOT_SHOWN));
+    assert_eq!(attempt.error_type(), Some("NonAnswer"));
+    assert_eq!(attempt.finish_reason(), None);
+    let serialized = serde_json::to_string(attempt).expect("the attempt serializes");
+    let value: Value = serde_json::from_str(&serialized).expect("JSON");
+    let debug_info = &value["debug_info"];
+    assert_eq!(debug_info.get("finish_reason"), Some(&Value::Null), "{debug_info}");
+    assert_eq!(debug_info["error"], KEY_NOT_SHOWN);
+    texts.extend([
+        format!("{attempt:?}"),
+        format!("{attempt:#?}"),
+        format!("{trace:?}"),
+        format!("{trace:#?}"),
+        debug_info.to_string(),
+    ]);
+    for text in &texts {
+        assert_eq!(occurrences(text, leak), 0, "{text}");
+    }
+
+    // The recorded response is kept as received, the key included.
+    let response = attempt.response().expect("the response is recorded");
+    assert!(occurrences(response, received) > 0, "{response}");
+    assert!(occurrences(&serialized, received) > 0, "{serialized}");
+}
+
+#[tokio::test]
+async fn key_echo_in_the_response_status() {
+    let mut reply = responses_reply(ANSWER);
+    reply["status"] = json!(KEY);
+
+    let (result, server) = key_echo(OpenAiApi::Responses, KEY, reply.to_string()).await;
+
+    let error = result.expect_err("a status that is not completed");
+    assert_key_not_shown(&error, &server, KEY, KEY);
+}
+
+#[tokio::test]
+async fn key_echo_in_the_chat_finish_reason() {
+    let reply = chat_reply(ANSWER, Some(KEY));
+
+    let (result, server) = key_echo(OpenAiApi::ChatCompletions, KEY, reply.to_string()).await;
+
+    let error = result.expect_err("a finish reason that is not stop");
+    assert_key_not_shown(&error, &server, KEY, KEY);
+}
+
+#[tokio::test]
+async fn key_echo_cut_in_the_incomplete_reason() {
+    // Only the search of the body as it arrived finds this key: the reason
+    // is not the recorded stop reason, and the non-answer would hold only
+    // its first 200 characters.
+    let key = long_key();
+    let mut reply = responses_reply(ANSWER);
+    reply["status"] = json!("incomplete");
+    reply["incomplete_details"] = json!({"reason": key});
+
+    let (result, server) = key_echo(OpenAiApi::Responses, &key, reply.to_string()).await;
+
+    let error = result.expect_err("an incomplete response");
+    assert_key_not_shown(&error, &server, &key[..40], &key);
+}
+
+#[tokio::test]
+async fn key_echo_escaped_in_the_incomplete_reason() {
+    // Only the search of the built non-answer finds this key: the body
+    // spells it with an escape, and the reason is not the recorded stop
+    // reason.
+    let mut reply = responses_reply(ANSWER);
+    reply["status"] = json!("incomplete");
+    reply["incomplete_details"] = json!({"reason": KEY});
+    let spelled = escaped_last_character(KEY);
+    let body = spelling_key(&reply, KEY, &spelled);
+
+    let (result, server) = key_echo(OpenAiApi::Responses, KEY, body).await;
+
+    let error = result.expect_err("an incomplete response");
+    assert_key_not_shown(&error, &server, KEY, &spelled);
+}
+
+#[tokio::test]
+async fn key_echo_cut_and_escaped_in_the_status() {
+    // Only the search of the decoded stop reason finds this key: the body
+    // spells it with an escape, and the non-answer would hold only its first
+    // 200 characters.
+    let key = long_key();
+    let mut reply = responses_reply(ANSWER);
+    reply["status"] = json!(key);
+    let spelled = escaped_last_character(&key);
+    let body = spelling_key(&reply, &key, &spelled);
+
+    let (result, server) = key_echo(OpenAiApi::Responses, &key, body).await;
+
+    let error = result.expect_err("a status that is not completed");
+    assert_key_not_shown(&error, &server, &key[..40], &spelled);
+}
+
+#[tokio::test]
+async fn key_echo_in_an_unread_member_is_returned() {
+    // The key in members no reader reads, beside a valid answer: an answer
+    // is never searched, and the trace keeps the body as received.
+    let mut responses = responses_reply(ANSWER);
+    responses["id"] = json!(KEY);
+    responses["output"][0]["id"] = json!(KEY);
+    let mut chat = chat_reply(ANSWER, Some("stop"));
+    chat["id"] = json!(KEY);
+    chat["system_fingerprint"] = json!(KEY);
+
+    for (api, reply, finish_reason) in
+        [(OpenAiApi::Responses, responses, "completed"), (OpenAiApi::ChatCompletions, chat, "stop")]
+    {
+        let (result, server) = key_echo(api, KEY, reply.to_string()).await;
+
+        let response = result.expect("an answer");
+        assert_eq!(response.answers().noul("positive").expect("a noul").noul(), 1.0);
+        assert_eq!(server.request_count(), 1);
+        let attempt = &response.debug().attempts()[0];
+        assert_eq!(attempt.finish_reason(), Some(finish_reason));
+        assert_eq!(attempt.error(), None);
+        let recorded = attempt.response().expect("the response is recorded");
+        assert_eq!(occurrences(recorded, KEY), 2, "{recorded}");
+    }
+}
+
 // ------------------------------------------------- user data is not printed
 
 /// A state that holds the sentinel.
