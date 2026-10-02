@@ -178,6 +178,11 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+      - name: Documentation of the adapter without default features
+        run: cargo doc --no-deps --no-default-features -p typesafe-sdk-rust-adapter
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # Running the fuzz targets needs nightly; checking them does not:
       # stable compiles them, together with libFuzzer's C++ runtime, so a
       # change to the hidden seam they call through breaks here instead of
