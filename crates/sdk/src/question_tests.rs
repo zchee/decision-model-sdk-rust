@@ -789,6 +789,24 @@ fn compiled_sets_compare_their_name_boundaries() {
     assert_eq!(two_names.names().collect::<Vec<_>>(), ["a", "b"]);
 }
 
+/// `as_json` is the JSON object the set is sent as, ending where the JSON does
+/// (the names that follow it in the buffer are left out), for a set prepared
+/// at run time and for one compiled into the program; `Debug` prints it.
+#[test]
+fn seam_as_json() {
+    let json = r#"{"billing":{"type":"noul"},"":{"type":"noul","instructions":"Spam?"}}"#;
+    let prepared = Questions::new()
+        .noul("billing", Noul::new())
+        .noul("", Noul::new().instructions("Spam?"))
+        .prepare()
+        .expect("valid");
+    for (made, set) in [("prepared", &prepared), ("compiled", &COMPILED)] {
+        assert_eq!(set.as_json(), json, "{made}");
+        assert_eq!(set.as_json().as_bytes(), set.as_bytes(), "{made}");
+        assert_eq!(format!("{set:?}"), format!("PreparedQuestions {{ json: {json:?} }}"), "{made}");
+    }
+}
+
 /// Every layout `from_static` refuses, with its message. In the `static` the
 /// derive generates, the same panic stops the build.
 #[test]
