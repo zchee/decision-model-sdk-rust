@@ -12,13 +12,14 @@
 //! it, the [`Limits`], and the header map ([`request_headers`]). What it does
 //! per attempt: one [`post`].
 //!
-//! The key is turned into a header value in one place and is never formatted
-//! by this module. Text that others wrote can still hold it: a response
-//! body, which is not searched, and the error of a caller's own service,
-//! which may hold the request's headers. A failed call's error chain is
-//! therefore searched before it is kept. The search looks for the key as
-//! written and as `Debug` writes it, four spellings in all, listed at
-//! [`KeyHeader::holds_key`], and for nothing else: a key the service
+//! The key is turned into a header value in one place, and this module puts
+//! it into no text of its own: no error message, `Debug` or event that this
+//! module writes holds it. Text that others wrote can still hold it: a
+//! response body, which is not searched, and the error of a caller's own
+//! service, which may hold the request's headers. A failed call's error
+//! chain is therefore searched before it is kept. The search looks for the
+//! key as written and as `Debug` writes it, four spellings in all, listed
+//! at [`KeyHeader::holds_key`], and for nothing else: a key the service
 //! transformed in another way, into hex or base64 say, or split over two
 //! links of the chain, is not found.
 

@@ -9,12 +9,12 @@
 //!
 //! A build with the `internals` feature never reads the process environment
 //! for a provider, whether or not a replacement is in force: while none is,
-//! every variable is unset. A test that forgets [`replace`] therefore sees
-//! every variable unset, and so never the key of the machine it runs on,
-//! with which it could send a billed request. The same holds for any
-//! program built with the feature: its providers take their keys and base
-//! URLs from their builders or from a replacement, never from the process
-//! environment.
+//! every variable is unset. A test in such a build that forgets [`replace`]
+//! therefore sees no variable of the process environment, and so never
+//! finds there the key of the machine it runs on, with which it could send
+//! a billed request. The same holds for any program built with the
+//! feature: the lookup its providers read their keys and base URLs through
+//! does not read the process environment.
 //!
 //! The replacement is process-wide, because a provider the client builds for
 //! itself reads its variables wherever the call happens to run. Tests that
