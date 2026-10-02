@@ -406,44 +406,44 @@ async fn status_case(status: u16, kind: ApiErrorKind) {
     assert_eq!(server.request_count(), 1);
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_400_is_a_bad_request() {
     status_case(400, ApiErrorKind::BadRequest).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_401_is_an_authentication_error() {
     status_case(401, ApiErrorKind::Authentication).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_403_is_a_permission_error() {
     status_case(403, ApiErrorKind::PermissionDenied).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_429_is_a_rate_limit_error() {
     status_case(429, ApiErrorKind::RateLimit).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_500_is_a_server_error() {
     status_case(500, ApiErrorKind::InternalServer).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_status_errors_map_and_preserve_status_and_body
 async fn http_status_418_is_another_api_error() {
     status_case(418, ApiErrorKind::Other).await;
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_timeout_and_connection_errors_map
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_timeout_and_connection_errors_map
 async fn http_deadline_passing_is_a_timeout() {
     let server = SilentServer::start().await.expect("a silent server");
     let deadline = Duration::from_millis(100);
@@ -460,8 +460,8 @@ async fn http_deadline_passing_is_a_timeout() {
     assert_eq!(*timeout, deadline);
 }
 
-// Upstream: tests/utils/test_error_handling.py::test_timeout_and_connection_errors_map
 #[tokio::test]
+// Upstream: tests/utils/test_error_handling.py::test_timeout_and_connection_errors_map
 async fn http_connect_refused_is_a_connection_error() {
     let port = RefusingPort::new().await.expect("a refusing port");
     let fixture = Fixture::new(port.base_url(), limits(None));
