@@ -62,5 +62,7 @@ pub use crate::client::{Client, ClientBuilder, Request};
 // The OpenAI provider, for OpenAI's API and the services that speak it.
 
 // The Anthropic provider.
+#[cfg(feature = "anthropic")]
+pub use crate::provider::anthropic::{AnthropicProvider, AnthropicProviderBuilder};
 
 // The Gemini provider.
