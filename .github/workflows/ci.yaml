@@ -178,6 +178,11 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+      - name: Documentation of the adapter without default features
+        run: cargo doc --no-deps --no-default-features -p typesafe-sdk-rust-adapter
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       # Running the fuzz targets needs nightly; checking them does not:
       # stable compiles them, together with libFuzzer's C++ runtime, so a
       # change to the hidden seam they call through breaks here instead of
@@ -264,7 +269,11 @@ jobs:
       # derive its own licenses. They are copies of the root files rather than
       # symlinks: a checkout without `core.symlinks`, the Windows default,
       # turns a symlink into a one-line text file. A copy that differs from
-      # the root file fails here, with the first byte that differs.
+      # the root file fails here, with the first byte that differs. The
+      # adapter copies the root license only: its README and its
+      # crates/adapter/LICENSE-THIRD-PARTY are texts of its own (the notice
+      # names the Python project it was ported from), so neither is ever
+      # compared with a root file; the next step checks the notice instead.
       - name: Package copies of the README and licenses
         run: |
           cmp README.md crates/sdk/README.md
@@ -272,6 +281,31 @@ jobs:
           cmp LICENSE-THIRD-PARTY crates/sdk/LICENSE-THIRD-PARTY
           cmp LICENSE crates/macros/LICENSE
           cmp LICENSE-THIRD-PARTY crates/macros/LICENSE-THIRD-PARTY
+          cmp LICENSE crates/adapter/LICENSE
+
+      # The two billed test crates bill different accounts and are opted into
+      # by different variables, so neither may name the other's key or
+      # switch: a run meant for one must never reach the other. `-w` keeps a
+      # longer name such as OPENAI_API_KEY_ENV from counting as a hit. The
+      # adapter's notice must be there, must not be the root file under
+      # another name, and must name the upstream commit and its copyright
+      # holder. Each negative check is an `if` rather than a `!` command:
+      # bash's errexit ignores a status inverted with `!`, so such a line
+      # anywhere but last could never fail the step.
+      - name: Separation of the billed crates and the adapter's notice
+        run: |
+          if grep -rnwE 'TYPESAFE_API_KEY|API_KEY_ENV|TYPESAFE_LIVE_TESTS' crates/adapter-live-tests; then
+            exit 1
+          fi
+          if grep -rnwE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|TYPESAFE_ADAPTER_LIVE_TESTS' crates/live-tests; then
+            exit 1
+          fi
+          test -s crates/adapter/LICENSE-THIRD-PARTY
+          if cmp -s LICENSE-THIRD-PARTY crates/adapter/LICENSE-THIRD-PARTY; then
+            exit 1
+          fi
+          grep -qF e1d4cc9 crates/adapter/LICENSE-THIRD-PARTY
+          grep -qF 'Copyright (c) 2026 TypeSafe AI' crates/adapter/LICENSE-THIRD-PARTY
 
       # pipx ships with the runner image and runs pytest from a throwaway
       # environment, so nothing is installed into the image's Python.
