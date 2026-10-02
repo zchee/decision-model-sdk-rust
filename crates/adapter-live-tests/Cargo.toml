@@ -1,0 +1,22 @@
+# Billed tests of the adapter against the vendors' live APIs; see src/lib.rs.
+# Never a default member. `publish = false`: it is not a library anybody
+# depends on.
+[package]
+name = "typesafe-sdk-rust-adapter-live-tests"
+version = "0.0.0"
+description = "Tests of typesafe-sdk-rust-adapter against the live OpenAI, Anthropic and Gemini APIs"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "adapter_live_tests"
+
+[dependencies]
+# Default features: every built-in provider.
+typesafe-sdk-rust-adapter = { path = "../adapter" }
+
+[lints]
+workspace = true

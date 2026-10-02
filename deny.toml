@@ -1,8 +1,8 @@
 # cargo-deny policy for the workspace and for the fuzz targets under fuzz/.
 #
-# CI runs it at the workspace root, where every workspace member is a root of
-# the graph (the SDK, the derive, the test server and the live tests), and
-# with `--manifest-path fuzz/Cargo.toml` for the fuzz targets' graph.
+# CI runs it at the workspace root, where every member is a root of the graph
+# (the SDK, the derive, the test server, the adapter and both live test
+# crates), and with `--manifest-path fuzz/Cargo.toml` for the fuzz graph.
 
 [graph]
 # Restricting the graph to the supported triples keeps platform-only crates
@@ -57,8 +57,8 @@ unused-allowed-license = "allow"
 unused-license-exception = "allow"
 
 [licenses.private]
-# The workspace's own unpublished members (test-support, live-tests) carry the
-# same license as the SDK, so there is nothing to skip.
+# The unpublished members (test-support, live-tests, adapter-live-tests) carry
+# the same license as the SDK, so there is nothing to skip.
 ignore = false
 
 [bans]

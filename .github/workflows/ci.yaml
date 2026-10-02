@@ -90,10 +90,10 @@ jobs:
       # feature, or only from tests, is dead in this build, and the run above
       # cannot see that: every feature is on there.
       - name: Lints without default features
-        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --exclude typesafe-sdk-rust-adapter-live-tests --all-targets --no-default-features -- -D warnings
 
       - name: Lints with default features
-        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --exclude typesafe-sdk-rust-adapter-live-tests --all-targets -- -D warnings
 
       # No `--workspace`: this one runs code. A crate whose tests need a live
       # API key is a workspace member and not a default member, so the default
