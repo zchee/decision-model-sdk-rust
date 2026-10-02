@@ -97,6 +97,7 @@ impl<S> fmt::Debug for GeminiProvider<S> {
 ///
 /// `Debug` prints the model and which settings were given, never the key or
 /// the base URL.
+#[derive(Clone)]
 pub struct GeminiProviderBuilder {
     model: String,
     api_key: Option<SecretString>,

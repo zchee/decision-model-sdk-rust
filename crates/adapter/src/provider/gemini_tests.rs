@@ -243,6 +243,33 @@ async fn the_request_is_one_post_to_the_interactions_path_with_the_key() {
     assert_eq!(server.request_count(), 2);
 }
 
+/// A clone of a builder builds a provider with the same settings, and
+/// prints no key either.
+#[tokio::test]
+async fn a_cloned_builder_builds_a_provider_with_the_same_settings() {
+    let server = answering(StatusCode::OK, interaction("{}", "completed").to_string()).await;
+    let original = builder(&format!("{}/proxy/", server.base_url()));
+    let copy = original.clone();
+
+    let copy_text = format!("{copy:?} {copy:#?}");
+    assert!(!copy_text.contains(KEY), "{copy_text}");
+    assert_eq!(format!("{copy:?}"), format!("{original:?}"));
+    let providers = [original.build().expect("it builds"), copy.build().expect("the clone builds")];
+    assert_eq!(format!("{:?}", providers[1]), format!("{:?}", providers[0]));
+    for provider in &providers {
+        let (outcome, _) = ask(provider, &messages(), true).await;
+        outcome.expect("the exchange succeeds").expect("an answer");
+    }
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.uri.path(), "/proxy/v1beta/interactions");
+        assert_eq!(request.header_values("x-goog-api-key"), [KEY]);
+    }
+    assert_eq!(requests[0].body, requests[1].body);
+}
+
 // --------------------------------------------------------------- the reply
 
 #[tokio::test]

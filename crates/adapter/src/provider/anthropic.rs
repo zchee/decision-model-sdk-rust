@@ -167,6 +167,7 @@ where
 /// Nothing is checked until [`build`](Self::build) or
 /// [`build_with_service`](Self::build_with_service), which is also when the
 /// environment is read. `Debug` prints neither the key nor the base URL.
+#[derive(Clone)]
 pub struct AnthropicProviderBuilder {
     model: String,
     api_key: Option<SecretString>,

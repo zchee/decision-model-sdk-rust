@@ -273,6 +273,34 @@ fn debug_prints_the_model_the_host_and_the_api_only() {
     }
 }
 
+/// A clone of a builder builds a provider with the same settings, and
+/// prints no key either.
+#[tokio::test]
+async fn a_cloned_builder_builds_a_provider_with_the_same_settings() {
+    let server = answering(StatusCode::OK, reply(json!("end_turn"))).await;
+    let original = builder(&format!("{}/team-a/", server.base_url())).max_tokens(77);
+    let copy = original.clone();
+
+    let copy_text = format!("{copy:?} {copy:#?}");
+    assert!(!copy_text.contains(KEY), "{copy_text}");
+    assert_eq!(format!("{copy:?}"), format!("{original:?}"));
+    let providers = [original.build().expect("it builds"), copy.build().expect("the clone builds")];
+    assert_eq!(format!("{:?}", providers[1]), format!("{:?}", providers[0]));
+    for provider in &providers {
+        let (outcome, _) = ask(provider, true).await;
+        outcome.expect("an exchange").expect("an answer");
+    }
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.uri.path(), "/team-a/v1/messages");
+        assert_eq!(request.header_values("x-api-key"), [KEY]);
+        assert_eq!(parsed(std::str::from_utf8(&request.body).expect("UTF-8"))["max_tokens"], 77);
+    }
+    assert_eq!(requests[0].body, requests[1].body);
+}
+
 #[test]
 fn the_names_are_the_model_and_the_public_type_path() {
     let provider = builder("http://127.0.0.1:9").build().expect("it builds");
