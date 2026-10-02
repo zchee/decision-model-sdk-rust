@@ -8,7 +8,10 @@
 //! deserializes. `Debug` prints counts and kinds only: the trace holds the
 //! caller's document, the schema and the model's text.
 
-use std::{fmt, time::Duration};
+use std::{
+    fmt::{self, Write as _},
+    time::Duration,
+};
 
 use serde::{
     Serialize, Serializer,
@@ -529,8 +532,8 @@ impl Serialize for Attempt {
 
 impl fmt::Debug for Attempt {
     /// Counts and kinds: the roles, the lengths of the schema and the bodies,
-    /// the model, the provider, the api, the stop reason and the failure's
-    /// kind name, never the failure's text.
+    /// the model, the provider, the api, the stop reason escaped and cut at
+    /// 200 characters, and the failure's kind name, never the failure's text.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let roles = self.messages.iter().map(Message::role).collect::<Vec<_>>();
         formatter
@@ -541,7 +544,10 @@ impl fmt::Debug for Attempt {
             .field("model_name", &self.model_name)
             .field("provider", &self.provider)
             .field("api", &self.api)
-            .field("finish_reason", &self.finish_reason)
+            .field(
+                "finish_reason",
+                &self.finish_reason.as_ref().map(|reason| reason.as_deref().map(StopReason)),
+            )
             .field("error_type", &self.error_type)
             .field("request", &self.request.as_ref().map(|json| ByteLen(json.get().len())))
             .field(
@@ -549,6 +555,33 @@ impl fmt::Debug for Attempt {
                 &self.llm_response.as_ref().map(|json| ByteLen(json.get().len())),
             )
             .finish()
+    }
+}
+
+/// The most characters of a stop reason that `Debug` prints, counted after
+/// escaping: the SDK's cut for text a server chose.
+const STOP_REASON_CHARS: usize = 200;
+
+/// A vendor's stop reason as `Debug` prints it: quoted, each character
+/// escaped as [`char::escape_debug`] escapes it, and cut after
+/// [`STOP_REASON_CHARS`] characters, never inside an escape, the cut marked
+/// with U+2026. The vendor chose the text, so it may be long or hold
+/// terminal control characters.
+pub(crate) struct StopReason<'a>(pub(crate) &'a str);
+
+impl fmt::Debug for StopReason<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_char('"')?;
+        let mut left = STOP_REASON_CHARS;
+        for escaped in self.0.chars().map(char::escape_debug) {
+            let Some(rest) = left.checked_sub(escaped.len()) else {
+                formatter.write_char('\u{2026}')?;
+                break;
+            };
+            left = rest;
+            write!(formatter, "{escaped}")?;
+        }
+        formatter.write_char('"')
     }
 }
 

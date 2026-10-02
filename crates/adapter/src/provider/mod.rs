@@ -52,6 +52,13 @@ pub trait Provider: Send + Sync + fmt::Debug {
     /// A provider that talks to a vendor records the JSON it sent and the
     /// JSON it received through [`ProviderCall::trace`], so the attempt's
     /// trace holds both.
+    ///
+    /// The adapter prints what this returns as it is, in its error and in
+    /// the trace: a [`NonAnswer`]'s message, and the `Display` of an error,
+    /// including the message an [`ApiError`](typesafe_sdk::ApiError) reads
+    /// out of a response body. The built-in providers search these texts for
+    /// their key; a provider of your own searches them for its key or
+    /// returns fixed texts.
     fn request<'a>(
         &'a self,
         call: ProviderCall<'a>,
@@ -273,9 +280,16 @@ impl fmt::Debug for ProviderResult {
 /// unfinished or refused, or the body is not the vendor's JSON.
 ///
 /// The message is printed by `Display` and `Debug` and becomes the text of
-/// the adapter's error, so it names the vendor and the stop reason or status
-/// and never carries the model's text or an error message from the body;
-/// those stay in the attempt's recorded response.
+/// the adapter's error. A built-in provider's message names the vendor and
+/// the stop reason or status, escaped and cut, and never carries the model's
+/// text or an error message from the body; those stay in the attempt's
+/// recorded response. When the response repeats the API key, a built-in
+/// provider's message is the fixed sentence `<Vendor> did not answer: the
+/// reason is not shown, because showing it could reveal the API key.`
+///
+/// The adapter does not search the non-answer a provider of your own
+/// returns, so [`NonAnswer::new`] takes a fixed text, such as the vendor's
+/// name and a status, never text from a response, which can hold the key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonAnswer {
     message: String,
@@ -429,15 +443,19 @@ impl AttemptTrace {
 }
 
 impl fmt::Debug for AttemptTrace {
-    /// The api and stop reason, and the lengths of the bodies, never the
-    /// bodies.
+    /// The api, the stop reason escaped and cut at 200 characters, and the
+    /// lengths of the bodies, never the bodies.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let finish_reason = self
+            .finish_reason
+            .as_ref()
+            .map(|reason| reason.as_deref().map(crate::response::StopReason));
         formatter
             .debug_struct("AttemptTrace")
             .field("api", &self.api)
             .field("request", &self.request.as_ref().map(|json| ByteLen(json.get().len())))
             .field("response", &self.response.as_ref().map(|json| ByteLen(json.get().len())))
-            .field("finish_reason", &self.finish_reason)
+            .field("finish_reason", &finish_reason)
             .finish()
     }
 }

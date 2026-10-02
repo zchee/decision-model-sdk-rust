@@ -149,6 +149,40 @@ fn debug_of_an_attempt_prints_roles_lengths_and_kinds() {
     assert!(rendered.contains("gpt-4o-mini"), "{rendered}");
 }
 
+/// `Debug` of an attempt and of its trace escapes the stop reason and cuts it
+/// at 200 characters; what is stored and serialized stays whole.
+#[test]
+fn debug_escapes_and_cuts_the_stop_reason_and_the_stored_one_stays_whole() {
+    let long = "r".repeat(1000);
+    let control = "stop\n\u{1b}[31mred\u{7}\r\u{202e}";
+    let cut = format!("Some(Some(\"{}\u{2026}\"))", "r".repeat(200));
+    let escaped = r#"Some(Some("stop\n\u{1b}[31mred\u{7}\r\u{202e}"))"#;
+    // ESC escapes to six characters and the cut never splits an escape, so
+    // 33 of them fill 198 characters and the 34th is left out.
+    let escapes = "\u{1b}".repeat(40);
+    let escapes_cut = format!("Some(Some(\"{}\u{2026}\"))", r"\u{1b}".repeat(33));
+
+    for (reason, shown) in
+        [(long.as_str(), cut), (control, escaped.to_owned()), (escapes.as_str(), escapes_cut)]
+    {
+        let mut trace = AttemptTrace::default();
+        trace.record_response("{}", Some(reason));
+        let trace_debug = format!("{trace:?}");
+        let mut done = attempt();
+        done.record(trace);
+        let attempt_debug = format!("{done:?}");
+
+        for rendered in [&trace_debug, &attempt_debug] {
+            assert!(rendered.contains(&format!("finish_reason: {shown}")), "{rendered}");
+            assert!(!rendered.chars().any(char::is_control), "{rendered}");
+        }
+        assert_eq!(done.finish_reason(), Some(reason));
+        let serialized: serde_json::Value =
+            serde_json::from_str(&json(&done)).expect("the attempt serializes to JSON");
+        assert_eq!(serialized["debug_info"]["finish_reason"], reason);
+    }
+}
+
 #[test]
 fn usage_serializes_upstream_members_with_latency_in_seconds() {
     let written = json(&usage());
