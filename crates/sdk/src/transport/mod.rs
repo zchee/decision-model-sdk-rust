@@ -482,8 +482,8 @@ where
 
 /// The error a transport failure becomes.
 ///
-/// An error this crate raised inside its own transport is passed through as
-/// it is. Anything else is a connection failure whose message is the chain of
+/// An error of this crate's own type, raised by its transport or built by a
+/// caller's, is passed through as it is. Anything else is a connection failure whose message is the chain of
 /// the transport's own messages - the cause stays reachable as the
 /// [`source`](StdError::source).
 pub(crate) fn connection(error: impl Into<BoxError>) -> Error {

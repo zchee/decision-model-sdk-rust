@@ -314,9 +314,11 @@ impl RetryPolicy {
     /// are not printed, but the path is, so `uri` must carry no credential.
     ///
     /// The returned future is `Send` when `F` and `Fut` are, so it can be
-    /// spawned. Nothing here spawns a task: the waits between attempts are
-    /// awaited inside the returned future, and dropping it cancels the
-    /// attempt in flight and every retry after it.
+    /// spawned. It borrows `self`, `method` and `uri` until it completes, so
+    /// a spawned task owns the policy and the URI it passes, as below.
+    /// Nothing here spawns a task: the waits between attempts are awaited
+    /// inside the returned future, and dropping it cancels the attempt in
+    /// flight and every retry after it.
     ///
     /// ```
     /// use std::time::Duration;
@@ -352,7 +354,7 @@ impl RetryPolicy {
         Fut: Future<Output = Result<R, Error>>,
     {
         // The loop's own future, not an `async fn` awaiting it, for the
-        // reason `run` gives.
+        // reason the crate-private `retry::run` gives.
         run(self, method, uri, attempt)
     }
 

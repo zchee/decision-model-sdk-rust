@@ -569,7 +569,8 @@ impl PreparedQuestions {
 
     /// The prepared questions as the SDK serialized them: the JSON object
     /// sent after `"questions":` in a request body, compact and in the order
-    /// the questions were given.
+    /// the questions were given, unless an extra body member named
+    /// `questions` ([`extra_body`](crate::SystemOne::extra_body)) replaces it.
     ///
     /// A set declared with `#[derive(QuestionSet)]` is compiled into the
     /// program in this form only, so this text is the one way to read the
