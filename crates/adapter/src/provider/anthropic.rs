@@ -146,7 +146,7 @@ where
                 limits: settings.limits,
             };
             Ok(match post(&self.service, exchange, Bytes::from(body)).await? {
-                Ok(reply) => read_reply(&reply, call.trace()),
+                Ok(reply) => exchange.screened(read_reply(&reply, call.trace()), call.trace()),
                 Err(not_json) => Err(not_json),
             })
         })

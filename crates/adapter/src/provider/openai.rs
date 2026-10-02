@@ -188,10 +188,11 @@ where
                 Ok(reply) => reply,
                 Err(not_json) => return Ok(Err(not_json)),
             };
-            Ok(match self.api {
+            let outcome = match self.api {
                 OpenAiApi::Responses => read_responses(&reply, call.trace()),
                 OpenAiApi::ChatCompletions => read_chat(&reply, call.trace()),
-            })
+            };
+            Ok(self.exchange().screened(outcome, call.trace()))
         })
     }
 

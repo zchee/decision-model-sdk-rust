@@ -280,7 +280,7 @@ where
             let response = serde_json::from_str::<Value>(&json).unwrap_or(Value::Null);
             let status = response.get("status").and_then(Value::as_str);
             call.trace().record_response(&json, status);
-            Ok(result(&response, status))
+            Ok(exchange.screened(result(&response, status), call.trace()))
         })
     }
 

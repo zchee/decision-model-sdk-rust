@@ -21,8 +21,13 @@
 //! outside 2xx, and its body when that was read, are searched before the
 //! API error is built from them, and the error that was built is searched
 //! as an error chain is; a body over the size limit is not read to its end,
-//! not searched and not kept. The body of a 2xx response is not searched:
-//! the provider reads it, and the trace holds it as received.
+//! not searched and not kept. The body of a 2xx response is searched only
+//! when the provider reads a non-answer from it ([`Exchange::screened`]),
+//! and only to decide the non-answer's text and the recorded stop reason:
+//! so a non-answer's message can be the fixed [`REASON_NOT_SHOWN`] after
+//! the vendor's name instead of a status or stop reason. A success that
+//! yields answers is not searched, and the trace holds every body as
+//! received.
 //!
 //! The search looks for the key as written, as `Debug` writes it and as a
 //! JSON string holds it, the spellings listed at [`KeyHeader::holds_key`],
@@ -61,7 +66,10 @@ use serde::de::IgnoredAny;
 use tower_service::Service;
 use typesafe_sdk::{ApiError, Body, BoxError, Error as SdkError, HttpService};
 
-use crate::{error::Error, provider::NonAnswer};
+use crate::{
+    error::Error,
+    provider::{AttemptTrace, NonAnswer, ProviderResult},
+};
 
 /// How long one attempt may take unless the builder says otherwise: the
 /// default of the OpenAI and Anthropic Python SDKs.
@@ -478,9 +486,43 @@ pub(crate) struct Exchange<'a> {
     pub(crate) endpoint: &'a Endpoint,
     /// The provider's headers; see [`request_headers`].
     pub(crate) headers: &'a HeaderMap,
-    /// The key those headers carry, searched for in a failed call's error.
+    /// The key those headers carry, searched for in a failed call's error
+    /// and in a non-answer's response.
     pub(crate) key: &'a KeyHeader,
     pub(crate) limits: Limits,
+}
+
+impl Exchange<'_> {
+    /// `outcome`, read by the provider from a success response, unchanged
+    /// unless it is a non-answer and the key search has a hit in the
+    /// response body recorded in `trace`, in the stop reason recorded there,
+    /// or in the non-answer itself, rendered as [`KeyHeader::holds_key`]
+    /// renders an error. On a hit the non-answer is [`REASON_NOT_SHOWN`]
+    /// after the vendor's name and the recorded stop reason is cleared; the
+    /// recorded body stays as received.
+    ///
+    /// The body is searched as it arrived, because a non-answer cuts its
+    /// reason at 200 characters and a key cut there is no longer found; the
+    /// stop reason as decoded, because a long one spelled with a `\u`
+    /// escape is in neither of the other two; the non-answer, because it
+    /// holds a decoded field that the recorded stop reason does not.
+    pub(crate) fn screened(
+        &self,
+        outcome: Result<ProviderResult, NonAnswer>,
+        trace: &mut AttemptTrace,
+    ) -> Result<ProviderResult, NonAnswer> {
+        let Err(reply) = &outcome else {
+            return outcome;
+        };
+        let hit = trace.response().is_some_and(|body| self.key.occurs_in(body))
+            || trace.finish_reason().is_some_and(|reason| self.key.occurs_in(reason))
+            || self.key.holds_key(&Error::non_answer(reply.clone()));
+        if !hit {
+            return outcome;
+        }
+        trace.finish_reason = Some(None);
+        Err(non_answer(self.vendor, REASON_NOT_SHOWN))
+    }
 }
 
 /// Sends `body` as one `POST` and reads the response: one attempt.
@@ -594,6 +636,12 @@ const NOT_SHOWN: &str =
 /// no body at all it would print `status code (no body)`, which is not
 /// what happened.
 const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is not shown.";
+
+/// The reason a non-answer gives when the key search has a hit for its
+/// response; [`non_answer`] puts the vendor's name before it. One text for
+/// every vendor and every way the search has a hit.
+const REASON_NOT_SHOWN: &str =
+    "the reason is not shown, because showing it could reveal the API key.";
 
 /// The API error a response with a status outside 2xx becomes. `body` is
 /// `None` for a body over the size limit, which was not read to its end;
