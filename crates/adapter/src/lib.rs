@@ -64,3 +64,5 @@ pub use crate::client::{Client, ClientBuilder, Request};
 // The Anthropic provider.
 
 // The Gemini provider.
+#[cfg(feature = "gemini")]
+pub use crate::provider::gemini::{GeminiProvider, GeminiProviderBuilder};
