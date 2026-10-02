@@ -245,10 +245,8 @@ Code that sends its own requests builds the same kinds with four public construc
   attempt returns it to have the deadline classified as the SDK's own is.
 - `Error::connection(message, cause)`: the request failed without an HTTP response; a
   `Connection` whose `Display` is `message`, retried while `api_connection_error` is on. `cause`
-  is kept as the `source()`, so a caller can downcast to it, and is printed by `Debug`, so it must
-  not carry a credential: an API key, a token, or a URL with userinfo or a key in its query.
-  Inside the SDK's own transport a cause that held a credential of the request is replaced by a
-  redacted copy; a caller building this error has no such step.
+  is the error's `source()` and is printed by `Debug`, so it must not carry a credential: an API
+  key, a token, or a URL with userinfo or a key in its query.
 - `Error::response_too_large(limit)`: a success body was larger than `limit` bytes; a
   `ResponseTooLarge` carrying the limit, with no cause. Code that reads a body under its own cap
   returns it for a success body over the cap, so that it reads as the SDK's own limit does. The
@@ -262,10 +260,15 @@ Code that sends its own requests builds the same kinds with four public construc
   error.
 
 A custom transport under the SDK's `Client` (see Custom transport) can fail with
-`Error::timeout` or `Error::connection`, boxed as its own error type: the SDK passes an error of
-its own type through unchanged instead of wrapping it in a new connection error, so such a
-transport chooses the retry class of its failures. This adds a way to build an error; it does
-not change how an existing transport's errors are classified.
+`Error::timeout` or `Error::connection`, boxed as its own error type: the SDK does not wrap an
+error of its own type in a new connection error, so such a transport chooses the kind of its
+failures and with it their retry class. The `Client` still checks a connection error that has a
+cause, as it checks every attempt error of a transport: when the message holds a credential of
+the request, the message is rewritten; when a link of the cause chain holds one, or the chain is
+longer than 32 links, the cause is replaced by a redacted copy that cannot be downcast, and the
+message is rebuilt from that copy. The kind and the retry class never change. Outside a `Client`
+nothing is rewritten. This adds a way to build an error; it does not change how an existing
+transport's errors are classified.
 
 ## Retries
 
