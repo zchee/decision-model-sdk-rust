@@ -158,6 +158,10 @@ fn only_this_module_names_the_small_string_crate() {
         crates.join("test-support").join("src").join("lib.rs"),
         crates.join("live-tests").join("src").join("lib.rs"),
         crates.join("live-tests").join("tests").join("live.rs"),
+        crates.join("adapter").join("src").join("lib.rs"),
+        crates.join("adapter").join("tests").join("client.rs"),
+        crates.join("adapter-live-tests").join("src").join("lib.rs"),
+        crates.join("adapter-live-tests").join("tests").join("live.rs"),
     ];
     for expected in &expected_files {
         assert!(files.contains(expected), "the scan did not see {}", expected.display());
@@ -209,6 +213,8 @@ fn only_this_module_names_the_small_string_crate() {
         crates.join("macros").join("Cargo.toml"),
         crates.join("test-support").join("Cargo.toml"),
         crates.join("live-tests").join("Cargo.toml"),
+        crates.join("adapter").join("Cargo.toml"),
+        crates.join("adapter-live-tests").join("Cargo.toml"),
         repository.join("fuzz").join("Cargo.toml"),
     ];
     for expected in &expected_manifests {
