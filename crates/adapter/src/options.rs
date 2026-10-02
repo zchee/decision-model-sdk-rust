@@ -8,7 +8,10 @@
 /// Upstream's `structured_outputs=True` is [`Native`](Self::Native) and
 /// `structured_outputs=False` is [`Prompted`](Self::Prompted); the two words
 /// are upstream's own test ids.
+///
+/// More ways may be added, so a `match` over this enum needs a catch-all arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum StructuredOutputs {
     /// The provider's own structured-output mode: the schema travels in the
     /// request and the vendor constrains the reply to it.
@@ -23,7 +26,11 @@ pub enum StructuredOutputs {
 ///
 /// Upstream's `llm_answer_mode`. A word other than these two is a
 /// `ValueError` upstream; here it cannot be written.
+///
+/// More modes may be added, so a `match` over this enum needs a catch-all
+/// arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum AnswerMode {
     /// A probability per outcome: one number for a noul, one per label of a
     /// choice and one per level of a score.

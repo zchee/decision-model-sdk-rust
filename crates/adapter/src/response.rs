@@ -24,6 +24,10 @@ use crate::provider::{AttemptTrace, ByteLen, Message, ProviderResult, Schema, ra
 ///
 /// `A` is what the answers are: [`Answers`], a lookup by question name, or
 /// the struct of a question set declared with `#[derive(QuestionSet)]`.
+///
+/// The serialized shape is defined for `serde_json`: the schema and the
+/// recorded request and response bodies of the trace are raw JSON, which only
+/// `serde_json` embeds as JSON.
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct Response<A = Answers> {
@@ -157,8 +161,9 @@ impl Usage {
         self.n_retries_malformed_structure
     }
 
-    /// The time from the provider being ready to the last reply being
-    /// decoded; serialized as seconds.
+    /// The time from the provider being ready until the answers of the last
+    /// reply are converted, as upstream stops its clock; serialized as
+    /// seconds.
     #[must_use]
     pub fn latency(&self) -> Duration {
         self.latency
@@ -191,6 +196,9 @@ impl Serialize for Usage {
 /// `debug`. The trace of an [`Error`](crate::Error) has no probability part:
 /// it serializes `llm_attempts` and `retry_reasons` only, and its probability
 /// accessors return 0 and nothing.
+///
+/// The serialized shape is defined for `serde_json`: each attempt's schema,
+/// request and response are raw JSON, which only `serde_json` embeds as JSON.
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct Trace {
@@ -230,6 +238,7 @@ impl Trace {
 
     /// Each question whose probabilities missed summing to 1 by more than the
     /// tolerance, with that distance, in question order.
+    #[must_use]
     pub fn probability_errors(&self) -> impl ExactSizeIterator<Item = (&str, f64)> {
         self.probabilities
             .as_ref()
@@ -241,6 +250,7 @@ impl Trace {
     /// Each question whose probabilities normalization rescaled, with the
     /// probabilities the model gave before it, label by label, in question
     /// order. Empty unless normalization is on.
+    #[must_use]
     pub fn original_probabilities(
         &self,
     ) -> impl ExactSizeIterator<Item = (&str, impl ExactSizeIterator<Item = (&str, f64)>)> {
@@ -346,7 +356,7 @@ pub struct Attempt {
     /// `None` (serialized `null`) for a failed attempt that recorded none.
     pub(crate) llm_response: Option<Box<RawValue>>,
     pub(crate) model_name: String,
-    /// The provider's Rust type path.
+    /// The provider's `type_name()`.
     pub(crate) provider: String,
     /// Present once the provider recorded its request.
     pub(crate) api: Option<&'static str>,
@@ -462,7 +472,9 @@ impl Attempt {
         &self.model_name
     }
 
-    /// The provider's Rust type path.
+    /// The provider's [`type_name`](crate::Provider::type_name): by default
+    /// the compiler's name of its type, which is not promised stable; the
+    /// built-in providers give their public path.
     #[must_use]
     pub fn provider(&self) -> &str {
         &self.provider
@@ -641,7 +653,7 @@ impl fmt::Debug for RetryReason {
 /// The mechanism that made a retry; serialized as upstream's
 /// `provider_error` and `malformed_structure`.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryCategory {
     /// The retry policy retried a failed request.

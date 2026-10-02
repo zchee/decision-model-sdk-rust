@@ -1,7 +1,9 @@
 //! Tests for the response, its usage and its trace.
 
+use std::sync::Arc;
+
 use super::*;
-use crate::provider::Role;
+use crate::provider::{Provider, ProviderCall, Role};
 
 /// Text that must never appear in a `Debug` rendering.
 const DOCUMENT: &str = "the caller's private document";
@@ -125,13 +127,23 @@ fn a_result_without_a_recorded_response_falls_back_to_text_and_tokens() {
 fn debug_of_an_attempt_prints_roles_lengths_and_kinds() {
     let mut trace = AttemptTrace::default();
     trace.record_request(&format!("{{\"input\":\"{DOCUMENT}\"}}"), "responses");
+    trace.record_response(&format!("{{\"output\":\"{DOCUMENT}\"}}"), Some("incomplete"));
     let mut failed = attempt();
     failed.record(trace);
     failed.record_error(format!("vendor said: {DOCUMENT}"), "Api");
 
     let rendered = format!("{failed:?}");
 
+    assert!(
+        failed.request().is_some_and(|body| body.contains(DOCUMENT)),
+        "the request body holds the document"
+    );
+    assert!(
+        failed.response().is_some_and(|body| body.contains(DOCUMENT)),
+        "the response body holds the document"
+    );
     assert!(!rendered.contains(DOCUMENT), "Debug printed user data: {rendered}");
+    assert!(rendered.contains("finish_reason: Some(Some(\"incomplete\"))"), "{rendered}");
     assert!(rendered.contains("messages: [System, User]"), "{rendered}");
     assert!(rendered.contains("error_type: Some(\"Api\")"), "{rendered}");
     assert!(rendered.contains("gpt-4o-mini"), "{rendered}");
@@ -282,10 +294,39 @@ fn a_retry_reason_is_a_category_message_pair() {
     let written = json(&reason);
 
     assert_eq!(written, r#"["malformed_structure","answers.x: expected a number"]"#);
-    assert!(matches!(reason.category(), RetryCategory::MalformedStructure));
+    assert_eq!(reason.category(), RetryCategory::MalformedStructure);
+    assert_ne!(reason.category(), RetryCategory::ProviderError);
     assert_eq!(reason.message(), "answers.x: expected a number");
     assert_eq!(
         format!("{reason:?}"),
         "RetryReason { category: MalformedStructure, message: <28 bytes> }"
     );
+}
+
+#[test]
+fn the_response_types_cross_threads() {
+    // A later `Rc` or `RefCell` field would break these silently otherwise.
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn assert_send<T: Send>() {}
+
+    assert_send_sync::<Trace>();
+    assert_send_sync::<Attempt>();
+    assert_send_sync::<RetryReason>();
+    assert_send_sync::<Usage>();
+    assert_send_sync::<Response<Answers>>();
+    assert_send_sync::<Arc<dyn Provider>>();
+    assert_send::<ProviderCall<'_>>();
+}
+
+#[test]
+fn retry_categories_work_as_set_members() {
+    let seen = [
+        RetryCategory::ProviderError,
+        RetryCategory::MalformedStructure,
+        RetryCategory::ProviderError,
+    ]
+    .into_iter()
+    .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(seen.len(), 2);
 }
