@@ -10,6 +10,8 @@ use std::{
 use typesafe_sdk::{Answers, RetryPolicy};
 
 use super::{Client, MODEL_REQUIRED, PROVIDER_REQUIRED, Target, typed};
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
+use super::{Owned, ProviderName};
 use crate::{
     convert::convert,
     error::ErrorKind,
@@ -248,6 +250,59 @@ async fn the_latency_starts_after_the_state_is_written() {
 
     assert!(started.elapsed() >= delay, "the state was written once");
     assert!(response.usage().latency() < delay, "{:?}", response.usage().latency());
+}
+
+/// A build that fails leaves no cell behind: `keys` cannot show one, since it
+/// lists filled cells only, so the map itself is counted.
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
+#[tokio::test]
+async fn a_failed_build_leaves_no_cell_in_the_map() {
+    // With the `internals` feature another test's variables could be in
+    // force in this process; an empty replacement of this test's own rules
+    // that out. Without the feature a unit-test build finds no variable, so
+    // no provider finds its key.
+    #[cfg(feature = "internals")]
+    let _environment = crate::__internals::env::replace();
+    let owned = Owned::default();
+
+    for model in ["model-one", "model-two", "model-one"] {
+        let error = owned.get(ProviderName::all()[0], model).await.expect_err("no key");
+        assert!(matches!(error.kind(), ErrorKind::Config), "{error:?}");
+        assert_eq!(owned.cells().len(), 0, "after {model}");
+    }
+}
+
+/// The failed build's cell is taken out only while the map still holds that
+/// very cell, still empty: a cell another call put in after the failure, or
+/// one a waiter has filled since, stays with its provider.
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
+#[test]
+fn a_failed_build_takes_out_only_its_own_empty_cell() {
+    let key = (ProviderName::all()[0], "a-model".to_owned());
+    let failed = Arc::new(super::Cell::new());
+    let owned = Owned::default();
+
+    // Another call's cell under the same key, whether its build is still
+    // running or done.
+    let running = Arc::new(super::Cell::new());
+    let built = Arc::new(super::Cell::new_with(Some(Fixed::named("built"))));
+    for other in [running, built] {
+        owned.cells().insert(key.clone(), Arc::clone(&other));
+        owned.forget(&key, &failed);
+        let held = owned.cells().get(&key).map(Arc::clone).expect("the other cell stays");
+        assert!(Arc::ptr_eq(&held, &other));
+    }
+
+    // The failed cell itself, filled by a waiter after the failure.
+    let filled = Arc::new(super::Cell::new_with(Some(Fixed::named("filled"))));
+    owned.cells().insert(key.clone(), Arc::clone(&filled));
+    owned.forget(&key, &filled);
+    assert_eq!(owned.keys(), std::slice::from_ref(&key), "a filled cell stays");
+
+    // The failed cell itself, still empty: the one case that is removed.
+    owned.cells().insert(key.clone(), Arc::clone(&failed));
+    owned.forget(&key, &failed);
+    assert_eq!(owned.cells().len(), 0);
 }
 
 /// The future of `send` is `Send` for a state that is `Sync`, so a caller can

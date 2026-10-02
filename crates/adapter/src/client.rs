@@ -57,14 +57,18 @@ pub struct Client {
 ///
 /// A cell is created empty on the first call that names its pair and filled
 /// by the first build that succeeds; calls that arrive during a build wait
-/// for it instead of building their own.
+/// for it instead of building their own. A build that fails takes its cell
+/// out of the map again, so a pair that never builds holds no entry.
 #[derive(Default)]
 struct Owned {
     cells: Mutex<Cells>,
 }
 
 /// A cell per provider name and model, empty until a build succeeds.
-type Cells = HashMap<(ProviderName, String), Arc<OnceCell<Arc<dyn Provider>>>>;
+type Cells = HashMap<(ProviderName, String), Arc<Cell>>;
+
+/// The provider of one provider name and model, once built.
+type Cell = OnceCell<Arc<dyn Provider>>;
 
 impl Owned {
     /// The map, whether or not a thread panicked while it held the lock: an
@@ -77,8 +81,25 @@ impl Owned {
     /// call built it.
     async fn get(&self, provider: ProviderName, model: &str) -> Result<Arc<dyn Provider>, Error> {
         let cell = Arc::clone(self.cells().entry((provider, model.to_owned())).or_default());
-        let built = cell.get_or_try_init(|| async { factory::build(provider, model) }).await?;
-        Ok(Arc::clone(built))
+        match cell.get_or_try_init(|| async { factory::build(provider, model) }).await {
+            Ok(built) => Ok(Arc::clone(built)),
+            Err(error) => {
+                self.forget(&(provider, model.to_owned()), &cell);
+                Err(error)
+            }
+        }
+    }
+
+    /// Takes `cell`, whose build just failed, out of the map, unless the map
+    /// no longer holds it under `key` or a waiter on it has filled it since.
+    ///
+    /// Without both checks a call that put a new cell in after an earlier
+    /// failure, or that filled this one, would lose the provider it built.
+    fn forget(&self, key: &(ProviderName, String), cell: &Arc<Cell>) {
+        let mut cells = self.cells();
+        if cells.get(key).is_some_and(|held| Arc::ptr_eq(held, cell) && !held.initialized()) {
+            cells.remove(key);
+        }
     }
 
     /// The provider name and model of every provider built so far, in a
