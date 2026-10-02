@@ -324,9 +324,10 @@ impl StdError for Error {
     /// it is already what `Display` prints. A response-validation failure
     /// leads to the decode error that names the offending field, which carries
     /// a position `Display` leaves out. A connection failure leads to the
-    /// transport's own error, which a caller can downcast to - unless it held
-    /// a credential of the request, when it is a private redacted copy that
-    /// cannot be downcast.
+    /// transport's own error, which a caller can downcast to - unless the
+    /// SDK's [`Client`](crate::Client) replaced it because it held a
+    /// credential of the request or its chain was longer than 32 links, when
+    /// it is a private redacted copy that cannot be downcast.
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match &self.0.kind {
             ErrorKind::Api(_) => None,

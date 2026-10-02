@@ -315,7 +315,8 @@ impl RetryPolicy {
     ///
     /// The returned future is `Send` when `F` and `Fut` are, so it can be
     /// spawned. It borrows `self`, `method` and `uri` until it completes, so
-    /// a spawned task owns the policy and the URI it passes, as below.
+    /// a spawned task cannot borrow them from its caller's stack: the example
+    /// below moves the policy and the URI into it.
     /// Nothing here spawns a task: the waits between attempts are awaited
     /// inside the returned future, and dropping it cancels the attempt in
     /// flight and every retry after it.
