@@ -1093,6 +1093,28 @@ fn seam_connection() {
     assert!(bare.source().is_none());
 }
 
+/// What `Error::connection`'s doc tells a caller about the cause: `Debug`
+/// prints it and `source()` returns it, which is why it must not carry a
+/// credential. Built outside a client, nothing is redacted.
+#[test]
+fn seam_connection_debug() {
+    let cause: BoxError =
+        Box::new(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by peer"));
+    let error = Error::connection("could not reach the vendor", Some(cause));
+
+    let debug = format!("{error:?}");
+    assert!(debug.starts_with("Error { kind: Connection,"), "{debug}");
+    assert!(debug.contains(r#"message: "could not reach the vendor""#), "{debug}");
+    assert!(debug.contains("source: "), "{debug}");
+    assert!(debug.contains("reset by peer"), "Debug prints the cause: {debug}");
+    assert_eq!(
+        error.source().map(ToString::to_string).as_deref(),
+        Some("reset by peer"),
+        "source() returns the cause"
+    );
+    assert_eq!(error.to_string(), "could not reach the vendor", "Display is the message alone");
+}
+
 #[test]
 fn seam_response_too_large() {
     let limit = 16 * 1024 * 1024;
