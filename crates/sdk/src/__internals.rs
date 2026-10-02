@@ -130,15 +130,15 @@ pub fn decode_list_models(
     crate::models::decode_list_models(body, status, headers, None)
 }
 
-/// See `ApiError::new`: the error a non-success response becomes, with its
-/// message read out of `body`.
+/// See `ApiError::from_response`: the error a non-success response becomes,
+/// with its message read out of `body`.
 #[must_use]
 pub fn api_error(
     status: http::StatusCode,
     body: Bytes,
     headers: http::HeaderMap,
 ) -> crate::ApiError {
-    crate::error::ApiError::new(status, body, headers, None)
+    crate::error::ApiError::from_response(status, body, headers)
 }
 
 /// See `error::parse_retry_after`: the wait the response headers ask for,

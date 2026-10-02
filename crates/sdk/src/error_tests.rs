@@ -1052,3 +1052,90 @@ fn a_wait_is_truncated_to_whole_milliseconds_and_saturates_rather_than_wrapping(
         Some(Duration::ZERO)
     );
 }
+
+// ------------------------------------------------------------ the seam
+//
+// The four constructors a crate outside the SDK builds its failures with, so
+// that a retry policy and a caller's `match` classify them as they classify
+// the SDK's own.
+
+#[test]
+fn seam_timeout() {
+    let error = Error::timeout(Duration::from_millis(600_000));
+
+    assert!(
+        matches!(error.kind(), ErrorKind::Timeout { timeout } if *timeout == Duration::from_secs(600)),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "Request timed out (timeout=600s).");
+    assert_eq!(error.kind().words().0, "timeout");
+    assert!(error.source().is_none(), "a deadline has no cause underneath it");
+}
+
+#[test]
+fn seam_connection() {
+    let cause: BoxError =
+        Box::new(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by peer"));
+    let error = Error::connection("Connection error: reset by peer", Some(cause));
+
+    assert!(matches!(error.kind(), ErrorKind::Connection), "{error:?}");
+    assert_eq!(error.to_string(), "Connection error: reset by peer");
+    let source = error.source().expect("the caller's cause is kept as the source");
+    assert_eq!(
+        source.downcast_ref::<std::io::Error>().map(std::io::Error::kind),
+        Some(std::io::ErrorKind::ConnectionReset),
+        "the caller's own type survives the boxing"
+    );
+
+    let bare = Error::connection(String::from("no route to host"), None);
+    assert!(matches!(bare.kind(), ErrorKind::Connection), "{bare:?}");
+    assert_eq!(bare.to_string(), "no route to host");
+    assert!(bare.source().is_none());
+}
+
+#[test]
+fn seam_response_too_large() {
+    let limit = 16 * 1024 * 1024;
+    let error = Error::response_too_large(limit);
+
+    assert!(
+        matches!(error.kind(), ErrorKind::ResponseTooLarge { limit: seen } if *seen == limit),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "The response body exceeded the limit of 16777216 bytes and was not read."
+    );
+    assert!(error.source().is_none());
+}
+
+#[test]
+fn seam_from_response() {
+    let body = r#"{"detail":{"error_type":"authentication_error","message":"Bad key"}}"#;
+    let response_headers = headers(&[("retry-after", "3"), (REQUEST_ID_HEADER, "req-1")]);
+    let error = ApiError::from_response(
+        status(403),
+        Bytes::copy_from_slice(body.as_bytes()),
+        response_headers.clone(),
+    );
+    let reference =
+        ApiError::new(status(403), Bytes::copy_from_slice(body.as_bytes()), response_headers, None);
+
+    // The public constructor is the four-argument one without an endpoint.
+    assert_eq!(error.status(), reference.status());
+    assert_eq!(error.kind(), ApiErrorKind::PermissionDenied);
+    assert_eq!(error.message(), reference.message());
+    assert_eq!(error.message(), "Bad key");
+    assert_eq!(error.error_type(), Some("authentication_error"));
+    assert!(error.is_authentication());
+    assert_eq!(error.endpoint(), None);
+    assert_eq!(error.request_id(), Some("req-1"));
+    assert_eq!(error.body(), body.as_bytes());
+    assert_eq!(error.headers(), reference.headers());
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(3)));
+    assert_eq!(error.to_string(), reference.to_string());
+    assert_eq!(format!("{error:?}"), format!("{reference:?}"));
+
+    let wrapped = Error::from(error);
+    assert!(matches!(wrapped.kind(), ErrorKind::Api(api) if api.status() == status(403)));
+}

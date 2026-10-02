@@ -41,6 +41,7 @@ use crate::{
     codec::{self, DecodeError, DecodeErrorKind, RawJson},
     constants::{RETRY_AFTER_MS_HEADER, request_id},
     text,
+    transport::BoxError,
 };
 
 /// What a failure this crate could not attribute to itself was caused by.
@@ -154,13 +155,42 @@ impl Error {
         Self::plain(ErrorKind::InvalidRequest, message, None)
     }
 
-    /// The request failed without an HTTP response.
+    /// The request failed without an HTTP response: an
+    /// [`ErrorKind::Connection`] whose `Display` is `message`.
     ///
     /// `cause` is the transport's own error, kept as the
-    /// [`source`](StdError::source) so a caller can downcast to it - unless it
-    /// held a credential of the request, when it is a private redacted copy
-    /// that cannot be downcast.
-    pub(crate) fn connection(message: impl Into<Box<str>>, cause: Option<Cause>) -> Self {
+    /// [`source`](StdError::source) so a caller can downcast to it. Inside the
+    /// SDK's own transport, a cause that held a credential of the request is
+    /// replaced by a private redacted copy that cannot be downcast; a caller
+    /// building this error has no such step. The cause is printed by `Debug`
+    /// and returned by `source()`, so it must not carry a credential: an API
+    /// key, a token, or a URL with userinfo or a key in its query.
+    ///
+    /// A custom [`HttpService`](crate::HttpService) under the SDK's
+    /// [`Client`](crate::Client) can fail with this error, boxed as its own
+    /// error type: the SDK passes an error of its own type through unchanged
+    /// (`transport::connection`) instead of wrapping it in a new connection
+    /// error. Such a transport so chooses the retry class of its failures, a
+    /// connection failure retried while
+    /// [`RetryPolicy::api_connection_error`](crate::RetryPolicy::api_connection_error)
+    /// is on, or a [`timeout`](Self::timeout). This adds a way to build an
+    /// error; it does not change how an existing transport's errors are
+    /// classified.
+    ///
+    /// ```
+    /// use std::error::Error as _;
+    ///
+    /// use typesafe_sdk::{Error, ErrorKind};
+    ///
+    /// let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+    /// let error = Error::connection("could not reach the vendor", Some(Box::new(refused)));
+    ///
+    /// assert!(matches!(error.kind(), ErrorKind::Connection));
+    /// assert_eq!(error.to_string(), "could not reach the vendor");
+    /// assert_eq!(error.source().map(ToString::to_string).as_deref(), Some("refused"));
+    /// ```
+    #[must_use]
+    pub fn connection(message: impl Into<Box<str>>, cause: Option<BoxError>) -> Self {
         Self::plain(ErrorKind::Connection, message, cause)
     }
 
@@ -171,13 +201,60 @@ impl Error {
         (message, source)
     }
 
-    /// The attempt ran past `timeout`.
-    pub(crate) fn timeout(timeout: Duration) -> Self {
+    /// The attempt ran past `timeout`: an [`ErrorKind::Timeout`] carrying it,
+    /// with no cause.
+    ///
+    /// A [`RetryPolicy`](crate::RetryPolicy) retries this kind while
+    /// [`api_timeout_error`](crate::RetryPolicy::api_timeout_error) is on, so
+    /// code that puts its own deadline around an attempt returns this error
+    /// to have the deadline classified as the SDK's own is.
+    ///
+    /// A custom [`HttpService`](crate::HttpService) under the SDK's
+    /// [`Client`](crate::Client) can fail with this error, boxed as its own
+    /// error type: the SDK passes an error of its own type through unchanged
+    /// (`transport::connection`) instead of wrapping it in a connection
+    /// error. Such a transport so chooses the retry class of its failures, a
+    /// timeout or a [`connection`](Self::connection) failure. This adds a way
+    /// to build an error; it does not change how an existing transport's
+    /// errors are classified.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use typesafe_sdk::{Error, ErrorKind};
+    ///
+    /// let error = Error::timeout(Duration::from_secs(30));
+    ///
+    /// assert!(matches!(error.kind(), ErrorKind::Timeout { timeout } if timeout.as_secs() == 30));
+    /// assert_eq!(error.to_string(), "Request timed out (timeout=30s).");
+    /// ```
+    #[must_use]
+    pub fn timeout(timeout: Duration) -> Self {
         Self::plain(ErrorKind::Timeout { timeout }, "", None)
     }
 
-    /// A success response's body was larger than `limit` bytes.
-    pub(crate) fn response_too_large(limit: usize) -> Self {
+    /// A success response's body was larger than `limit` bytes: an
+    /// [`ErrorKind::ResponseTooLarge`] carrying the limit, with no cause.
+    ///
+    /// A [`RetryPolicy`](crate::RetryPolicy) never retries this kind, because
+    /// the same request gets as large an answer again. Code that reads a
+    /// response body under its own cap returns this error for a success
+    /// body over the cap, so that it reads as the SDK's own limit does. A
+    /// failure status with a large body is an [`ApiError`] instead.
+    ///
+    /// ```
+    /// use typesafe_sdk::{Error, ErrorKind};
+    ///
+    /// let error = Error::response_too_large(16 * 1024 * 1024);
+    ///
+    /// assert!(matches!(error.kind(), ErrorKind::ResponseTooLarge { limit: 16_777_216 }));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "The response body exceeded the limit of 16777216 bytes and was not read."
+    /// );
+    /// ```
+    #[must_use]
+    pub fn response_too_large(limit: usize) -> Self {
         Self::plain(ErrorKind::ResponseTooLarge { limit }, "", None)
     }
 
@@ -309,6 +386,33 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    /// Builds the error for a response with an unsuccessful `status`, reading
+    /// its message out of `body` as [`message`](Self::message) describes.
+    ///
+    /// The error names no endpoint ([`endpoint`](Self::endpoint) is `None`),
+    /// so `Display` is the status and the message alone. `headers` are kept
+    /// for [`retry_after`](Self::retry_after) and
+    /// [`request_id`](Self::request_id); `Debug` shows only their count and
+    /// the body's length.
+    ///
+    /// ```
+    /// use bytes::Bytes;
+    /// use http::{HeaderMap, StatusCode};
+    /// use typesafe_sdk::{ApiError, ApiErrorKind, Error, ErrorKind};
+    ///
+    /// let body = Bytes::from_static(br#"{"error":{"message":"Rate limit reached"}}"#);
+    /// let error = ApiError::from_response(StatusCode::TOO_MANY_REQUESTS, body, HeaderMap::new());
+    ///
+    /// assert_eq!(error.kind(), ApiErrorKind::RateLimit);
+    /// assert_eq!(error.message(), "Rate limit reached");
+    /// assert_eq!(error.to_string(), "429 Rate limit reached");
+    /// assert!(matches!(Error::from(error).kind(), ErrorKind::Api(_)));
+    /// ```
+    #[must_use]
+    pub fn from_response(status: StatusCode, body: Bytes, headers: HeaderMap) -> Self {
+        Self::new(status, body, headers, None)
+    }
+
     /// Builds the error for a response the server refused, reading its message
     /// out of `body`.
     pub(crate) fn new(
