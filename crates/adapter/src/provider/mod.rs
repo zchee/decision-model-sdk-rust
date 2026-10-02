@@ -56,6 +56,18 @@ pub trait Provider: Send + Sync + fmt::Debug {
         &'a self,
         call: ProviderCall<'a>,
     ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>>;
+
+    /// The name recorded as an attempt's `debug_info.provider`.
+    ///
+    /// The default is [`std::any::type_name`] of the implementing type, whose
+    /// text the compiler does not promise to keep stable across versions; it
+    /// is for diagnostics, not for matching. The built-in providers override
+    /// it with their public path, such as
+    /// `system_one_adapter::OpenAiProvider`. A provider that wraps another
+    /// may return a name it builds at run time.
+    fn type_name(&self) -> &str {
+        std::any::type_name::<Self>()
+    }
 }
 
 /// What one model request is asked with.
@@ -87,13 +99,13 @@ impl<'a> ProviderCall<'a> {
     /// The conversation to send, in order: the system prompt, the document,
     /// and any corrective turns.
     #[must_use]
-    pub fn messages(&self) -> &[Message] {
+    pub fn messages(&self) -> &'a [Message] {
         self.messages
     }
 
     /// The JSON schema the reply must follow.
     #[must_use]
-    pub fn schema(&self) -> &Schema {
+    pub fn schema(&self) -> &'a Schema {
         self.schema
     }
 
@@ -170,6 +182,10 @@ impl fmt::Debug for Message {
 }
 
 /// Who a [`Message`] is from; serialized in lower case.
+///
+/// The enum is exhaustive on purpose: a new role is a protocol change that
+/// every provider must map to its vendor's roles, so adding one is a major
+/// release rather than a variant a provider could silently not handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -184,6 +200,7 @@ pub enum Role {
 /// The model's reply text and the token counts the vendor reported.
 ///
 /// A count the vendor did not report is `None`, never zero.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderResult {
     text: String,
     input_tokens: Option<u64>,
@@ -235,7 +252,7 @@ impl fmt::Debug for ProviderResult {
 /// the adapter's error, so it names the vendor and the stop reason or status
 /// and never carries the model's text or an error message from the body;
 /// those stay in the attempt's recorded response.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonAnswer {
     message: String,
 }
@@ -256,11 +273,20 @@ impl fmt::Display for NonAnswer {
 
 /// The JSON schema a reply must follow, kept as its JSON text.
 ///
-/// Serializing it embeds the JSON unchanged.
+/// Serializing it with `serde_json` embeds the JSON unchanged. Two schemas
+/// are equal when their texts are.
 #[derive(Clone)]
 pub struct Schema {
     json: Box<RawValue>,
 }
+
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Schema {}
 
 impl Schema {
     /// The schema written as `json`, which must be one JSON object.
@@ -352,6 +378,30 @@ impl AttemptTrace {
         self.response = Some(raw_json(json));
         self.finish_reason = Some(finish_reason.map(str::to_owned));
     }
+
+    /// The JSON body of the request, when one was recorded.
+    #[must_use]
+    pub fn request(&self) -> Option<&str> {
+        self.request.as_deref().map(RawValue::get)
+    }
+
+    /// The vendor API the request went to, when a request was recorded.
+    #[must_use]
+    pub fn api(&self) -> Option<&str> {
+        self.api
+    }
+
+    /// The JSON body of the response, when one was recorded.
+    #[must_use]
+    pub fn response(&self) -> Option<&str> {
+        self.response.as_deref().map(RawValue::get)
+    }
+
+    /// The vendor's stop reason, when a recorded response gave one.
+    #[must_use]
+    pub fn finish_reason(&self) -> Option<&str> {
+        self.finish_reason.as_ref().and_then(Option::as_deref)
+    }
 }
 
 impl fmt::Debug for AttemptTrace {
@@ -390,17 +440,22 @@ pub enum ProviderName {
 
 impl ProviderName {
     /// Every provider compiled in, in the order upstream lists them.
-    pub(crate) const ALL: &'static [Self] = &[
-        #[cfg(feature = "openai")]
-        Self::OpenAi,
-        #[cfg(feature = "anthropic")]
-        Self::Anthropic,
-        #[cfg(feature = "gemini")]
-        Self::Gemini,
-    ];
+    #[must_use]
+    pub const fn all() -> &'static [ProviderName] {
+        &[
+            #[cfg(feature = "openai")]
+            Self::OpenAi,
+            #[cfg(feature = "anthropic")]
+            Self::Anthropic,
+            #[cfg(feature = "gemini")]
+            Self::Gemini,
+        ]
+    }
 
-    /// The name upstream selects the provider with.
-    pub(crate) fn as_str(self) -> &'static str {
+    /// The name upstream selects the provider with: `openai`, `anthropic` or
+    /// `gemini`; what `Display` prints and [`FromStr`] reads.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             #[cfg(feature = "openai")]
             Self::OpenAi => "openai",
@@ -424,7 +479,7 @@ impl FromStr for ProviderName {
     /// Reads `openai`, `anthropic` or `gemini`, exactly, when that provider is
     /// compiled in.
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Self::ALL
+        Self::all()
             .iter()
             .copied()
             .find(|provider| provider.as_str() == name)
@@ -444,7 +499,7 @@ pub struct ParseProviderNameError;
 /// The sentence naming the providers compiled in, in upstream's wording.
 fn compiled_in() -> String {
     let quoted =
-        ProviderName::ALL.iter().map(|provider| format!("'{provider}'")).collect::<Vec<_>>();
+        ProviderName::all().iter().map(|provider| format!("'{provider}'")).collect::<Vec<_>>();
     let listed = match quoted.as_slice() {
         [] => {
             return "No provider is compiled in; a provider whose feature is off is not available."

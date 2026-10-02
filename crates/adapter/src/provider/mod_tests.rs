@@ -58,10 +58,10 @@ async fn a_caller_provider_runs_behind_a_trait_object() {
     assert_eq!(result.text(), "true:17:hello");
     assert_eq!(result.input_tokens(), Some(3));
     assert_eq!(result.output_tokens(), None);
-    assert_eq!(trace.api, Some("echo"));
-    assert_eq!(trace.request.as_deref().map(RawValue::get), Some(r#"{"model":"echo-1"}"#));
-    assert_eq!(trace.response.as_deref().map(RawValue::get), Some(r#"{"output":"ok"}"#));
-    assert_eq!(trace.finish_reason, Some(Some("stop".to_owned())));
+    assert_eq!(trace.api(), Some("echo"));
+    assert_eq!(trace.request(), Some(r#"{"model":"echo-1"}"#));
+    assert_eq!(trace.response(), Some(r#"{"output":"ok"}"#));
+    assert_eq!(trace.finish_reason(), Some("stop"));
 }
 
 #[tokio::test]
@@ -75,8 +75,9 @@ async fn a_non_answer_is_the_inner_error_and_leaves_the_response_unrecorded() {
 
     let non_answer = reply.expect("no transport failure").expect_err("a non-answer");
     assert_eq!(non_answer.to_string(), "echo refused an empty document");
-    assert!(trace.request.is_some(), "the request was recorded before the refusal");
-    assert!(trace.response.is_none());
+    assert!(trace.request().is_some(), "the request was recorded before the refusal");
+    assert_eq!(trace.response(), None);
+    assert_eq!(trace.finish_reason(), None);
     assert_eq!(trace.finish_reason, None, "no response recorded means no finish_reason member");
 }
 
@@ -184,8 +185,13 @@ fn an_attempt_trace_keeps_text_that_is_not_json_as_a_json_string() {
     trace.record_request("not json at all", "chat.completions");
     trace.record_response("{\"partial\":", None);
 
-    assert_eq!(trace.request.as_deref().map(RawValue::get), Some("\"not json at all\""));
-    assert_eq!(trace.response.as_deref().map(RawValue::get), Some("\"{\\\"partial\\\":\""));
+    assert_eq!(trace.request(), Some("\"not json at all\""));
+    assert_eq!(trace.response(), Some("\"{\\\"partial\\\":\""));
+    assert_eq!(
+        trace.finish_reason(),
+        None,
+        "the getter does not tell a null stop reason from none"
+    );
     assert_eq!(
         trace.finish_reason,
         Some(None),
@@ -212,7 +218,7 @@ fn debug_of_a_call_and_its_trace_prints_counts_and_kinds() {
 #[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
 #[test]
 fn provider_names_read_and_print_as_upstream_spells_them() {
-    for provider in ProviderName::ALL {
+    for provider in ProviderName::all() {
         let name = provider.to_string();
 
         let read = name.parse::<ProviderName>().expect("a compiled-in name reads back");
@@ -259,4 +265,96 @@ fn without_a_provider_feature_no_name_reads() {
         error.to_string(),
         "Unknown provider. No provider is compiled in; a provider whose feature is off is not available."
     );
+}
+
+#[test]
+fn a_trait_object_reports_the_concrete_type_name_unless_overridden() {
+    /// A provider that names itself, as the built-in ones do.
+    #[derive(Debug)]
+    struct Named(String);
+
+    impl Provider for Named {
+        fn model_name(&self) -> &str {
+            "named-1"
+        }
+
+        fn request<'a>(
+            &'a self,
+            _call: ProviderCall<'a>,
+        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+            Box::pin(async { Ok(Err(NonAnswer::new("never asked"))) })
+        }
+
+        fn type_name(&self) -> &str {
+            &self.0
+        }
+    }
+
+    let default: Arc<dyn Provider> = Arc::new(EchoProvider);
+    let overridden: Arc<dyn Provider> = Arc::new(Named("my_crate::Wrapped<Inner>".to_owned()));
+
+    assert_eq!(default.type_name(), std::any::type_name::<EchoProvider>());
+    assert!(default.type_name().ends_with("::EchoProvider"), "{}", default.type_name());
+    assert_eq!(overridden.type_name(), "my_crate::Wrapped<Inner>");
+}
+
+#[test]
+fn messages_and_schema_outlive_the_borrow_of_the_call() {
+    let messages = [Message::new(Role::User, "hello")];
+    let schema = schema();
+    let mut trace = AttemptTrace::default();
+    let mut call = ProviderCall::new(&messages, &schema, true, &mut trace);
+
+    // Both are held across the mutable borrow `trace()` takes of the call.
+    let held_messages = call.messages();
+    let held_schema = call.schema();
+    call.trace().record_request("{}", "echo");
+
+    assert_eq!(held_messages.len(), 1);
+    assert_eq!(held_schema.as_str(), r#"{"type":"object"}"#);
+    assert_eq!(trace.api(), Some("echo"));
+}
+
+#[test]
+fn results_non_answers_and_schemas_compare_and_clone() {
+    let result = ProviderResult::new("{}".to_owned(), Some(1), None);
+    let non_answer = NonAnswer::new("refusal");
+    let schema = schema();
+
+    assert!(result.clone() == result);
+    assert!(result != ProviderResult::new("{}".to_owned(), Some(2), None));
+    assert_eq!(non_answer.clone(), non_answer);
+    assert_ne!(non_answer, NonAnswer::new("max_tokens"));
+    assert_eq!(schema.clone(), schema);
+    assert_eq!(
+        schema,
+        Schema::from_json(" {\"type\":\"object\"} ").expect("an object"),
+        "compared by text"
+    );
+    assert_ne!(schema, Schema::from_json(r#"{"type": "object"}"#).expect("an object"));
+}
+
+#[test]
+fn the_seam_types_cross_threads() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    fn assert_send<T: Send>() {}
+
+    assert_send_sync::<Arc<dyn Provider>>();
+    assert_send_sync::<Message>();
+    assert_send_sync::<Schema>();
+    assert_send_sync::<AttemptTrace>();
+    assert_send_sync::<ProviderResult>();
+    assert_send_sync::<NonAnswer>();
+    assert_send::<ProviderCall<'_>>();
+}
+
+#[test]
+fn provider_names_are_usable_in_a_constant() {
+    const NAMES: &[ProviderName] = ProviderName::all();
+
+    for (name, provider) in NAMES.iter().map(|provider| provider.as_str()).zip(ProviderName::all())
+    {
+        assert_eq!(name, provider.to_string());
+    }
+    assert_eq!(NAMES.len(), ProviderName::all().len());
 }
