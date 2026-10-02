@@ -507,6 +507,30 @@ async fn usage_separates_last_attempt_from_cumulative_totals() {
     assert!(serialized[0].get("request").is_none(), "the scripted provider records no request");
 }
 
+/// The retries of every corrective turn add up: a retry made before a
+/// malformed reply is still counted once the corrected reply arrives.
+#[tokio::test]
+async fn retries_of_an_earlier_turn_are_kept_across_a_correction() {
+    let scripted = provider(vec![status(503), reply(r#"{"answers":{}}"#), reply(ANSWER)]);
+    let client = native().retry(retries(1)).n_retry_malformed_structure(1).build().expect("builds");
+
+    let response = client
+        .system_one("state", &answer_question())
+        .provider_instance(scripted.clone())
+        .send()
+        .await
+        .expect("the corrected reply answers");
+
+    assert_eq!(scripted.calls().len(), 3);
+    assert_eq!(response.usage().n_retries(), 1);
+    assert_eq!(response.usage().n_retries_malformed_structure(), 1);
+    assert_eq!(
+        categories(&response),
+        [RetryCategory::ProviderError, RetryCategory::MalformedStructure]
+    );
+    assert_eq!(response.usage().input_tokens_total(), Some(22));
+}
+
 // Upstream: tests/test_client_with_fake_model.py::test_attempts_are_independent_and_replayable
 #[tokio::test]
 async fn attempts_are_independent_and_replayable() {
