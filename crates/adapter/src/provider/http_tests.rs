@@ -608,8 +608,31 @@ async fn a_failure_response_that_repeats_the_key_in_a_header_is_not_shown() {
 }
 
 #[tokio::test]
+async fn a_failure_response_that_repeats_the_key_as_a_header_name_is_not_shown() {
+    // The key is a legal header name and has no upper-case letter, so it
+    // arrives as it was sent.
+    let name = HeaderName::from_bytes(KEY.as_bytes()).expect("a legal header name");
+    assert_eq!(name.as_str(), KEY);
+    let server = TestServer::start(Protocol::Http1, move |_| {
+        let mut response =
+            json_response(StatusCode::FORBIDDEN, r#"{"error":{"message":"denied"}}"#);
+        response.headers_mut().insert(name.clone(), HeaderValue::from_static("refused"));
+        async move { response }
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::FORBIDDEN, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
 async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
-    // One character short of the key, in the body and in a header value.
+    // One character short of the key: in the body, in a header value and as
+    // a header name.
     let other = &KEY[..KEY.len() - 1];
     let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {other}"}}}}"#);
     let sent = body.clone();
@@ -618,6 +641,8 @@ async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
         let echoed =
             HeaderValue::from_str(&format!("Bearer {}", &KEY[1..])).expect("a legal value");
         response.headers_mut().insert("x-echoed-authorization", echoed);
+        let name = HeaderName::from_bytes(KEY[1..].as_bytes()).expect("a legal header name");
+        response.headers_mut().insert(name, HeaderValue::from_static("refused"));
         async move { response }
     })
     .await
@@ -630,6 +655,7 @@ async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(api.headers()[&KEY[1..]], "refused");
     assert_eq!(api.body(), body.as_bytes());
     assert_eq!(error.to_string(), format!("401 invalid token: Bearer {other}"));
     assert_eq!(api.headers()["x-echoed-authorization"], format!("Bearer {}", &KEY[1..]).as_str());
