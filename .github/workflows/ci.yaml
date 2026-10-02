@@ -305,6 +305,8 @@ jobs:
       # anywhere but last could never fail the step.
       - name: Separation of the billed crates and the adapter's notice
         run: |
+          test -d crates/adapter-live-tests
+          test -d crates/live-tests
           if grep -rnwE 'TYPESAFE_API_KEY|API_KEY_ENV|TYPESAFE_LIVE_TESTS' crates/adapter-live-tests; then
             exit 1
           fi
