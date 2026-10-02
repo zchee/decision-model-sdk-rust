@@ -160,7 +160,7 @@ covered.
 
 | Lines | Why |
 | --- | --- |
-| 354-356, 394-396, 413-415, 462-464 | `Visitor::expecting` of the four visitors. serde calls it only to write its own error message, and the decoder turns every serde error into its own problem text without rendering serde's. |
+| 354-356, 394-396, 413-415, 462-464 | `Visitor::expecting` of the four visitors. serde calls it to write a type error, and the decoder never hands a visitor a value of the wrong JSON type: it checks the type first (`json_type`, lines 177, 224, 258, 286) and reports a wrong type as its own problem. |
 
 ### `crates/adapter/src/error.rs`
 
