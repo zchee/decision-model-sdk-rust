@@ -497,22 +497,25 @@ fn duplicate_members_keep_the_last_value() {
     );
 }
 
-// `serde_json` hands the integer text `-0` over as the float -0.0, so every
-// number text that denotes that float is level 0: `-0.0`, `-0e0`, and
-// `-1e-400`, which is too small for a float. Pydantic accepts `-0` only and
-// refuses the others (`int_type`; measured on CPython 3.14.6, pydantic
-// 2.13.5): a recorded deviation. A float zero without the sign and the
-// smallest negative float stay refused.
+// A level is an integer text. `serde_json` hands `-0` over as the float
+// -0.0, as it does `-0.0`, `-0e0` and `-1e-400`, so the decoder tells them
+// apart by their text. Each verdict is pydantic's (measured on CPython
+// 3.14.6, pydantic 2.13.5: `int_type` for every text with a fraction or an
+// exponent).
 #[test]
-fn negative_zero_is_level_zero() {
-    for literal in ["-0", "-0.0", "-0e0", "-0.0e5", "-1e-400"] {
+fn a_level_is_an_integer_text() {
+    for (literal, level) in [("-0", 0), ("0", 0), ("1", 1)] {
         assert_eq!(
             decode_answer_text(SCORE, AnswerMode::Discrete, literal),
-            Ok(DecodedAnswer::Level(0)),
+            Ok(DecodedAnswer::Level(level)),
             "{literal}"
         );
     }
-    for literal in ["0.0", "0e0", "1e-400", "-5e-324"] {
+    let refused = [
+        "0e0", "1e0", "2E0", "1.0", "-0.0", "-0e0", "-1e-400", "10e-1", "0.0", "-0.0e5", "0E0",
+        "-0E0", "1e-400", "-5e-324", "2", "-1",
+    ];
+    for literal in refused {
         assert_eq!(
             decode_answer_text(SCORE, AnswerMode::Discrete, literal),
             Err(not_allowed(Expected::Score { criteria: 2 })),

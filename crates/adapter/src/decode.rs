@@ -30,11 +30,6 @@
 //! order: the reply, its `answers`, then each question in question order. No
 //! problem holds text of the reply, only question ids, labels and JSON types,
 //! because the problems become the correction prompt.
-//!
-//! One deviation from upstream, by the port's plan: for a discrete score,
-//! every number text that denotes the float -0.0 (`-0.0`, `-0e0`, `-1e-400`)
-//! is level 0, as `-0` is, where pydantic accepts the integer text `-0` only.
-//! `serde_json` reads all of them as the same float.
 
 use std::{borrow::Cow, fmt};
 
@@ -231,17 +226,25 @@ fn level(
         problems.push(Problem::WrongType { at, expected, found });
         return None;
     }
-    let mut json = serde_json::Deserializer::from_str(value.get());
-    // The typed `deserialize_i64`, never the self-describing entry point:
-    // with `serde_json`'s `arbitrary_precision` feature, which any crate of
-    // a build can turn on, that one hands a number over as a map.
-    match json.deserialize_i64(LevelVisitor { criteria }) {
-        Ok(Some(level)) => Some(level),
-        Ok(None) | Err(_) => {
-            problems.push(Problem::NotAllowed { at, expected });
-            None
-        }
+    let text = value.get();
+    // A level is an integer literal: a text with a fraction or an exponent
+    // is refused whatever number it denotes (`1.0`, `1e0`, `-0.0`), as
+    // pydantic refuses it. The typed `deserialize_i64` reads the rest, never
+    // the self-describing entry point: with `serde_json`'s
+    // `arbitrary_precision` feature, which any crate of a build can turn on,
+    // that one hands a number over as a map.
+    let level = if text.contains(['.', 'e', 'E']) {
+        None
+    } else {
+        serde_json::Deserializer::from_str(text)
+            .deserialize_i64(LevelVisitor { criteria })
+            .ok()
+            .flatten()
+    };
+    if level.is_none() {
+        problems.push(Problem::NotAllowed { at, expected });
     }
+    level
 }
 
 /// One of the labels `names`, as its index.
@@ -474,10 +477,9 @@ impl Visitor<'_> for LevelVisitor {
         Ok(self.in_range(usize::try_from(number).ok()))
     }
 
-    /// A float is no level, with one exception: `serde_json` reads the
-    /// integer text `-0` as the float -0.0, and `-0` is level 0. Every other
-    /// text that denotes that float (`-0.0`, `-0e0`, `-1e-400`) arrives as
-    /// the same call and is level 0 too.
+    /// Only integer texts reach this visitor, and `serde_json` hands two
+    /// kinds of them over as a float: `-0`, as -0.0, which is level 0, and an
+    /// integer too large for 64 bits, which is no level.
     fn visit_f64<E>(self, number: f64) -> Result<Self::Value, E>
     where
         E: de::Error,
