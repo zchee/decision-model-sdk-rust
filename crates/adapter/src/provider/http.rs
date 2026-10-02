@@ -497,9 +497,13 @@ pub(crate) struct Exchange<'a> {
 ///   deadline passes first.
 /// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
-///   whose body is over the limit is an API error without the body. Before
-///   the error is built, the bytes of the body, when it was read, and of
-///   each header value are searched for the key in the spellings listed at
+///   whose body is over the limit keeps its status and its headers; the
+///   body is not read past the limit and is not kept: `ApiError::body()`
+///   returns a replacement this module wrote, a JSON object whose message
+///   says that the response body was larger than the limit, and the SDK
+///   prints that message after the status. Before the error is built, the
+///   bytes of the body, when it was read, and of each header value are
+///   searched for the key in the spellings listed at
 ///   [`KeyHeader::holds_key`]. On a hit the error keeps the status and
 ///   neither the body nor the headers: its header map is empty, and
 ///   `ApiError::body()` returns a replacement this module wrote, not the
@@ -565,8 +569,16 @@ where
 const KEY_REPEATED: &str =
     "The response repeated the API key, so its body and headers are not shown.";
 
+/// The message of an API error whose response body was over the size
+/// limit: larger by the length the response declared, which is refused
+/// before a byte is read, or by the bytes that arrived. The SDK prints it
+/// after the status; with no body at all it would print `status code (no
+/// body)`, which is not what happened.
+const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is not shown.";
+
 /// The API error a response with a status outside 2xx becomes. `body` is
-/// `None` for a body over the size limit, which was not read.
+/// `None` for a body over the size limit, which was not read to its end and
+/// is replaced by [`BODY_TOO_LARGE`] as the message.
 ///
 /// A server can send back what it was sent, a gateway that quotes a refused
 /// `authorization` header say, and the SDK prints the message it reads out
@@ -587,7 +599,8 @@ fn api_error(
     if repeated {
         return ApiError::from_response(status, replacement(KEY_REPEATED), HeaderMap::new());
     }
-    ApiError::from_response(status, body.unwrap_or_default(), headers)
+    let body = body.unwrap_or_else(|| replacement(BODY_TOO_LARGE));
+    ApiError::from_response(status, body, headers)
 }
 
 /// The body this module puts in the place of a response body it does not

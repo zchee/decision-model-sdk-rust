@@ -456,8 +456,40 @@ async fn a_failure_status_over_the_limit_is_still_an_api_error() {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(api.body(), b"", "a body over the limit is not kept");
     assert_eq!(api.kind(), ApiErrorKind::InternalServer);
+    // The server's body is not kept; the text says what happened to it.
+    assert_eq!(api.body(), BODY_TOO_LARGE_BODY, "{}", api.body_text());
+    assert_eq!(
+        error.to_string(),
+        "502 The response body was larger than the limit and is not shown."
+    );
+    // The headers are the server's.
+    assert_eq!(api.headers()[CONTENT_TYPE], "application/json");
+    assert_eq!(api.headers()[http::header::CONTENT_LENGTH], "65");
+    assert_eq!(server.request_count(), 1);
+}
+
+/// The body this module wrote for a failure response over the limit.
+const BODY_TOO_LARGE_BODY: &[u8] =
+    br#"{"error":{"message":"The response body was larger than the limit and is not shown."}}"#;
+
+#[tokio::test]
+async fn a_failure_response_over_the_limit_that_repeats_the_key_in_a_header_is_not_shown() {
+    let server = TestServer::start(Protocol::Http1, |_| async {
+        let mut response = json_response(StatusCode::BAD_GATEWAY, json_string(65));
+        let echoed = HeaderValue::from_str(&format!("Bearer {KEY}")).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        response
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(Some(64)));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    // The key in a header value decides: neither the headers nor the text
+    // about the size are kept.
+    assert_not_shown(error, StatusCode::BAD_GATEWAY, KEY);
 }
 
 // ------------------------------------- a failure response that repeats the key
@@ -1078,7 +1110,11 @@ async fn a_body_that_declares_no_length_is_cut_at_the_limit() {
         panic!("expected an API error, got {failed:?}");
     };
     assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(api.body(), b"");
+    assert_eq!(api.body(), BODY_TOO_LARGE_BODY, "{}", api.body_text());
+    assert_eq!(
+        failed.to_string(),
+        "503 The response body was larger than the limit and is not shown."
+    );
 
     // The same 18 bytes against a limit of 18 are read.
     let fixture = Fixture::new("http://scripted.invalid", limits(Some(18)));
