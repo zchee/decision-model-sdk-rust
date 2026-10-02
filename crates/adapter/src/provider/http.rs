@@ -19,7 +19,8 @@
 //! request's headers. So a failed call's error chain is searched before it
 //! is kept, and the header values of a response with a status outside 2xx,
 //! and its body when that was read, are searched before the API error is
-//! built from them; a body over the size limit is not read to its end, not
+//! built from them, and the error that was built is searched as an error
+//! chain is; a body over the size limit is not read to its end, not
 //! searched and not kept. The body of a 2xx response is not searched: the
 //! provider reads it, and the trace holds it as received.
 //!
@@ -499,20 +500,26 @@ pub(crate) struct Exchange<'a> {
 /// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
 ///   whose body is over the limit keeps its status, and its headers unless
-///   the search below has a hit in one of them; the body is not read past
-///   the limit and is not kept: without such a hit, `ApiError::body()`
+///   a search below has a hit; the body is not read past the limit and is
+///   not kept: without such a hit, `ApiError::body()`
 ///   returns a replacement this module wrote, a JSON object whose message
 ///   says that the response body was larger than the limit, and the SDK
 ///   prints that message after the status. Before the error is built, the
 ///   bytes of the body, when it was read, and of each header value are
 ///   searched for the key in the spellings listed at
-///   [`KeyHeader::holds_key`]. On a hit the error keeps the status and
-///   neither the body nor the headers: its header map is empty, and
-///   `ApiError::body()` returns a replacement this module wrote, not the
-///   server's bytes: a JSON object whose message says that the response
-///   repeated the API key. A body that spells the key in another way is not
-///   a hit, and the message the SDK reads out of the body can then hold the
-///   key: a JSON `\u` escape of one of its characters is decoded there.
+///   [`KeyHeader::holds_key`]. The error built from the response is then
+///   searched as that method describes, in its `Display` and both forms of
+///   its `Debug`: the SDK decodes the message out of the body, so a JSON
+///   `\u` escape of one character of the key, which the first search does
+///   not find, ends as the key in the message. On a hit of either search
+///   the error keeps the status and neither the body nor the headers: its
+///   header map is empty, and `ApiError::body()` returns a replacement this
+///   module wrote, not the server's bytes: a JSON object whose message says
+///   that the response's body and headers are not shown, because showing
+///   them could reveal the API key. Without a hit the body is kept as it
+///   arrived: a body that spells the key in a way neither search finds, in
+///   a member the SDK reads no message from say, is returned by
+///   `ApiError::body()` as the server sent it.
 /// - [`ErrorKind::Connection`](typesafe_sdk::ErrorKind::Connection) when the
 ///   service fails or the body cannot be read. The service's own error is
 ///   the [`source`](StdError::source), unless the search described at
@@ -566,13 +573,20 @@ where
     result
 }
 
-/// The message of an API error whose response held the key, in its body or
-/// in a header value. The SDK prints it after the status.
-const KEY_REPEATED: &str =
-    "The response repeated the API key, so its body and headers are not shown.";
+/// The message of an API error whose response the key search had a hit
+/// for. The SDK prints it after the status.
+///
+/// One text for every way the search has a hit: the body or a header value
+/// holds the key as it arrived, or the error built from the response would
+/// show it. The last can be a key the response spelled with an escape that
+/// the SDK decoded, and it can be a key the response does not hold at all:
+/// the SDK escapes a control character of the message, and a tab written
+/// as `\t` can spell a key that holds those two characters.
+const NOT_SHOWN: &str =
+    "The response's body and headers are not shown, because showing them could reveal the API key.";
 
 /// The message of an API error whose response body was over the size
-/// limit, when the key search has no hit in a header value: larger by the
+/// limit, when the key search has no hit for the response: larger by the
 /// length the response declared, which is refused before a byte is read,
 /// or by the bytes that arrived. The SDK prints it after the status; with
 /// no body at all it would print `status code (no body)`, which is not
@@ -581,8 +595,8 @@ const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is
 
 /// The API error a response with a status outside 2xx becomes. `body` is
 /// `None` for a body over the size limit, which was not read to its end;
-/// unless the search has a hit in a header value, the error's message is
-/// then [`BODY_TOO_LARGE`].
+/// unless the search has a hit, the error's message is then
+/// [`BODY_TOO_LARGE`].
 ///
 /// A server can send back what it was sent, a gateway that quotes a refused
 /// `authorization` header say, and the SDK prints the message it reads out
@@ -590,22 +604,34 @@ const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is
 /// searched for the key first, in the spellings [`key_forms`] lists; a
 /// body that is `None` is not searched, only the header values are. The
 /// bytes are searched as they arrived, not the message: the SDK cuts a
-/// message at 200 characters, and a key cut there is no longer found. On a
-/// hit the error is built from the status alone, with [`KEY_REPEATED`] as
-/// its message.
+/// message at 200 characters, and a key cut there is no longer found.
+///
+/// Then the error is built and searched as [`KeyHeader::holds_key`]
+/// describes. The bytes alone are not enough: the SDK decodes the message
+/// out of a JSON body, so a body that writes one character of the key as a
+/// `\u` escape holds the key in none of the searched spellings and gives a
+/// message that holds it as written.
+///
+/// On a hit of either search the error is built from the status alone,
+/// with [`NOT_SHOWN`] as its message.
 fn api_error(
     status: StatusCode,
     headers: HeaderMap,
     body: Option<Bytes>,
     key: &KeyHeader,
 ) -> ApiError {
-    let repeated = body.as_deref().is_some_and(|body| key.occurs_in_bytes(body))
+    let not_shown = || ApiError::from_response(status, replacement(NOT_SHOWN), HeaderMap::new());
+    let received = body.as_deref().is_some_and(|body| key.occurs_in_bytes(body))
         || headers.values().any(|value| key.occurs_in_bytes(value.as_bytes()));
-    if repeated {
-        return ApiError::from_response(status, replacement(KEY_REPEATED), HeaderMap::new());
+    if received {
+        return not_shown();
     }
     let body = body.unwrap_or_else(|| replacement(BODY_TOO_LARGE));
-    ApiError::from_response(status, body, headers)
+    let error = ApiError::from_response(status, body, headers);
+    if key.holds_key(&error) {
+        return not_shown();
+    }
+    error
 }
 
 /// The body this module puts in the place of a response body it does not

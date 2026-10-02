@@ -494,24 +494,24 @@ async fn a_failure_response_over_the_limit_that_repeats_the_key_in_a_header_is_n
 
 // ------------------------------------- a failure response that repeats the key
 
-/// The text an API error has in the place of a response that repeated the
-/// key, and the body this module wrote for it.
-const KEY_REPEATED_TEXT: &str =
-    "The response repeated the API key, so its body and headers are not shown.";
-const KEY_REPEATED_BODY: &[u8] = br#"{"error":{"message":"The response repeated the API key, so its body and headers are not shown."}}"#;
+/// The text an API error has in the place of a response the key search had
+/// a hit for, and the body this module wrote for it.
+const NOT_SHOWN_TEXT: &str =
+    "The response's body and headers are not shown, because showing them could reveal the API key.";
+const NOT_SHOWN_BODY: &[u8] = br#"{"error":{"message":"The response's body and headers are not shown, because showing them could reveal the API key."}}"#;
 
 /// Checks that `error` is the API error of a response with `status` that
-/// repeated `key`: the status and nothing else of the response, and the key
-/// in no rendering.
+/// the search for `key` had a hit for: the status and nothing else of the
+/// response, and the key in no rendering.
 #[track_caller]
 fn assert_not_shown(error: SdkError, status: StatusCode, key: &str) {
     let SdkErrorKind::Api(api) = error.kind() else {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), status);
-    assert_eq!(api.message(), KEY_REPEATED_TEXT);
-    assert_eq!(error.to_string(), format!("{} {KEY_REPEATED_TEXT}", status.as_u16()));
-    assert_eq!(api.body(), KEY_REPEATED_BODY, "{}", api.body_text());
+    assert_eq!(api.message(), NOT_SHOWN_TEXT);
+    assert_eq!(error.to_string(), format!("{} {NOT_SHOWN_TEXT}", status.as_u16()));
+    assert_eq!(api.body(), NOT_SHOWN_BODY, "{}", api.body_text());
     assert!(api.headers().is_empty(), "{:?}", api.headers());
     assert_eq!(api.request_id(), None);
     for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
@@ -562,6 +562,30 @@ async fn a_failure_response_that_repeats_the_key_as_json_writes_it_is_not_shown(
         .expect_err("a failure status");
 
     assert_not_shown(error, StatusCode::BAD_REQUEST, key);
+}
+
+#[tokio::test]
+async fn a_key_a_failure_body_escapes_and_the_sdk_decodes_is_not_shown() {
+    // The body writes the key's first character as a JSON escape of six
+    // characters, built here at run time from a backslash. The body then
+    // holds the key in no spelling the search of the bytes knows; the SDK
+    // decodes the escape, and its message holds the key as written.
+    let first = u32::from(KEY.chars().next().expect("the key is not empty"));
+    let escaped = format!("{}u{first:04x}{}", '\\', &KEY[1..]);
+    assert_eq!(escaped.len(), KEY.len() + 5);
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {escaped}"}}}}"#);
+    assert_eq!(occurrences(&body, KEY), 0);
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 invalid token: Bearer {KEY}"));
+    let fixture = Fixture::new("http://scripted.invalid", limits(None));
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::UNAUTHORIZED, vec![body.into()]))
+        .await
+        .expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
 }
 
 #[tokio::test]
