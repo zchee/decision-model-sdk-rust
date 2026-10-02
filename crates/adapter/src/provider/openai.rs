@@ -227,6 +227,10 @@ impl OpenAiProviderBuilder {
     ///
     /// Unset, the key is the `OPENAI_API_KEY` environment variable, read
     /// once when the provider is built.
+    ///
+    /// The host the key is sent to is still the one `OPENAI_BASE_URL` names
+    /// when [`base_url`](Self::base_url) is not called: call `base_url` when
+    /// the key does not come from the same environment.
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(SecretString::from(key.into()));
         self

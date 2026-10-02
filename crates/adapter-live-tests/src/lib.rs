@@ -169,7 +169,8 @@ impl Live {
     }
 }
 
-/// A live case against OpenAI's [`OPENAI_MODEL`].
+/// A live case against OpenAI's [`OPENAI_MODEL`], at OpenAI's own base URL
+/// given explicitly, so `OPENAI_BASE_URL` cannot send the key elsewhere.
 ///
 /// # Panics
 ///
@@ -180,11 +181,17 @@ impl Live {
 #[must_use]
 pub fn openai(structured: Structured, mode: Mode) -> Live {
     let key = opted_in_key(ProviderName::OpenAi, &["OPENAI_API_KEY"]);
-    let provider = OpenAiProvider::builder(OPENAI_MODEL).api_key(key).timeout(LIVE_TIMEOUT).build();
+    let provider = OpenAiProvider::builder(OPENAI_MODEL)
+        .api_key(key)
+        .base_url("https://api.openai.com/v1")
+        .timeout(LIVE_TIMEOUT)
+        .build();
     live(ProviderName::OpenAi, provider, structured, mode)
 }
 
-/// A live case against Anthropic's [`ANTHROPIC_MODEL`].
+/// A live case against Anthropic's [`ANTHROPIC_MODEL`], at Anthropic's own
+/// base URL given explicitly, so `ANTHROPIC_BASE_URL` cannot send the key
+/// elsewhere.
 ///
 /// # Panics
 ///
@@ -192,8 +199,11 @@ pub fn openai(structured: Structured, mode: Mode) -> Live {
 #[must_use]
 pub fn anthropic(structured: Structured, mode: Mode) -> Live {
     let key = opted_in_key(ProviderName::Anthropic, &["ANTHROPIC_API_KEY"]);
-    let provider =
-        AnthropicProvider::builder(ANTHROPIC_MODEL).api_key(key).timeout(LIVE_TIMEOUT).build();
+    let provider = AnthropicProvider::builder(ANTHROPIC_MODEL)
+        .api_key(key)
+        .base_url("https://api.anthropic.com")
+        .timeout(LIVE_TIMEOUT)
+        .build();
     live(ProviderName::Anthropic, provider, structured, mode)
 }
 

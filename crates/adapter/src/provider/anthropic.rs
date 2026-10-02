@@ -182,6 +182,10 @@ impl AnthropicProviderBuilder {
     /// The API key, sent as the `x-api-key` header and printed nowhere.
     ///
     /// Without it the key is the `ANTHROPIC_API_KEY` environment variable.
+    ///
+    /// The host the key is sent to is still the one `ANTHROPIC_BASE_URL`
+    /// names when [`base_url`](Self::base_url) is not called: call
+    /// `base_url` when the key does not come from the same environment.
     #[must_use]
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(SecretString::from(key.into()));
