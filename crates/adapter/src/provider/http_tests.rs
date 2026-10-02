@@ -842,6 +842,21 @@ async fn a_request_carries_the_key_the_headers_and_the_body() {
 }
 
 #[tokio::test]
+async fn a_success_body_that_repeats_the_key_is_returned_as_it_arrived() {
+    // A model's reply is the caller's data: the body of a 2xx response is
+    // not searched for the key, and nothing of it is replaced.
+    let body = format!(r#"{{"output":"you sent Bearer {KEY}"}}"#);
+    let server = answering(StatusCode::OK, body.clone()).await;
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let reply = fixture.post(&transport()).await.expect("a success status").expect("it is JSON");
+
+    assert_eq!(reply, body);
+    assert_eq!(occurrences(&reply, KEY), 1);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
 async fn a_success_body_that_is_not_utf8_or_is_empty_is_a_non_answer() {
     for body in [Bytes::from_static(b"\"\xff\""), Bytes::new(), Bytes::from_static(b"{} {}")] {
         let service = Scripted::answering(StatusCode::OK, vec![body]);
