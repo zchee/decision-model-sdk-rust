@@ -732,12 +732,47 @@ fn the_builder_refuses_a_root_that_is_not_a_certificate() {
     assert!(message.starts_with("The TLS certificate verifier could not be built: "), "{message}");
 
     // The roots belong to the default transport: a caller's service is
-    // built without reading them.
+    // refused with one, as the other two providers refuse it.
     let transport = Transport::new(Vec::new()).expect("the default transport");
-    builder("http://127.0.0.1:1")
+    let error = builder("http://127.0.0.1:1")
         .add_root_certificate(b"not DER".to_vec())
         .build_with_service(transport)
-        .expect("a provider");
+        .expect_err("a root with a service of the caller's own");
+    assert!(matches!(error.kind(), ErrorKind::Config), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "add_root_certificate configures the default transport, \
+         which a provider built with build_with_service does not use."
+    );
+}
+
+#[test]
+fn the_settings_are_checked_before_the_roots_are_loaded() {
+    // With the `internals` feature another test's variables could be in
+    // force in this process; an empty replacement of this test's own rules
+    // that out. Without the feature a unit-test build finds no variable.
+    #[cfg(feature = "internals")]
+    let _environment = crate::__internals::env::replace();
+
+    // A root that is not a certificate fails only when the transport is
+    // built; each setting below is refused for itself first.
+    let not_der = || b"not DER".to_vec();
+    assert_eq!(
+        refusal(
+            GeminiProvider::builder(MODEL)
+                .base_url("http://127.0.0.1:1")
+                .add_root_certificate(not_der())
+        ),
+        "No Gemini API key: pass one to api_key, or set GOOGLE_API_KEY or GEMINI_API_KEY."
+    );
+    let message = refusal(builder("ftp://127.0.0.1/").add_root_certificate(not_der()));
+    assert!(message.contains("base URL"), "{message}");
+    assert_eq!(
+        refusal(
+            builder("http://127.0.0.1:1").timeout(Duration::ZERO).add_root_certificate(not_der())
+        ),
+        "timeout must be greater than zero."
+    );
 }
 
 #[test]

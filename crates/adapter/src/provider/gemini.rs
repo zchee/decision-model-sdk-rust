@@ -151,8 +151,9 @@ impl GeminiProviderBuilder {
     /// Trusts the DER-encoded certificate `der` in addition to the operating
     /// system's roots, which it never replaces.
     ///
-    /// It configures the default transport, so
-    /// [`build_with_service`](Self::build_with_service) does not use it.
+    /// The default transport only:
+    /// [`build_with_service`](Self::build_with_service) refuses a builder
+    /// that was given one.
     #[must_use]
     pub fn add_root_certificate(mut self, der: impl Into<Vec<u8>>) -> Self {
         self.extra_roots.push(der.into());
@@ -167,17 +168,20 @@ impl GeminiProviderBuilder {
     /// # Errors
     ///
     /// Returns an [`ErrorKind::Config`](crate::ErrorKind::Config) error for
-    /// what [`build_with_service`](Self::build_with_service) refuses, and
-    /// when the certificate verifier cannot be built: an added root is not a
-    /// certificate, or the operating system's roots cannot be loaded.
+    /// a setting [`build_with_service`](Self::build_with_service) refuses,
+    /// and when the certificate verifier cannot be built: an added root is
+    /// not a certificate, or the operating system's roots cannot be loaded.
+    /// The settings are checked first, so a missing key is reported as such
+    /// and not as a failure to load the roots.
     pub fn build(mut self) -> Result<GeminiProvider, Error> {
-        let transport = Transport::new(std::mem::take(&mut self.extra_roots))?;
-        self.build_with_service(transport)
+        let extra_roots = std::mem::take(&mut self.extra_roots);
+        self.provider(|| Transport::new(extra_roots))
     }
 
     /// Builds the provider over `service`, the caller's own HTTP service,
-    /// instead of the default transport. Added root certificates are not
-    /// used: the service owns its TLS.
+    /// instead of the default transport. The service owns its TLS, so a
+    /// root added with [`add_root_certificate`](Self::add_root_certificate)
+    /// is refused rather than ignored.
     ///
     /// When a call of `service` fails, its error is kept as the cause unless
     /// it spells the key, as written or as `Debug` writes it; then the cause
@@ -195,12 +199,29 @@ impl GeminiProviderBuilder {
     ///   HTTP header;
     /// - the base URL is not absolute, does not use `http` or `https`, or
     ///   carries credentials, a query or a fragment;
-    /// - the timeout or the response limit is zero.
+    /// - the timeout or the response limit is zero;
+    /// - a root certificate was added.
     ///
     /// No error text repeats the key or the base URL.
     pub fn build_with_service<S>(self, service: S) -> Result<GeminiProvider<S>, Error>
     where
         S: HttpService,
+    {
+        if !self.extra_roots.is_empty() {
+            return Err(Error::config(
+                "add_root_certificate configures the default transport, \
+                 which a provider built with build_with_service does not use.",
+            ));
+        }
+        self.provider(|| Ok(service))
+    }
+
+    /// Checks every setting, reading the environment for the key the
+    /// builder was not given, and only then calls `service` for the
+    /// transport.
+    fn provider<S, F>(self, service: F) -> Result<GeminiProvider<S>, Error>
+    where
+        F: FnOnce() -> Result<S, Error>,
     {
         let key = match self.api_key {
             Some(key) => key,
@@ -217,7 +238,7 @@ impl GeminiProviderBuilder {
             headers: request_headers(&key),
             key,
             limits,
-            service,
+            service: service()?,
         })
     }
 }

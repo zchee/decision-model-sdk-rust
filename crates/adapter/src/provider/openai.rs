@@ -328,8 +328,8 @@ impl OpenAiProviderBuilder {
         let (settled, extra_roots) = self.settle()?;
         if !extra_roots.is_empty() {
             return Err(Error::config(
-                "add_root_certificate configures the default transport and has no effect on \
-                 build_with_service.",
+                "add_root_certificate configures the default transport, \
+                 which a provider built with build_with_service does not use.",
             ));
         }
         Ok(settled.over(service))

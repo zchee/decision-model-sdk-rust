@@ -358,8 +358,8 @@ async fn a_provider_runs_over_a_service_of_the_callers_own() {
     assert!(matches!(error.kind(), ErrorKind::Config), "{error:?}");
     assert_eq!(
         error.to_string(),
-        "add_root_certificate configures the default transport and has no effect on \
-         build_with_service."
+        "add_root_certificate configures the default transport, \
+         which a provider built with build_with_service does not use."
     );
 }
 
