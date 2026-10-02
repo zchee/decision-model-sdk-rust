@@ -17,10 +17,11 @@
 //! module writes holds it. Text that others wrote can still hold it: a
 //! response, and the error of a caller's own service, which may hold the
 //! request's headers. So a failed call's error chain is searched before it
-//! is kept, and the body and the header values of a response with a status
-//! outside 2xx are searched before the API error is built from them. The
-//! body of a 2xx response is not searched: the provider reads it, and the
-//! trace holds it as received.
+//! is kept, and the header values of a response with a status outside 2xx,
+//! and its body when that was read, are searched before the API error is
+//! built from them; a body over the size limit is not read to its end, not
+//! searched and not kept. The body of a 2xx response is not searched: the
+//! provider reads it, and the trace holds it as received.
 //!
 //! The search looks for the key as written, as `Debug` writes it and as a
 //! JSON string holds it, the spellings listed at [`KeyHeader::holds_key`],
@@ -497,8 +498,9 @@ pub(crate) struct Exchange<'a> {
 ///   deadline passes first.
 /// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
-///   whose body is over the limit keeps its status and its headers; the
-///   body is not read past the limit and is not kept: `ApiError::body()`
+///   whose body is over the limit keeps its status, and its headers unless
+///   the search below has a hit in one of them; the body is not read past
+///   the limit and is not kept: without such a hit, `ApiError::body()`
 ///   returns a replacement this module wrote, a JSON object whose message
 ///   says that the response body was larger than the limit, and the SDK
 ///   prints that message after the status. Before the error is built, the
@@ -570,20 +572,23 @@ const KEY_REPEATED: &str =
     "The response repeated the API key, so its body and headers are not shown.";
 
 /// The message of an API error whose response body was over the size
-/// limit: larger by the length the response declared, which is refused
-/// before a byte is read, or by the bytes that arrived. The SDK prints it
-/// after the status; with no body at all it would print `status code (no
-/// body)`, which is not what happened.
+/// limit, when the key search has no hit in a header value: larger by the
+/// length the response declared, which is refused before a byte is read,
+/// or by the bytes that arrived. The SDK prints it after the status; with
+/// no body at all it would print `status code (no body)`, which is not
+/// what happened.
 const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is not shown.";
 
 /// The API error a response with a status outside 2xx becomes. `body` is
-/// `None` for a body over the size limit, which was not read to its end and
-/// is replaced by [`BODY_TOO_LARGE`] as the message.
+/// `None` for a body over the size limit, which was not read to its end;
+/// unless the search has a hit in a header value, the error's message is
+/// then [`BODY_TOO_LARGE`].
 ///
 /// A server can send back what it was sent, a gateway that quotes a refused
 /// `authorization` header say, and the SDK prints the message it reads out
 /// of the body. So the body's bytes and each header value's bytes are
-/// searched for the key first, in the spellings [`key_forms`] lists. The
+/// searched for the key first, in the spellings [`key_forms`] lists; a
+/// body that is `None` is not searched, only the header values are. The
 /// bytes are searched as they arrived, not the message: the SDK cuts a
 /// message at 200 characters, and a key cut there is no longer found. On a
 /// hit the error is built from the status alone, with [`KEY_REPEATED`] as
