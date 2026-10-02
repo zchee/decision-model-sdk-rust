@@ -7,6 +7,9 @@
 mod cassette;
 #[path = "support/expected.rs"]
 mod expected;
+#[cfg(feature = "tracing")]
+#[path = "support/recorder.rs"]
+mod recorder;
 
 use std::{
     error::Error as StdError,
@@ -34,6 +37,8 @@ use test_support::{
 use tower_service::Service;
 
 use crate::cassette::{CASSETTES, Cassette};
+#[cfg(feature = "tracing")]
+use crate::recorder::{Recorder, install};
 
 /// The made-up key every provider of this file is built with.
 const KEY: &str = "sk-test-0123456789abcdef";
@@ -471,98 +476,18 @@ async fn key_never_printed_in_the_trace() {
     assert_eq!(server.requests()[0].header_values("x-goog-api-key"), [KEY]);
 }
 
-/// Every event of every target and level, as one line of text each, while it
-/// is the thread's subscriber. The shared recorder of `support/recorder.rs`
-/// hands out the adapter's own events only; these tests read the SDK's and
-/// the HTTP stack's as well.
+/// The lines of `target` among `lines`, without the target.
 #[cfg(feature = "tracing")]
-mod events {
-    use std::{
-        fmt::{self, Write as _},
-        sync::{Arc, Mutex},
-    };
-
-    use tracing::{
-        Dispatch, Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-        subscriber::{DefaultGuard, NoSubscriber},
-    };
-
-    #[derive(Clone, Default)]
-    pub(crate) struct Lines(Arc<Mutex<Vec<String>>>);
-
-    impl Lines {
-        /// This recorder as the thread's subscriber until the guard drops. A
-        /// second dispatcher is held with it, so that a callsite another
-        /// test's thread reached first still asks this subscriber.
-        pub(crate) fn install(&self) -> (DefaultGuard, Dispatch) {
-            let second = Dispatch::new(NoSubscriber::default());
-            (tracing::subscriber::set_default(self.clone()), second)
-        }
-
-        /// Every line so far: the target, then each field as ` name=value`.
-        pub(crate) fn all(&self) -> Vec<String> {
-            self.0.lock().expect("not poisoned").clone()
-        }
-
-        /// The lines of `target`, without the target.
-        pub(crate) fn of(&self, target: &str) -> Vec<String> {
-            let prefix = format!("{target} ");
-            self.all()
-                .iter()
-                .filter_map(|line| line.strip_prefix(&prefix))
-                .map(str::to_owned)
-                .collect()
-        }
-    }
-
-    struct Line(String);
-
-    impl Visit for Line {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            write!(self.0, " {}={value:?}", field.name()).expect("a String takes any write");
-        }
-    }
-
-    impl Subscriber for Lines {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, attributes: &span::Attributes<'_>) -> span::Id {
-            // A span's fields are text a log could print as well.
-            let mut line = Line(attributes.metadata().target().to_owned());
-            attributes.record(&mut line);
-            self.0.lock().expect("not poisoned").push(line.0);
-            span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &span::Id, values: &span::Record<'_>) {
-            let mut line = Line(String::from("span"));
-            values.record(&mut line);
-            self.0.lock().expect("not poisoned").push(line.0);
-        }
-
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            let mut line = Line(event.metadata().target().to_owned());
-            event.record(&mut line);
-            self.0.lock().expect("not poisoned").push(line.0);
-        }
-
-        fn enter(&self, _: &span::Id) {}
-
-        fn exit(&self, _: &span::Id) {}
-    }
+fn of_target(lines: &[String], target: &str) -> Vec<String> {
+    let prefix = format!("{target} ");
+    lines.iter().filter_map(|line| line.strip_prefix(&prefix)).map(str::to_owned).collect()
 }
 
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn key_never_printed_in_the_events() {
-    let lines = events::Lines::default();
-    let _installed = lines.install();
+    let events = Recorder::default();
+    let _installed = install(&events);
 
     let failed = failures().await.len();
     let server = answering(StatusCode::OK, interaction(POSITIVE, "completed")).await;
@@ -575,26 +500,26 @@ async fn key_never_printed_in_the_events() {
 
     // Every target at every level: the adapter's, the SDK's and the HTTP
     // stack's.
-    let all = lines.all();
+    let all = events.all();
     for line in &all {
         assert_eq!(occurrences(line, KEY), 0, "{line}");
     }
     // The events are the real ones: the five failed calls and the answered
-    // one each made at least one exchange, and each exchange is one event.
-    let exchanges = lines
-        .of("system_one_adapter")
-        .iter()
-        .filter(|line| line.contains("/v1beta/interactions"))
-        .count();
+    // one each made at least one exchange, and each exchange is one `DEBUG`
+    // event of the adapter that names the endpoint.
+    let adapter = events.at(tracing::Level::DEBUG);
+    let exchanges = adapter.iter().filter(|line| line.contains("/v1beta/interactions")).count();
     assert!(exchanges > failed - 2, "{all:#?}");
-    assert!(lines.of("system_one_adapter").iter().any(|line| line.contains("status=503")));
+    assert!(adapter.iter().any(|line| line.contains("status=503")), "{adapter:#?}");
+    // Other crates logged as well, so their lines were searched too.
+    assert!(all.iter().any(|line| !line.starts_with("system_one_adapter")), "{all:#?}");
 }
 
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn key_never_printed_by_the_retry_line_when_the_key_is_in_the_path() {
-    let lines = events::Lines::default();
-    let _installed = lines.install();
+    let events = Recorder::default();
+    let _installed = install(&events);
     let server = TestServer::start_nth(Protocol::Http1, |nth, _| {
         if nth == 1 {
             json_response(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE)
@@ -621,21 +546,92 @@ async fn key_never_printed_by_the_retry_line_when_the_key_is_in_the_path() {
     let wire_path = format!("/{KEY}/v1/v1beta/interactions");
     assert_eq!(paths, [wire_path.clone(), wire_path]);
 
-    let retry_lines: Vec<String> =
-        lines.all().into_iter().filter(|line| line.contains(" retry ")).collect();
+    let all = events.all();
+    let retry_lines: Vec<&str> =
+        all.iter().map(String::as_str).filter(|line| line.contains(" retry ")).collect();
     assert_eq!(
         retry_lines,
         [format!("typesafe_sdk message=POST {}/v1beta/interactions retry 1", server.base_url())]
     );
     // Neither the adapter's events nor the SDK's name the caller's prefix.
     for target in ["system_one_adapter", "typesafe_sdk"] {
-        let of_target = lines.of(target);
+        let of_target = of_target(&all, target);
         assert!(!of_target.is_empty(), "{target} logged nothing");
         for line in of_target {
             assert_eq!(occurrences(&line, KEY), 0, "{target}: {line}");
         }
     }
     assert_eq!(occurrences(&serde_json::to_string(response.debug()).expect("a trace"), KEY), 0);
+}
+
+// ------------------------------------------------ a failure response's body
+
+/// Every rendering of `error` and its chain, and its serialized trace.
+fn renderings(error: &Error) -> Vec<String> {
+    let mut texts = Vec::new();
+    for link in chain(error) {
+        texts.extend([link.to_string(), format!("{link:?}"), format!("{link:#?}")]);
+    }
+    texts.push(serde_json::to_string(error.debug().expect("a trace")).expect("serializes"));
+    texts
+}
+
+#[tokio::test]
+async fn a_failure_body_that_repeats_the_key_is_not_shown() {
+    let echo = json!({"error": {"message": format!("API key not valid: {KEY}")}}).to_string();
+    let server = answering(StatusCode::BAD_REQUEST, echo).await;
+    let client = discrete(StructuredOutputs::Native)
+        .provider_instance(gemini(server.base_url()))
+        .build()
+        .expect("a client");
+
+    let error = client.system_one(STATE, &positive()).send().await.expect_err("a 400");
+
+    let failure = provider_failure(&error);
+    let typesafe_sdk::ErrorKind::Api(api) = failure.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        api.message(),
+        "The response's body and headers are not shown, because showing them could reveal the API key."
+    );
+    assert!(failure.to_string().contains(api.message()), "{failure}");
+    for text in renderings(&error) {
+        assert_eq!(occurrences(&text, KEY), 0, "{text}");
+    }
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_body_over_the_limit_is_reported_without_it() {
+    let large = json!({"error": {"message": "x".repeat(4096)}}).to_string();
+    let server = answering(StatusCode::BAD_REQUEST, large).await;
+    let provider = GeminiProvider::builder(MODEL)
+        .api_key(KEY)
+        .base_url(server.base_url())
+        .max_response_bytes(256)
+        .build()
+        .expect("a provider");
+    let client = discrete(StructuredOutputs::Native)
+        .provider_instance(Arc::new(provider))
+        .build()
+        .expect("a client");
+
+    let error = client.system_one(STATE, &positive()).send().await.expect_err("a 400");
+
+    let failure = provider_failure(&error);
+    let typesafe_sdk::ErrorKind::Api(api) = failure.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(api.message(), "The response body was larger than the limit and is not shown.");
+    assert!(failure.to_string().contains(api.message()), "{failure}");
+    for text in renderings(&error) {
+        assert_eq!(occurrences(&text, KEY), 0, "{text}");
+        assert_eq!(occurrences(&text, "xxxxxxxx"), 0, "{text}");
+    }
+    assert_eq!(server.request_count(), 1);
 }
 
 // ------------------------------------------------------ a caller's service
@@ -730,9 +726,9 @@ async fn foreign_service_error_holding_the_headers_never_shows_the_key() {
 #[tokio::test]
 async fn user_data_not_printed_by_debug_display_or_an_event() {
     #[cfg(feature = "tracing")]
-    let lines = events::Lines::default();
+    let events = Recorder::default();
     #[cfg(feature = "tracing")]
-    let _installed = lines.install();
+    let _installed = install(&events);
     let state = json!({"review": format!("A delightful book. {SENTINEL}")});
     let questions = positive();
 
@@ -780,11 +776,12 @@ async fn user_data_not_printed_by_debug_display_or_an_event() {
     }
     #[cfg(feature = "tracing")]
     {
+        let all = events.all();
         for target in ["system_one_adapter", "typesafe_sdk"] {
-            assert!(!lines.of(target).is_empty(), "{target} logged nothing");
+            assert!(!of_target(&all, target).is_empty(), "{target} logged nothing");
         }
-        for line in lines.all() {
-            assert_eq!(occurrences(&line, SENTINEL), 0, "{line}");
+        for line in &all {
+            assert_eq!(occurrences(line, SENTINEL), 0, "{line}");
         }
     }
 }
