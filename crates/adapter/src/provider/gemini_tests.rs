@@ -303,7 +303,7 @@ async fn omitted_usage_is_not_an_answer() {
 }
 
 #[tokio::test]
-async fn a_reply_without_a_status_is_not_an_answer() {
+async fn a_body_without_a_status_is_not_the_vendor_s_reply() {
     let mut missing = interaction("{}", "completed");
     missing.as_object_mut().expect("an object").remove("status");
     let mut number = interaction("{}", "completed");
@@ -314,7 +314,7 @@ async fn a_reply_without_a_status_is_not_an_answer() {
 
         assert_eq!(
             result.expect_err("not an answer").to_string(),
-            "Gemini did not answer: status unknown",
+            "Gemini did not answer: a body that is not the vendor's reply",
             "{body}"
         );
         assert!(trace.response().is_some());

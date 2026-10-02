@@ -276,7 +276,7 @@ where
             };
             // `post` has checked that the body is one JSON value. Should it
             // still not read as one here, it has no status and is refused
-            // below like any reply without one.
+            // below like any body that is not the vendor's reply.
             let response = serde_json::from_str::<Value>(&json).unwrap_or(Value::Null);
             let status = response.get("status").and_then(Value::as_str);
             call.trace().record_response(&json, status);
@@ -370,12 +370,17 @@ fn request_body(model: &str, call: &ProviderCall<'_>) -> String {
 /// What a success response holds: the reply's text and token counts, or the
 /// reason it is not an answer.
 ///
-/// An interaction whose status is not `completed`, or that reports no usage
-/// or lacks one of the two token counts, is not an answer. The reason names
-/// the status and the missing member only, never the body's own error text.
+/// A body without a `status` that is a string is not the vendor's reply. An
+/// interaction whose status is not `completed`, or that reports no usage or
+/// lacks one of the two token counts, is not an answer. The reason names the
+/// status and the missing member only; nothing of the body is quoted, its
+/// own error text least of all.
 fn result(response: &Value, status: Option<&str>) -> Result<ProviderResult, NonAnswer> {
-    if status != Some(COMPLETED) {
-        return Err(non_answer(VENDOR, &format!("status {}", status.unwrap_or("unknown"))));
+    let Some(status) = status else {
+        return Err(non_answer(VENDOR, "a body that is not the vendor's reply"));
+    };
+    if status != COMPLETED {
+        return Err(non_answer(VENDOR, &format!("status {status}")));
     }
     let count = |member: &str| {
         response
