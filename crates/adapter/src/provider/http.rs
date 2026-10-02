@@ -113,8 +113,13 @@ pub(crate) fn key_header(
         return Err(Error::config("The API key is empty."));
     }
     let text = if bearer { format!("Bearer {key}") } else { key.to_owned() };
-    // `from_str` admits visible ASCII, the space and the tab, and nothing
-    // else: a key with a line feed would otherwise end the header early.
+    // `from_str` (http 1.5.0, `src/header/value.rs`, `is_valid`) admits the
+    // bytes 0x20 to 0x7e (the space and visible ASCII), the tab, and every
+    // byte from 0x80 up, so any character outside ASCII as well. It refuses
+    // the other control bytes, 0x00 to 0x1f without the tab, and DEL (0x7f):
+    // a key with a line feed would otherwise end the header early. A space
+    // at the start or the end of the key is admitted and not trimmed here:
+    // the header value holds it as it is.
     let Ok(mut value) = HeaderValue::from_str(&text) else {
         return Err(Error::config(
             "The API key holds a character that cannot be sent in an HTTP header.",
