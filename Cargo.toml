@@ -2,12 +2,12 @@
 # Naming the default set explicitly is what keeps a crate whose tests need a
 # live API key out of a bare `cargo test` and out of CI: such a crate is added
 # to `members` and left out here, so no command has to remember to exclude it.
-default-members = ["crates/sdk", "crates/macros", "crates/test-support"]
+default-members = ["crates/sdk", "crates/macros", "crates/test-support", "crates/adapter"]
 # `fuzz/` is a workspace of its own, run with the nightly toolchain only.
 exclude = ["fuzz"]
 # The SDK package lives in `crates/sdk`, next to the helper crates; this
 # manifest is a virtual one and holds no package of its own.
-members = ["crates/sdk", "crates/live-tests", "crates/macros", "crates/test-support"]
+members = ["crates/sdk", "crates/live-tests", "crates/macros", "crates/test-support", "crates/adapter", "crates/adapter-live-tests"]
 # Resolver 3 is the edition-2024 default; stating it silences the warning that
 # a virtual workspace manifest has no edition to infer it from.
 resolver = "3"
