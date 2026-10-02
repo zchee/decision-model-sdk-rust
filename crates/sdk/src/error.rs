@@ -20,7 +20,7 @@
 //!   API failure's message and the request id are the server's text, and
 //!   either would otherwise put a line break, a terminal colour or 16 MiB into
 //!   every log line that prints the error. The accessors for the body and the
-//!   headers still return them as they arrived.
+//!   headers still return them unchanged.
 //! * **`Retry-After` is parsed against a caller-supplied `now`.** Reading the
 //!   clock inside the parser would make the HTTP-date case untestable without
 //!   mocking time, so the parser takes the instant to measure against and
@@ -405,7 +405,9 @@ impl ApiError {
     /// `headers` hold a [`request_id`](Self::request_id). `headers` are kept
     /// for [`retry_after`](Self::retry_after) and
     /// [`request_id`](Self::request_id); `Debug` shows only their count and
-    /// the body's length.
+    /// the body's length. Both are kept unchanged:
+    /// [`body`](Self::body) and [`headers`](Self::headers) return what was
+    /// passed here.
     ///
     /// ```
     /// use bytes::Bytes;
@@ -474,7 +476,9 @@ impl ApiError {
         ApiErrorKind::of(self.status)
     }
 
-    /// The response headers, as they arrived.
+    /// The response headers: as they arrived when the SDK built this error
+    /// from a response, or the headers the code that built it supplied to
+    /// [`from_response`](Self::from_response).
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
@@ -482,8 +486,8 @@ impl ApiError {
     /// The server's identifier for this request, from `x-typesafe-request-id`.
     ///
     /// `None` when the header is absent or is not text. This is the header's
-    /// text exactly as it arrived; `Display` and `Debug` show it escaped and
-    /// cut at 128 characters instead.
+    /// text unchanged, as [`headers`](Self::headers) holds it; `Display` and
+    /// `Debug` show it escaped and cut at 128 characters instead.
     pub fn request_id(&self) -> Option<&str> {
         request_id(&self.headers)
     }
@@ -528,8 +532,8 @@ impl ApiError {
     /// `authentication_error` here, which is the only way to tell that case
     /// apart from a key that exists and lacks a permission.
     ///
-    /// This is the server's text as it arrived, for a caller to compare. It is
-    /// never part of `Display`; `Debug` shows it escaped and cut at 128
+    /// This is the text unchanged, as [`body`](Self::body) holds it, for a
+    /// caller to compare. It is never part of `Display`; `Debug` shows it escaped and cut at 128
     /// characters, as it does the request id.
     pub fn error_type(&self) -> Option<&str> {
         self.error_type.as_deref()
@@ -547,13 +551,15 @@ impl ApiError {
             || self.error_type() == Some("authentication_error")
     }
 
-    /// The response body, exactly as it arrived.
+    /// The response body: exactly as it arrived when the SDK built this error
+    /// from a response, or the body the code that built it supplied to
+    /// [`from_response`](Self::from_response).
     pub fn body(&self) -> &[u8] {
         &self.body
     }
 
-    /// The response body as text, with anything that is not UTF-8 replaced by
-    /// `U+FFFD`.
+    /// The bytes of [`body`](Self::body) as text, with anything that is not
+    /// UTF-8 replaced by `U+FFFD`.
     pub fn body_text(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(&self.body)
     }
