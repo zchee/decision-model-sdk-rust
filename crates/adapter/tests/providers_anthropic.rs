@@ -1153,6 +1153,117 @@ async fn key_never_printed_in_the_retry_line_of_a_base_url_that_holds_it() {
     assert_eq!(occurrences(&trace, KEY), 0);
 }
 
+// ---------------------------------------- a success reply that repeats the key
+
+/// The non-answer of a success reply that the key search has a hit for.
+const KEY_NOT_SHOWN: &str = "Anthropic did not answer: the reason is not shown, because showing it \
+                             could reveal the API key.";
+
+/// [`KEY`] as a JSON string can spell it, with its last character as a
+/// `\u` escape. The escape is built here from a backslash character, so no
+/// tool that writes this file can turn it back into the letter.
+fn key_with_an_escape() -> String {
+    let last = KEY.chars().next_back().expect("a key is not empty");
+    let kept = &KEY[..KEY.len() - last.len_utf8()];
+    format!("{kept}{}u{:04x}", '\\', u32::from(last))
+}
+
+/// One call to a server that answers every request with `body`.
+async fn key_echo(body: String) -> (Result<Response<Answers>, Error>, TestServer) {
+    let server = answering(StatusCode::OK, body).await;
+    let client = client(false)
+        .provider_instance(provider(server.base_url()))
+        .build()
+        .expect("the client builds");
+    let result = client.system_one(DOCUMENT, &positive()).send().await;
+    (result, server)
+}
+
+/// `error` is the non-answer [`KEY_NOT_SHOWN`] of the one attempt `server`
+/// was asked for, its recorded stop reason is cleared, [`KEY`] occurs in
+/// none of the error's renderings, the attempt's error, `Debug` or
+/// serialized `debug_info`, and the recorded response still holds
+/// `received`, the reply's own spelling of the key.
+#[track_caller]
+fn assert_key_not_shown(error: &Error, server: &TestServer, received: &str) {
+    assert!(matches!(error.kind(), ErrorKind::NonAnswer(_)), "{error:?}");
+    assert_eq!(error.to_string(), KEY_NOT_SHOWN);
+    assert_eq!(server.request_count(), 1, "a non-answer is not asked for again");
+    let mut texts = Vec::new();
+    for link in chain(error) {
+        texts.extend([link.to_string(), format!("{link:?}"), format!("{link:#?}")]);
+    }
+
+    let trace = error.debug().expect("the error carries a trace");
+    assert_eq!(trace.attempts().len(), 1);
+    let attempt = &trace.attempts()[0];
+    assert_eq!(attempt.error(), Some(KEY_NOT_SHOWN));
+    assert_eq!(attempt.error_type(), Some("NonAnswer"));
+    assert_eq!(attempt.finish_reason(), None);
+    let serialized = serde_json::to_string(attempt).expect("the attempt serializes");
+    let value = parsed(&serialized);
+    let debug_info = &value["debug_info"];
+    assert_eq!(debug_info.get("finish_reason"), Some(&Value::Null), "{debug_info}");
+    assert_eq!(debug_info["error"], KEY_NOT_SHOWN);
+    texts.extend([
+        format!("{attempt:?}"),
+        format!("{attempt:#?}"),
+        format!("{trace:?}"),
+        format!("{trace:#?}"),
+        debug_info.to_string(),
+    ]);
+    for text in &texts {
+        assert_eq!(occurrences(text, KEY), 0, "{text}");
+    }
+
+    // The recorded response is kept as received, the key included.
+    let response = attempt.response().expect("the response is recorded");
+    assert!(occurrences(response, received) > 0, "{response}");
+    assert!(occurrences(&serialized, received) > 0, "{serialized}");
+}
+
+#[tokio::test]
+async fn key_echo_in_the_stop_reason() {
+    let (result, server) = key_echo(reply(Some(KEY), answer_content()).to_string()).await;
+
+    let error = result.expect_err("a stop reason that is not an answer");
+    assert_key_not_shown(&error, &server, KEY);
+}
+
+#[tokio::test]
+async fn key_echo_escaped_in_the_stop_reason() {
+    let spelled = key_with_an_escape();
+    let body = reply(Some(KEY), answer_content()).to_string().replace(KEY, &spelled);
+    assert_eq!(occurrences(&body, KEY), 0, "{body}");
+
+    let (result, server) = key_echo(body).await;
+
+    let error = result.expect_err("a stop reason that is not an answer");
+    assert_key_not_shown(&error, &server, &spelled);
+}
+
+#[tokio::test]
+async fn key_echo_in_an_unread_member_is_returned() {
+    // The key in members no reader reads, beside a valid answer: an answer
+    // is never searched, and the trace keeps the body as received.
+    let mut payload = reply(
+        Some("end_turn"),
+        json!([{"type": "thinking", "thinking": KEY}, {"type": "text", "text": ANSWER}]),
+    );
+    payload["id"] = json!(KEY);
+
+    let (result, server) = key_echo(payload.to_string()).await;
+
+    let response = result.expect("an answer");
+    assert_eq!(response.answers().noul("positive").expect("a noul").noul(), 1.0);
+    assert_eq!(server.request_count(), 1);
+    let attempt = &response.debug().attempts()[0];
+    assert_eq!(attempt.finish_reason(), Some("end_turn"));
+    assert_eq!(attempt.error(), None);
+    let recorded = attempt.response().expect("the response is recorded");
+    assert_eq!(occurrences(recorded, KEY), 2, "{recorded}");
+}
+
 // ------------------------------------------------- AC-P9: the caller's data
 
 /// The `Debug` renderings of a trace and of each of its attempts.
