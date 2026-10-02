@@ -1,9 +1,5 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(
-    dead_code,
-    reason = "frozen API items whose callers arrive with later lanes; removed when the last provider lane merges"
-)]
 
 mod client;
 mod convert;
