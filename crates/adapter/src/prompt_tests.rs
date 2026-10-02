@@ -141,6 +141,32 @@ fn user_message_writes_numbers_of_a_json_value_as_pydantic() {
     );
 }
 
+// Number text too large for an `f64` is written as it was read, never as the
+// float it overflows to. A non-finite `f64` of the state does not come this
+// way (`serde_json` writes it as `null` itself), so this text is the one input
+// the formatter's finiteness condition decides. `serde_json` keeps such text
+// only under its `arbitrary_precision` feature and refuses it otherwise, so
+// the formatter is called directly too, which holds in every build.
+#[test]
+fn user_message_writes_an_overflowing_number_text_as_it_is() {
+    for text in ["1e400", "-1e400", "1.5E+999", "-0.1e+310"] {
+        let mut written = Vec::new();
+        PythonNumbers.write_number_str(&mut written, text).expect("writing to a Vec does not fail");
+        assert_eq!(String::from_utf8_lossy(&written), text);
+    }
+
+    match serde_json::from_str::<serde_json::Value>("[1e400, -1e400, 1e16]") {
+        Ok(state) => assert_eq!(
+            user_message(&state).expect("a value serializes"),
+            "<document>\n[1e+400,-1e+400,1e+16]\n</document>"
+        ),
+        Err(error) => assert!(
+            error.to_string().contains("out of range"),
+            "without arbitrary precision the text is refused as out of range: {error}"
+        ),
+    }
+}
+
 // Deviation 15: upstream writes `NaN`, `Infinity` and `-Infinity`.
 #[test]
 fn user_message_writes_non_finite_numbers_as_null() {
@@ -171,10 +197,10 @@ fn user_message_reports_a_state_that_is_not_json() {
 // The string text measured on `pydantic_core.to_json` (plan section 3.3).
 #[test]
 fn user_message_writes_strings_as_pydantic() {
-    let state = "\n\t\r\u{8}\u{c}\u{1}\u{1f} / \u{7f} \u{2028} é 日本 & \"q\" \\";
+    let state = "\n\t\r\u{8}\u{c}\u{1}\u{1f} / \u{7f} \u{2028} \u{e9} \u{65e5}\u{672c} & \"q\" \\";
     assert_eq!(
         user_message(state).expect("a string serializes"),
-        "<document>\n\"\\n\\t\\r\\b\\f\\u0001\\u001f / \u{7f} \u{2028} é 日本 & \\\"q\\\" \\\\\"\n</document>"
+        "<document>\n\"\\n\\t\\r\\b\\f\\u0001\\u001f / \u{7f} \u{2028} \u{e9} \u{65e5}\u{672c} & \\\"q\\\" \\\\\"\n</document>"
     );
 }
 
@@ -199,7 +225,7 @@ fn guard_fence() {
         ),
         ("success: a tag other than json stays", ("```yaml\na: 1\n```", "yaml\na: 1")),
         ("success: a short text after the fence", ("```js", "js")),
-        ("success: non-ASCII after the fence", ("```jsé{}```", "jsé{}")),
+        ("success: non-ASCII after the fence", ("```js\u{e9}{}```", "js\u{e9}{}")),
         ("success: a zero-width space is not white space", ("\u{200b}{}", "\u{200b}{}")),
         ("success: inner fences stay", ("```json\n```inner```\n```", "```inner```")),
     ]);
