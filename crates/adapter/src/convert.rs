@@ -138,9 +138,8 @@ fn convert_answer(
 ///
 /// The JSON text is handed to the SDK as a string through serde's own string
 /// deserializer, which the SDK's `Content` checks to be one JSON value and
-/// then keeps unparsed. That holds under either JSON backend of the SDK;
-/// `Content::json` of a `serde_json` raw value does not, because the SDK's
-/// `sonic` backend writes such a value as an object wrapping the text.
+/// then keeps unparsed. That holds under either JSON backend of the SDK, and
+/// asks nothing of how a backend serializes a `serde_json` raw value.
 fn sdk_content(content: &Content) -> Result<SdkContent<'static>, Error> {
     match content {
         Content::Text(text) => Ok(SdkContent::text(text.clone())),
