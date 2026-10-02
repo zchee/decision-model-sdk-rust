@@ -75,6 +75,13 @@ fn probability_bits(literal: &str) -> u64 {
     }
 }
 
+/// The JSON escape of `letter`: a backslash, `u` and four hex digits. It is
+/// built when the test runs, because an escape typed into this file can be
+/// written back as its letter by a tool, and then no test feeds an escape.
+fn escaped(letter: char) -> String {
+    format!("{}u{:04x}", '\\', u32::from(letter))
+}
+
 // AC-C17, row "probability" of the decoder table (plan section 3.3).
 #[test]
 fn guard_decode_probability() {
@@ -216,13 +223,22 @@ fn guard_decode_discrete_choice() {
     let expected = || Expected::Label { labels: names(&["yes", "no"]) };
 
     // The last one is `yes` with its first letter written as an escape.
-    for (literal, index) in [(r#""yes""#, 0), (r#""no""#, 1), (r#""yes""#, 0)] {
+    let escaped_yes = format!(r#""{}es""#, escaped('y'));
+    for (literal, index) in [(r#""yes""#, 0), (r#""no""#, 1), (escaped_yes.as_str(), 0)] {
         assert_eq!(
             decode_answer_text(CHOICE, AnswerMode::Discrete, literal),
             Ok(DecodedAnswer::Label(index)),
             "{literal}"
         );
     }
+
+    // An escape is read as the character it spells: this one is `Yes`.
+    let escaped_capital = format!(r#""{}es""#, escaped('Y'));
+    assert_eq!(
+        decode_answer_text(CHOICE, AnswerMode::Discrete, &escaped_capital),
+        Err(not_allowed(expected())),
+        "{escaped_capital}"
+    );
 
     // The last one is half of a surrogate pair, which is no string at all.
     let other_strings =
@@ -494,6 +510,55 @@ fn duplicate_members_keep_the_last_value() {
             expected: Expected::Object { members: names(&["x"]) },
             found: JsonType::Null,
         }])
+    );
+
+    // `x` written once plain and once as an escape is one name: the last of
+    // the two wins, whichever way round they stand.
+    let escaped_x = escaped('x');
+    assert_eq!(
+        decode_x(&format!(r#"{{"answers":{{"x":"bad","{escaped_x}":0.2}}}}"#)),
+        two_tenths()
+    );
+    assert_eq!(
+        decode_x(&format!(r#"{{"answers":{{"{escaped_x}":"bad","x":0.2}}}}"#)),
+        two_tenths()
+    );
+    assert_eq!(
+        decode_x(&format!(r#"{{"answers":{{"{escaped_x}":0.2,"x":"bad"}}}}"#)),
+        decode_x(r#"{"answers":{"x":0.2,"x":"bad"}}"#)
+    );
+}
+
+// A member name or a label written with an escape is the name it spells, as
+// JSON defines it and pydantic reads it.
+#[test]
+fn a_name_written_with_an_escape_is_the_name_it_spells() {
+    let noul = questions(NOUL);
+    let decode_noul = |reply: &str| decode(&noul, AnswerMode::Probabilities, reply);
+    let one_half = || Ok(DecodedAnswers { answers: vec![DecodedAnswer::Probability(0.5)] });
+
+    // A question id, and the `answers` member of the reply.
+    let answer = format!("{}nswer", escaped('a'));
+    assert_eq!(decode_noul(&format!(r#"{{"answers":{{"{answer}":0.5}}}}"#)), one_half());
+    let answers = format!("answer{}", escaped('s'));
+    assert_eq!(decode_noul(&format!(r#"{{"{answers}":{{"answer":0.5}}}}"#)), one_half());
+
+    // A member of a probability map: the first letter of `yes`, the last of
+    // `no`, and each in either position.
+    let decode_map = |literal: &str| decode_answer_text(CHOICE, AnswerMode::Probabilities, literal);
+    let distribution = || Ok(DecodedAnswer::Distribution(vec![0.75, 0.25]));
+    assert_eq!(decode_map(&format!(r#"{{"{}es":0.75,"no":0.25}}"#, escaped('y'))), distribution());
+    assert_eq!(decode_map(&format!(r#"{{"no":0.25,"y{}s":0.75}}"#, escaped('e'))), distribution());
+    assert_eq!(decode_map(&format!(r#"{{"yes":0.75,"n{}":0.25}}"#, escaped('o'))), distribution());
+
+    // An escape is read as the character it spells: this label is `Yes`, so
+    // it is an extra member and `yes` is missing.
+    assert_eq!(
+        decode_map(&format!(r#"{{"{}es":0.75,"no":0.25}}"#, escaped('Y'))),
+        Err(vec![
+            Problem::Unexpected { at: at_answer(), members: names(&["yes", "no"]) },
+            Problem::Missing { at: at_answer(), member: "yes".to_owned() },
+        ])
     );
 }
 
