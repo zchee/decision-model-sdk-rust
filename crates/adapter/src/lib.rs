@@ -40,8 +40,17 @@ pub use typesafe_sdk::{
 };
 
 // How a call is configured, what it returns and how it fails.
+pub use crate::{
+    error::{Error, ErrorKind},
+    options::{AnswerMode, StructuredOutputs},
+    response::{Attempt, Response, RetryCategory, RetryReason, Trace, Usage},
+};
 
 // The seam a model is plugged into, and the messages and schema it receives.
+pub use crate::provider::{
+    AttemptTrace, BoxFuture, Message, NonAnswer, ParseProviderNameError, Provider, ProviderCall,
+    ProviderName, ProviderResult, Role, Schema,
+};
 
 // The HTTP transport the built-in providers send their requests through.
 
