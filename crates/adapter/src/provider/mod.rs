@@ -70,12 +70,16 @@ pub trait Provider: Send + Sync + fmt::Debug {
     }
 
     /// The URI that names this provider's endpoint in the retry policy's log
-    /// line: the line the SDK writes before each retry, when it is built
-    /// with its `tracing` feature. The URI is only printed, never used to
-    /// send a request.
+    /// line: the line the SDK writes before each retry when the SDK's
+    /// `tracing` feature is on, which this crate's `tracing` feature turns
+    /// on. The URI is only printed, never used to send a request.
+    ///
+    /// The type is `Uri` of the `http` crate, version 1. This crate does not
+    /// re-export `http`, so a provider that overrides the method depends on
+    /// `http` itself.
     ///
     /// It should hold the scheme, the host, the port when it is not the
-    /// scheme's default, and the fixed path of the vendor operation, such as
+    /// scheme's default, and the vendor's own path of the operation, such as
     /// `/v1/responses`. The path is printed as it is, so it must hold no
     /// credential in a path segment and no path prefix taken from a caller's
     /// base URL. A query and userinfo are not printed.
@@ -83,8 +87,8 @@ pub trait Provider: Send + Sync + fmt::Debug {
     /// The default is `None`, for a provider with no endpoint worth naming,
     /// such as a fake or an in-process model; the line then names the
     /// request as `POST /`. The built-in providers return their vendor
-    /// endpoint. A provider that wraps another returns the inner provider's
-    /// value.
+    /// endpoint. A provider that wraps another should return the inner
+    /// provider's value; the default does not forward it.
     fn log_uri(&self) -> Option<&::http::Uri> {
         None
     }
