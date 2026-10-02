@@ -15,13 +15,20 @@
 //! The key is turned into a header value in one place, and this module puts
 //! it into no text of its own: no error message, `Debug` or event that this
 //! module writes holds it. Text that others wrote can still hold it: a
-//! response body, which is not searched, and the error of a caller's own
-//! service, which may hold the request's headers. A failed call's error
-//! chain is therefore searched before it is kept. The search looks for the
-//! key as written and as `Debug` writes it, four spellings in all, listed
-//! at [`KeyHeader::holds_key`], and for nothing else: a key the service
-//! transformed in another way, into hex or base64 say, or split over two
-//! links of the chain, is not found.
+//! response, and the error of a caller's own service, which may hold the
+//! request's headers. So a failed call's error chain is searched before it
+//! is kept, and the header names and values of a response with a status
+//! outside 2xx, and its body when that was read, are searched before the
+//! API error is built from them, and the error that was built is searched
+//! as an error chain is; a body over the size limit is not read to its end,
+//! not searched and not kept. The body of a 2xx response is not searched:
+//! the provider reads it, and the trace holds it as received.
+//!
+//! The search looks for the key as written, as `Debug` writes it and as a
+//! JSON string holds it, the spellings listed at [`KeyHeader::holds_key`],
+//! and for nothing else: a key that a service or a server transformed in
+//! another way, into hex or base64 say, or split over two links of the
+//! chain, is not found.
 
 use std::{
     error::Error as StdError,
@@ -130,29 +137,44 @@ pub(crate) fn key_header(
     Ok(KeyHeader { name, value, forms: key_forms(key).into() })
 }
 
-/// The spellings of a key that an error's rendering is searched for: the
-/// key as written, and what `Debug` of a `str`, `str::escape_debug` and
-/// `Debug` of a [`HeaderValue`] that is not marked sensitive write for it,
-/// each without the quotes around it. Equal spellings are kept once: for a
-/// key of ASCII letters, digits, `-` and `_` all four are the key as
-/// written.
+/// The spellings of a key that an error's rendering is searched for, the
+/// ones the SDK searches a transport's error for
+/// (`crates/sdk/src/redact.rs`, `push_variants`).
+///
+/// The first six are the key as written, and what `Debug` of a `str`,
+/// `str::escape_debug`, `Debug` of a [`HeaderValue`] that is not marked
+/// sensitive, `Debug` of a [`Bytes`] and a JSON string as `serde_json` writes
+/// one hold for it, each without the quotes around it. The others are each
+/// of those six as `Debug` of a `str` writes it once more, without the
+/// quotes: a derived `Debug` prints a `String` field that already holds one
+/// of the six in that way.
+///
+/// Equal spellings are kept once: for a key of ASCII letters, digits, `-`,
+/// `_` and `.` every one of them is the key as written.
 fn key_forms(key: &str) -> Vec<Box<str>> {
     let mut forms = vec![
-        Box::from(key),
-        Box::from(unquoted(&format!("{key:?}"))),
-        key.escape_debug().to_string().into_boxed_str(),
+        key.to_owned(),
+        unquoted(&format!("{key:?}"), "\"").to_owned(),
+        key.escape_debug().to_string(),
+        unquoted(&format!("{:?}", Bytes::copy_from_slice(key.as_bytes())), "b\"").to_owned(),
+        // The value of a `Value::String` is written as a JSON string.
+        unquoted(&serde_json::Value::from(key).to_string(), "\"").to_owned(),
     ];
     if let Ok(value) = HeaderValue::from_str(key) {
-        forms.push(Box::from(unquoted(&format!("{value:?}"))));
+        forms.push(unquoted(&format!("{value:?}"), "\"").to_owned());
     }
+    let escaped_again: Vec<String> =
+        forms.iter().map(|form| unquoted(&format!("{form:?}"), "\"").to_owned()).collect();
+    forms.extend(escaped_again);
     forms.sort_unstable();
     forms.dedup();
-    forms
+    forms.into_iter().map(String::into_boxed_str).collect()
 }
 
-/// `text` without the double quotes around it.
-fn unquoted(text: &str) -> &str {
-    text.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).unwrap_or(text)
+/// `text` without the `open` it starts with and the double quote it ends
+/// with.
+fn unquoted<'a>(text: &'a str, open: &str) -> &'a str {
+    text.strip_prefix(open).and_then(|rest| rest.strip_suffix('"')).unwrap_or(text)
 }
 
 /// How many links of an error chain are searched for the key. A longer chain
@@ -163,7 +185,12 @@ impl KeyHeader {
     /// Whether `text` holds, byte for byte, one of the spellings of the key
     /// that [`key_forms`] lists. A key written in any other way is not found.
     fn occurs_in(&self, text: &str) -> bool {
-        let text = text.as_bytes();
+        self.occurs_in_bytes(text.as_bytes())
+    }
+
+    /// The same for bytes that need not be text: a response body, a header
+    /// value.
+    fn occurs_in_bytes(&self, text: &[u8]) -> bool {
         self.forms.iter().any(|form| {
             let form = form.as_bytes();
             !form.is_empty() && text.windows(form.len()).any(|window| window == form)
@@ -175,20 +202,28 @@ impl KeyHeader {
     /// Every link is rendered three ways, `Display`, `{:?}` and `{:#?}`: an
     /// error's `Debug` prints its source's `Debug`, and `{:#?}` passes the
     /// alternate flag down, so each of the three can reach a caller. Each
-    /// rendering is searched, byte for byte, for four spellings of the key
+    /// rendering is searched, byte for byte, for these spellings of the key
     /// and for nothing else:
     ///
     /// - the key as written;
     /// - what `Debug` of a `str` writes for it, without the quotes;
     /// - what `str::escape_debug` writes for it;
     /// - what `Debug` of a [`HeaderValue`] that is not marked sensitive
-    ///   writes for it, without the quotes.
+    ///   writes for it, without the quotes;
+    /// - what `Debug` of a [`Bytes`] writes for its bytes, without the `b`
+    ///   and the quotes;
+    /// - what a JSON string holds for it, as `serde_json` writes one,
+    ///   without the quotes;
+    /// - each of those six as `Debug` of a `str` writes it once more,
+    ///   without the quotes: a derived `Debug` prints a `String` field that
+    ///   already holds one of them in that way.
     ///
     /// A key transformed in any other way is not found: split over two
     /// links, in hex, in base64, cut to a prefix, reversed, percent-encoded,
-    /// or as a list of its bytes. A rendering that holds the key only in
+    /// as a list of its bytes, or with a JSON `\u` escape for a character
+    /// `serde_json` writes as it is. A rendering that holds the key only in
     /// such a shape is not a hit, unless that shape happens to hold one of
-    /// the four spellings as well.
+    /// the listed spellings as well.
     ///
     /// A chain longer than [`MAX_SCANNED_LINKS`] cannot be searched to its
     /// end and counts as a hit.
@@ -464,13 +499,34 @@ pub(crate) struct Exchange<'a> {
 ///   deadline passes first.
 /// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
-///   whose body is over the limit is an API error without the body.
+///   whose body is over the limit keeps its status, and its headers unless
+///   a search below has a hit; the body is not read past the limit and is
+///   not kept: without such a hit, `ApiError::body()` returns a replacement
+///   this module wrote, a JSON object whose message says that the response
+///   body was larger than the limit, and the SDK prints that message after
+///   the status. Before the error is built, the
+///   bytes of the body, when it was read, and of each header name and
+///   value are searched for the key in the spellings listed at
+///   [`KeyHeader::holds_key`]; a name is searched as `http` holds it, in
+///   lower case. The error built from the response is then searched as
+///   that method describes, in its `Display` and both forms of its
+///   `Debug`: the SDK decodes the message out of the body, so a JSON
+///   `\u` escape of one character of the key, which the first search does
+///   not find, ends as the key in the message. On a hit of either search
+///   the error keeps the status and neither the body nor the headers: its
+///   header map is empty, and `ApiError::body()` returns a replacement this
+///   module wrote, not the server's bytes: a JSON object whose message says
+///   that the response's body and headers are not shown, because showing
+///   them could reveal the API key. Without a hit a body that was read
+///   is kept as it arrived: one that spells the key in a way neither
+///   search finds, in a member the SDK reads no message from say, is
+///   returned by `ApiError::body()` as the server sent it.
 /// - [`ErrorKind::Connection`](typesafe_sdk::ErrorKind::Connection) when the
 ///   service fails or the body cannot be read. The service's own error is
 ///   the [`source`](StdError::source), unless the search described at
 ///   [`KeyHeader::holds_key`] has a hit in it or in the message built from
 ///   it: then the error has a fixed text and no source. That search finds
-///   the key as written or as `Debug` writes it, not a key transformed in
+///   the key in the spellings listed there, not a key transformed in
 ///   another way.
 /// - [`ErrorKind::ResponseTooLarge`](typesafe_sdk::ErrorKind::ResponseTooLarge)
 ///   when a success response's body is larger than the limit. A body over
@@ -504,18 +560,91 @@ where
             (Some(status), Ok(json(exchange.vendor, status, body)))
         }
         Ok((status, headers, body)) => {
-            (Some(status), Err(ApiError::from_response(status, body, headers).into()))
+            (Some(status), Err(api_error(status, headers, Some(body), exchange.key).into()))
         }
         Err(Failure::TooLarge { status, .. }) if status.is_success() => {
             (Some(status), Err(SdkError::response_too_large(limit)))
         }
         Err(Failure::TooLarge { status, headers }) => {
-            (Some(status), Err(ApiError::from_response(status, Bytes::new(), headers).into()))
+            (Some(status), Err(api_error(status, headers, None, exchange.key).into()))
         }
         Err(Failure::Error(error)) => (None, Err(error)),
     };
     exchanged_event(exchange.endpoint, status, result.as_ref().err(), started);
     result
+}
+
+/// The message of an API error whose response the key search had a hit
+/// for. The SDK prints it after the status.
+///
+/// One text for every way the search has a hit: the body, a header name or
+/// a header value holds the key as it arrived, or the error built from the
+/// response would show it. The last can be a key the response spelled with
+/// an escape that the SDK decoded, and it can be a key the response does
+/// not hold at all:
+/// the SDK escapes a control character of the message, and a tab written
+/// as `\t` can spell a key that holds those two characters.
+const NOT_SHOWN: &str =
+    "The response's body and headers are not shown, because showing them could reveal the API key.";
+
+/// The message of an API error whose response body was over the size
+/// limit, when the key search has no hit for the response: larger by the
+/// length the response declared, which is refused before a byte is read,
+/// or by the bytes that arrived. The SDK prints it after the status; with
+/// no body at all it would print `status code (no body)`, which is not
+/// what happened.
+const BODY_TOO_LARGE: &str = "The response body was larger than the limit and is not shown.";
+
+/// The API error a response with a status outside 2xx becomes. `body` is
+/// `None` for a body over the size limit, which was not read to its end;
+/// unless the search has a hit, the error's message is then
+/// [`BODY_TOO_LARGE`].
+///
+/// A server can send back what it was sent, a gateway that quotes a refused
+/// `authorization` header say, and the SDK prints the message it reads out
+/// of the body. So the body's bytes and each header's name and value are
+/// searched for the key first, in the spellings [`key_forms`] lists; a
+/// body that is `None` is not searched, only the headers are. A header
+/// name is searched too, in the lower case `http` holds it in: the error
+/// prints no name, but [`ApiError::headers`] returns the map. The bytes
+/// are searched as they arrived, not the message: the SDK cuts a message
+/// at 200 characters, and a key cut there is no longer found.
+///
+/// Then the error is built and searched as [`KeyHeader::holds_key`]
+/// describes. The bytes alone are not enough: the SDK decodes the message
+/// out of a JSON body, so a body that writes one character of the key as a
+/// `\u` escape holds the key in none of the searched spellings and gives a
+/// message that holds it as written.
+///
+/// On a hit of either search the error is built from the status alone,
+/// with [`NOT_SHOWN`] as its message.
+fn api_error(
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Option<Bytes>,
+    key: &KeyHeader,
+) -> ApiError {
+    let not_shown = || ApiError::from_response(status, replacement(NOT_SHOWN), HeaderMap::new());
+    let received = body.as_deref().is_some_and(|body| key.occurs_in_bytes(body))
+        || headers.iter().any(|(name, value)| {
+            key.occurs_in(name.as_str()) || key.occurs_in_bytes(value.as_bytes())
+        });
+    if received {
+        return not_shown();
+    }
+    let body = body.unwrap_or_else(|| replacement(BODY_TOO_LARGE));
+    let error = ApiError::from_response(status, body, headers);
+    if key.holds_key(&error) {
+        return not_shown();
+    }
+    error
+}
+
+/// The body this module puts in the place of a response body it does not
+/// show: a JSON object in the shape the SDK reads an error's message from,
+/// `{"error":{"message":...}}`.
+fn replacement(message: &'static str) -> Bytes {
+    Bytes::from(serde_json::json!({ "error": { "message": message } }).to_string())
 }
 
 /// The body of a success response as JSON text, or the non-answer for a body
@@ -599,7 +728,7 @@ const MAX_MESSAGE_LINKS: usize = 8;
 /// A service's error may hold the request's headers, and so the key: the
 /// default [`Transport`] formats no header value, but a caller's own service
 /// can. So the chain is searched first, as [`KeyHeader::holds_key`]
-/// describes: for the key as written or as `Debug` writes it, not for a key
+/// describes: for the key in the spellings listed there, not for a key
 /// transformed in another way. On a hit the whole chain is dropped for a
 /// fixed text. Otherwise an SDK error the service raised itself, a timeout
 /// say, is passed through as it is, and anything else is a connection error

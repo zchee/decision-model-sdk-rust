@@ -32,6 +32,20 @@ impl Recorder {
             .map(str::to_owned)
             .collect()
     }
+
+    /// Every recorded event, of every target and every level, in the order
+    /// recorded: the adapter's, the SDK's, and those of any other crate that
+    /// logs through `tracing`, such as `h2` and `hyper_util`. Each line
+    /// starts with its target.
+    #[allow(
+        dead_code,
+        reason = "this file is a module of several test targets, and not each of them reads \
+                  the events of other crates"
+    )]
+    pub(crate) fn all(&self) -> Vec<String> {
+        let events = self.0.lock().expect("not poisoned");
+        events.iter().map(|(_, line)| line.clone()).collect()
+    }
 }
 
 struct Line(String);

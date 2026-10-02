@@ -38,7 +38,12 @@ impl Fixture {
     /// A provider at `base_url` whose operation is `/responses` under it and
     /// `/v1/responses` in a log.
     fn new(base_url: &str, limits: Limits) -> Self {
-        let key = key_header(AUTHORIZATION, true, &SecretString::from(KEY)).expect("a legal key");
+        Self::with_key(base_url, limits, KEY)
+    }
+
+    /// The same provider with `key` as its key.
+    fn with_key(base_url: &str, limits: Limits, key: &str) -> Self {
+        let key = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
         let endpoint = BaseUrl::parse(base_url)
             .expect("a legal base URL")
             .endpoint("/responses", "/v1/responses")
@@ -175,6 +180,78 @@ fn a_key_is_found_in_the_forms_debug_writes_it_in() {
 
     assert!(!header.occurs_in("ab\"cd"));
     assert!(!header.occurs_in(""));
+}
+
+#[test]
+fn a_key_is_found_as_debug_of_its_bytes_writes_it() {
+    // A tab and a byte from 0x80 up: `Debug` of a `Bytes` writes `\t` and
+    // `\xc3\xa9`, a header value's writes `\x9` for the tab, and a string's
+    // writes the letter itself, so no other spelling is this one.
+    let key = "p\u{e9}s\ts";
+    let header = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
+
+    let text = format!("{:?}", Bytes::copy_from_slice(key.as_bytes()));
+    assert_eq!(text, "b\"p\\xc3\\xa9s\\ts\"");
+    assert!(header.occurs_in(&text));
+    assert!(header.occurs_in(&format!("sent: {:?}", Bytes::from(format!("Bearer {key}")))));
+
+    // The spelling of another key is not found.
+    assert!(!header.occurs_in("b\"p\\xc3\\xa9s\\tt\""));
+}
+
+#[test]
+fn a_key_is_found_as_a_json_string_holds_it() {
+    // JSON escapes the quote and writes the soft hyphen as it is; `Debug`
+    // of a string, of a header value and of bytes all escape the soft
+    // hyphen, so no other spelling is this one.
+    let key = "a\"b\u{ad}c";
+    let header = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
+
+    // The JSON text is made at run time, as a service's serializer makes it.
+    let text = serde_json::to_string(&format!("Bearer {key}")).expect("a string is JSON");
+    assert_eq!(text, "\"Bearer a\\\"b\u{ad}c\"");
+    assert!(header.occurs_in(&text));
+
+    // The spelling of another key is not found.
+    assert!(!header.occurs_in("\"Bearer a\\\"b\u{ad}d\""));
+}
+
+#[tokio::test]
+async fn a_key_escaped_twice_by_a_derived_debug_is_withheld() {
+    // A key with a byte from 0x80 up. The service's error keeps `Debug` of
+    // the header value it was sent, not marked sensitive, in a `String`
+    // field; the derived `Debug` of the error escapes that text once more.
+    let key = "p\u{e9}ss";
+    let leak: fn(&str) -> BoxError = |header| {
+        let value = HeaderValue::from_str(header).expect("the header the request carried");
+        Box::new(ServiceError::new("request failed", &format!("{value:?}"), None))
+    };
+    // The scripted error holds the key twice escaped and in no other
+    // spelling, so the check below is not vacuous.
+    let scripted = leak(&format!("Bearer {key}"));
+    assert_eq!(scripted.to_string(), "request failed");
+    assert_eq!(occurrences(&format!("{scripted:?}"), "Bearer p\\\\xc3\\\\xa9ss"), 1);
+    assert_eq!(occurrences(&format!("{scripted:?}"), "p\\xc3\\xa9ss"), 0);
+    assert_eq!(occurrences(&format!("{scripted:?}"), key), 0);
+    let fixture = Fixture::with_key("http://scripted.invalid", limits(None), key);
+
+    let error =
+        fixture.post(&Scripted(Script::Fail(leak))).await.expect_err("the service fails the call");
+
+    assert!(matches!(error.kind(), SdkErrorKind::Connection), "{error:?}");
+    assert_eq!(error.to_string(), WITHHELD);
+    assert!(error.source().is_none(), "the chain is dropped whole");
+
+    // The same error for another key is kept: it is this key that is found.
+    let other = Fixture::with_key("http://scripted.invalid", limits(None), "p\u{e9}st");
+    let kept = other
+        .post(&Scripted(Script::Fail(|_| {
+            Box::new(ServiceError::new("request failed", "\"Bearer p\\xc3\\xa9ss\"", None))
+        })))
+        .await
+        .expect_err("the service fails the call");
+    assert_eq!(kept.to_string(), "Connection error: request failed");
+    assert!(kept.source().is_some(), "the chain is kept");
 }
 
 #[test]
@@ -379,8 +456,234 @@ async fn a_failure_status_over_the_limit_is_still_an_api_error() {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::BAD_GATEWAY);
-    assert_eq!(api.body(), b"", "a body over the limit is not kept");
     assert_eq!(api.kind(), ApiErrorKind::InternalServer);
+    // The server's body is not kept; the text says what happened to it.
+    assert_eq!(api.body(), BODY_TOO_LARGE_BODY, "{}", api.body_text());
+    assert_eq!(
+        error.to_string(),
+        "502 The response body was larger than the limit and is not shown."
+    );
+    // The headers are the server's.
+    assert_eq!(api.headers()[CONTENT_TYPE], "application/json");
+    assert_eq!(api.headers()[http::header::CONTENT_LENGTH], "65");
+    assert_eq!(server.request_count(), 1);
+}
+
+/// The body this module wrote for a failure response over the limit.
+const BODY_TOO_LARGE_BODY: &[u8] =
+    br#"{"error":{"message":"The response body was larger than the limit and is not shown."}}"#;
+
+#[tokio::test]
+async fn a_failure_response_over_the_limit_that_repeats_the_key_in_a_header_is_not_shown() {
+    let server = TestServer::start(Protocol::Http1, |_| async {
+        let mut response = json_response(StatusCode::BAD_GATEWAY, json_string(65));
+        let echoed = HeaderValue::from_str(&format!("Bearer {KEY}")).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        response
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(Some(64)));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    // The key in a header value decides: neither the headers nor the text
+    // about the size are kept.
+    assert_not_shown(error, StatusCode::BAD_GATEWAY, KEY);
+}
+
+// ------------------------------------- a failure response that repeats the key
+
+/// The text an API error has in the place of a response the key search had
+/// a hit for, and the body this module wrote for it.
+const NOT_SHOWN_TEXT: &str =
+    "The response's body and headers are not shown, because showing them could reveal the API key.";
+const NOT_SHOWN_BODY: &[u8] = br#"{"error":{"message":"The response's body and headers are not shown, because showing them could reveal the API key."}}"#;
+
+/// Checks that `error` is the API error of a response with `status` that
+/// the search for `key` had a hit for: the status and nothing else of the
+/// response, and the key in no rendering.
+#[track_caller]
+fn assert_not_shown(error: SdkError, status: StatusCode, key: &str) {
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), status);
+    assert_eq!(api.message(), NOT_SHOWN_TEXT);
+    assert_eq!(error.to_string(), format!("{} {NOT_SHOWN_TEXT}", status.as_u16()));
+    assert_eq!(api.body(), NOT_SHOWN_BODY, "{}", api.body_text());
+    assert!(api.headers().is_empty(), "{:?}", api.headers());
+    assert_eq!(api.request_id(), None);
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, key), 0, "{text}");
+    }
+    // And as the adapter's own error, which a caller sees.
+    let error = Error::provider(error);
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, key), 0, "{text}");
+    }
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_in_its_body_is_not_shown() {
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {KEY}"}}}}"#);
+    // What the SDK would print for this body: the check below is not vacuous.
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 invalid token: Bearer {KEY}"));
+    let server = answering(StatusCode::UNAUTHORIZED, body).await;
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.kind(), ApiErrorKind::Authentication);
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_as_json_writes_it_is_not_shown() {
+    // The body is JSON, so a quote in the key arrives escaped; the message
+    // the SDK reads out of the body holds the key as written.
+    let key = "ab\"cd";
+    let body = serde_json::json!({ "error": { "message": format!("no such key: {key}") } });
+    let body = Bytes::from(body.to_string());
+    let shown = ApiError::from_response(StatusCode::BAD_REQUEST, body.clone(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("400 no such key: {key}"));
+    assert_eq!(occurrences(&String::from_utf8_lossy(&body), key), 0);
+    let fixture = Fixture::with_key("http://scripted.invalid", limits(None), key);
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::BAD_REQUEST, vec![body]))
+        .await
+        .expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::BAD_REQUEST, key);
+}
+
+#[tokio::test]
+async fn a_key_a_failure_body_escapes_and_the_sdk_decodes_is_not_shown() {
+    // The body writes the key's first character as a JSON escape of six
+    // characters, built here at run time from a backslash. The body then
+    // holds the key in no spelling the search of the bytes knows; the SDK
+    // decodes the escape, and its message holds the key as written.
+    let first = u32::from(KEY.chars().next().expect("the key is not empty"));
+    let escaped = format!("{}u{first:04x}{}", '\\', &KEY[1..]);
+    assert_eq!(escaped.len(), KEY.len() + 5);
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {escaped}"}}}}"#);
+    assert_eq!(occurrences(&body, KEY), 0);
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 invalid token: Bearer {KEY}"));
+    let fixture = Fixture::new("http://scripted.invalid", limits(None));
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::UNAUTHORIZED, vec![body.into()]))
+        .await
+        .expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_in_a_header_is_not_shown() {
+    let server = TestServer::start(Protocol::Http1, |_| async {
+        let mut response =
+            json_response(StatusCode::FORBIDDEN, r#"{"error":{"message":"denied"}}"#);
+        let echoed = HeaderValue::from_str(&format!("Bearer {KEY}")).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        response
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::FORBIDDEN, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_as_a_header_name_is_not_shown() {
+    // The key is a legal header name and has no upper-case letter, so it
+    // arrives as it was sent.
+    let name = HeaderName::from_bytes(KEY.as_bytes()).expect("a legal header name");
+    assert_eq!(name.as_str(), KEY);
+    let server = TestServer::start(Protocol::Http1, move |_| {
+        let mut response =
+            json_response(StatusCode::FORBIDDEN, r#"{"error":{"message":"denied"}}"#);
+        response.headers_mut().insert(name.clone(), HeaderValue::from_static("refused"));
+        async move { response }
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::FORBIDDEN, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
+    // One character short of the key: in the body, in a header value and as
+    // a header name.
+    let other = &KEY[..KEY.len() - 1];
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {other}"}}}}"#);
+    let sent = body.clone();
+    let server = TestServer::start(Protocol::Http1, move |_| {
+        let mut response = json_response(StatusCode::UNAUTHORIZED, sent.clone());
+        let echoed =
+            HeaderValue::from_str(&format!("Bearer {}", &KEY[1..])).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        let name = HeaderName::from_bytes(&KEY.as_bytes()[1..]).expect("a legal header name");
+        response.headers_mut().insert(name, HeaderValue::from_static("refused"));
+        async move { response }
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(api.headers()[&KEY[1..]], "refused");
+    assert_eq!(api.body(), body.as_bytes());
+    assert_eq!(error.to_string(), format!("401 invalid token: Bearer {other}"));
+    assert_eq!(api.headers()["x-echoed-authorization"], format!("Bearer {}", &KEY[1..]).as_str());
+    assert_eq!(api.headers()[CONTENT_TYPE], "application/json");
+}
+
+#[tokio::test]
+async fn a_key_the_sdk_would_cut_out_of_a_failure_message_is_not_shown_in_part() {
+    // The SDK cuts a message at 200 characters: 190 of them, then the key,
+    // leave the key's first ten characters in the message and the whole key
+    // in the body.
+    let body = format!(r#"{{"error":{{"message":"{}{KEY}"}}}}"#, "x".repeat(190));
+    let cut = &KEY[..10];
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 {}{cut}\u{2026}", "x".repeat(190)));
+    assert_eq!(occurrences(&shown.to_string(), KEY), 0);
+    let fixture = Fixture::new("http://scripted.invalid", limits(None));
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::UNAUTHORIZED, vec![body.into()]))
+        .await
+        .expect_err("a failure status");
+
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, cut), 0, "{text}");
+    }
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
 }
 
 // ----------------------------------------------------- status, deadline, connect
@@ -857,7 +1160,11 @@ async fn a_body_that_declares_no_length_is_cut_at_the_limit() {
         panic!("expected an API error, got {failed:?}");
     };
     assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(api.body(), b"");
+    assert_eq!(api.body(), BODY_TOO_LARGE_BODY, "{}", api.body_text());
+    assert_eq!(
+        failed.to_string(),
+        "503 The response body was larger than the limit and is not shown."
+    );
 
     // The same 18 bytes against a limit of 18 are read.
     let fixture = Fixture::new("http://scripted.invalid", limits(Some(18)));
@@ -983,6 +1290,58 @@ async fn http_event_holds_method_log_uri_status_and_elapsed() {
             assert_eq!(occurrences(&line, "Bearer"), 0, "{line}");
             assert_eq!(occurrences(&line, "team-a"), 0, "{line}");
         }
+    }
+}
+
+/// The events of `h2` and `hyper_util` are theirs, and what they print can
+/// change with a new version of either: this test reads every event of every
+/// target, where the test above reads the adapter's own.
+#[cfg(feature = "tracing")]
+#[tokio::test]
+async fn no_event_of_any_target_holds_the_key_or_the_base_urls_path() {
+    async fn answering_over(protocol: Protocol) -> TestServer {
+        TestServer::start(protocol, |_| async { json_response(StatusCode::OK, r#"{"ok":true}"#) })
+            .await
+            .expect("a loopback server")
+    }
+    let plain = answering_over(Protocol::Http1).await;
+    let secure = answering_over(Protocol::Http2Tls).await;
+    let root = secure.certificate_der().expect("a TLS server has a certificate").to_vec();
+    let service = Transport::new(vec![root]).expect("the transport builds");
+    let recorder = recorder::Recorder::default();
+    let installed = recorder::install(&recorder);
+
+    for server in [&plain, &secure] {
+        // A caller's path prefix, which no event may name.
+        let fixture = Fixture::new(&format!("{}/team-a/v1", server.base_url()), limits(None));
+        fixture.post(&service).await.expect("it answers").expect("it is JSON");
+    }
+    drop(installed);
+
+    // The key and the prefix did travel, over HTTP/1.1 and over HTTP/2 with
+    // TLS, so an event had the chance to print them.
+    for (server, version) in [(&plain, Version::HTTP_11), (&secure, Version::HTTP_2)] {
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].version, version);
+        assert_eq!(requests[0].uri.path(), "/team-a/v1/responses");
+        assert_eq!(requests[0].header_values("authorization"), [format!("Bearer {KEY}")]);
+    }
+
+    // The events are not the adapter's alone: the HTTP/2 codec's and the
+    // connection pool's are among them.
+    let lines = recorder.all();
+    for target in ["system_one_adapter ", "h2::", "hyper_util::"] {
+        assert!(
+            lines.iter().any(|line| line.starts_with(target)),
+            "no event of {target:?} among {} events",
+            lines.len()
+        );
+    }
+    for line in &lines {
+        assert_eq!(occurrences(line, KEY), 0, "{line}");
+        assert_eq!(occurrences(line, "Bearer"), 0, "{line}");
+        assert_eq!(occurrences(line, "team-a"), 0, "{line}");
     }
 }
 
