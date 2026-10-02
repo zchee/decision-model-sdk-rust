@@ -355,3 +355,33 @@ fn a_converted_string_round_trips_through_both_codecs() {
         content
     );
 }
+
+#[test]
+fn a_serde_json_raw_value_becomes_the_content_it_holds_with_either_backend() {
+    use serde_json::value::RawValue;
+
+    let raw = |text: &str| RawValue::from_string(text.to_owned()).expect("one JSON value");
+
+    let object = raw(r#"{ "tone" : [ "warm", "brief" ] }"#);
+    let content = Content::json(&*object).expect("an object is content");
+    assert_eq!(
+        content.as_json().map(RawJson::as_str),
+        Some(r#"{ "tone" : [ "warm", "brief" ] }"#),
+        "the object, spacing included"
+    );
+
+    let array = raw("[1, 2]");
+    let content = Content::json(&array).expect("an array is content");
+    assert_eq!(content.as_json().map(RawJson::as_str), Some("[1, 2]"));
+
+    let text = raw(r#""neutral""#);
+    assert_eq!(Content::json(&*text).expect("a string is content").as_text(), Some("neutral"));
+
+    for scalar in ["1", "true", "null"] {
+        assert_eq!(
+            Content::json(&*raw(scalar)).expect_err("a scalar is not content"),
+            ContentError::Shape,
+            "{scalar}"
+        );
+    }
+}
