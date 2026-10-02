@@ -641,7 +641,7 @@ async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
         let echoed =
             HeaderValue::from_str(&format!("Bearer {}", &KEY[1..])).expect("a legal value");
         response.headers_mut().insert("x-echoed-authorization", echoed);
-        let name = HeaderName::from_bytes(KEY[1..].as_bytes()).expect("a legal header name");
+        let name = HeaderName::from_bytes(&KEY.as_bytes()[1..]).expect("a legal header name");
         response.headers_mut().insert(name, HeaderValue::from_static("refused"));
         async move { response }
     })
