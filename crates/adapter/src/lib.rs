@@ -53,6 +53,8 @@ pub use crate::provider::{
 };
 
 // The HTTP transport the built-in providers send their requests through.
+#[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
+pub use crate::provider::http::{Transport, TransportBody, TransportFuture};
 
 // The client and the requests it builds.
 
