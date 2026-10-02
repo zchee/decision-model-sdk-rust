@@ -38,7 +38,12 @@ impl Fixture {
     /// A provider at `base_url` whose operation is `/responses` under it and
     /// `/v1/responses` in a log.
     fn new(base_url: &str, limits: Limits) -> Self {
-        let key = key_header(AUTHORIZATION, true, &SecretString::from(KEY)).expect("a legal key");
+        Self::with_key(base_url, limits, KEY)
+    }
+
+    /// The same provider with `key` as its key.
+    fn with_key(base_url: &str, limits: Limits, key: &str) -> Self {
+        let key = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
         let endpoint = BaseUrl::parse(base_url)
             .expect("a legal base URL")
             .endpoint("/responses", "/v1/responses")
@@ -175,6 +180,78 @@ fn a_key_is_found_in_the_forms_debug_writes_it_in() {
 
     assert!(!header.occurs_in("ab\"cd"));
     assert!(!header.occurs_in(""));
+}
+
+#[test]
+fn a_key_is_found_as_debug_of_its_bytes_writes_it() {
+    // A tab and a byte from 0x80 up: `Debug` of a `Bytes` writes `\t` and
+    // `\xc3\xa9`, a header value's writes `\x9` for the tab, and a string's
+    // writes the letter itself, so no other spelling is this one.
+    let key = "p\u{e9}s\ts";
+    let header = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
+
+    let text = format!("{:?}", Bytes::copy_from_slice(key.as_bytes()));
+    assert_eq!(text, "b\"p\\xc3\\xa9s\\ts\"");
+    assert!(header.occurs_in(&text));
+    assert!(header.occurs_in(&format!("sent: {:?}", Bytes::from(format!("Bearer {key}")))));
+
+    // The spelling of another key is not found.
+    assert!(!header.occurs_in("b\"p\\xc3\\xa9s\\tt\""));
+}
+
+#[test]
+fn a_key_is_found_as_a_json_string_holds_it() {
+    // JSON escapes the quote and writes the soft hyphen as it is; `Debug`
+    // of a string, of a header value and of bytes all escape the soft
+    // hyphen, so no other spelling is this one.
+    let key = "a\"b\u{ad}c";
+    let header = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
+
+    // The JSON text is made at run time, as a service's serializer makes it.
+    let text = serde_json::to_string(&format!("Bearer {key}")).expect("a string is JSON");
+    assert_eq!(text, "\"Bearer a\\\"b\u{ad}c\"");
+    assert!(header.occurs_in(&text));
+
+    // The spelling of another key is not found.
+    assert!(!header.occurs_in("\"Bearer a\\\"b\u{ad}d\""));
+}
+
+#[tokio::test]
+async fn a_key_escaped_twice_by_a_derived_debug_is_withheld() {
+    // A key with a byte from 0x80 up. The service's error keeps `Debug` of
+    // the header value it was sent, not marked sensitive, in a `String`
+    // field; the derived `Debug` of the error escapes that text once more.
+    let key = "p\u{e9}ss";
+    let leak: fn(&str) -> BoxError = |header| {
+        let value = HeaderValue::from_str(header).expect("the header the request carried");
+        Box::new(ServiceError::new("request failed", &format!("{value:?}"), None))
+    };
+    // The scripted error holds the key twice escaped and in no other
+    // spelling, so the check below is not vacuous.
+    let scripted = leak(&format!("Bearer {key}"));
+    assert_eq!(scripted.to_string(), "request failed");
+    assert_eq!(occurrences(&format!("{scripted:?}"), "Bearer p\\\\xc3\\\\xa9ss"), 1);
+    assert_eq!(occurrences(&format!("{scripted:?}"), "p\\xc3\\xa9ss"), 0);
+    assert_eq!(occurrences(&format!("{scripted:?}"), key), 0);
+    let fixture = Fixture::with_key("http://scripted.invalid", limits(None), key);
+
+    let error =
+        fixture.post(&Scripted(Script::Fail(leak))).await.expect_err("the service fails the call");
+
+    assert!(matches!(error.kind(), SdkErrorKind::Connection), "{error:?}");
+    assert_eq!(error.to_string(), WITHHELD);
+    assert!(error.source().is_none(), "the chain is dropped whole");
+
+    // The same error for another key is kept: it is this key that is found.
+    let other = Fixture::with_key("http://scripted.invalid", limits(None), "p\u{e9}st");
+    let kept = other
+        .post(&Scripted(Script::Fail(|_| {
+            Box::new(ServiceError::new("request failed", "\"Bearer p\\xc3\\xa9ss\"", None))
+        })))
+        .await
+        .expect_err("the service fails the call");
+    assert_eq!(kept.to_string(), "Connection error: request failed");
+    assert!(kept.source().is_some(), "the chain is kept");
 }
 
 #[test]

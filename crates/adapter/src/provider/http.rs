@@ -18,10 +18,10 @@
 //! response body, which is not searched, and the error of a caller's own
 //! service, which may hold the request's headers. A failed call's error
 //! chain is therefore searched before it is kept. The search looks for the
-//! key as written and as `Debug` writes it, four spellings in all, listed
-//! at [`KeyHeader::holds_key`], and for nothing else: a key the service
-//! transformed in another way, into hex or base64 say, or split over two
-//! links of the chain, is not found.
+//! key as written, as `Debug` writes it and as a JSON string holds it, the
+//! spellings listed at [`KeyHeader::holds_key`], and for nothing else: a key
+//! the service transformed in another way, into hex or base64 say, or split
+//! over two links of the chain, is not found.
 
 use std::{
     error::Error as StdError,
@@ -130,29 +130,44 @@ pub(crate) fn key_header(
     Ok(KeyHeader { name, value, forms: key_forms(key).into() })
 }
 
-/// The spellings of a key that an error's rendering is searched for: the
-/// key as written, and what `Debug` of a `str`, `str::escape_debug` and
-/// `Debug` of a [`HeaderValue`] that is not marked sensitive write for it,
-/// each without the quotes around it. Equal spellings are kept once: for a
-/// key of ASCII letters, digits, `-` and `_` all four are the key as
-/// written.
+/// The spellings of a key that an error's rendering is searched for, the
+/// ones the SDK searches a transport's error for
+/// (`crates/sdk/src/redact.rs`, `push_variants`).
+///
+/// The first six are the key as written, and what `Debug` of a `str`,
+/// `str::escape_debug`, `Debug` of a [`HeaderValue`] that is not marked
+/// sensitive, `Debug` of a [`Bytes`] and a JSON string as `serde_json` writes
+/// one hold for it, each without the quotes around it. The others are each
+/// of those six as `Debug` of a `str` writes it once more, without the
+/// quotes: a derived `Debug` prints a `String` field that already holds one
+/// of the six in that way.
+///
+/// Equal spellings are kept once: for a key of ASCII letters, digits, `-`,
+/// `_` and `.` every one of them is the key as written.
 fn key_forms(key: &str) -> Vec<Box<str>> {
     let mut forms = vec![
-        Box::from(key),
-        Box::from(unquoted(&format!("{key:?}"))),
-        key.escape_debug().to_string().into_boxed_str(),
+        key.to_owned(),
+        unquoted(&format!("{key:?}"), "\"").to_owned(),
+        key.escape_debug().to_string(),
+        unquoted(&format!("{:?}", Bytes::copy_from_slice(key.as_bytes())), "b\"").to_owned(),
+        // The value of a `Value::String` is written as a JSON string.
+        unquoted(&serde_json::Value::from(key).to_string(), "\"").to_owned(),
     ];
     if let Ok(value) = HeaderValue::from_str(key) {
-        forms.push(Box::from(unquoted(&format!("{value:?}"))));
+        forms.push(unquoted(&format!("{value:?}"), "\"").to_owned());
     }
+    let escaped_again: Vec<String> =
+        forms.iter().map(|form| unquoted(&format!("{form:?}"), "\"").to_owned()).collect();
+    forms.extend(escaped_again);
     forms.sort_unstable();
     forms.dedup();
-    forms
+    forms.into_iter().map(String::into_boxed_str).collect()
 }
 
-/// `text` without the double quotes around it.
-fn unquoted(text: &str) -> &str {
-    text.strip_prefix('"').and_then(|rest| rest.strip_suffix('"')).unwrap_or(text)
+/// `text` without the `open` it starts with and the double quote it ends
+/// with.
+fn unquoted<'a>(text: &'a str, open: &str) -> &'a str {
+    text.strip_prefix(open).and_then(|rest| rest.strip_suffix('"')).unwrap_or(text)
 }
 
 /// How many links of an error chain are searched for the key. A longer chain
@@ -175,20 +190,28 @@ impl KeyHeader {
     /// Every link is rendered three ways, `Display`, `{:?}` and `{:#?}`: an
     /// error's `Debug` prints its source's `Debug`, and `{:#?}` passes the
     /// alternate flag down, so each of the three can reach a caller. Each
-    /// rendering is searched, byte for byte, for four spellings of the key
+    /// rendering is searched, byte for byte, for these spellings of the key
     /// and for nothing else:
     ///
     /// - the key as written;
     /// - what `Debug` of a `str` writes for it, without the quotes;
     /// - what `str::escape_debug` writes for it;
     /// - what `Debug` of a [`HeaderValue`] that is not marked sensitive
-    ///   writes for it, without the quotes.
+    ///   writes for it, without the quotes;
+    /// - what `Debug` of a [`Bytes`] writes for its bytes, without the `b`
+    ///   and the quotes;
+    /// - what a JSON string holds for it, as `serde_json` writes one,
+    ///   without the quotes;
+    /// - each of those six as `Debug` of a `str` writes it once more,
+    ///   without the quotes: a derived `Debug` prints a `String` field that
+    ///   already holds one of them in that way.
     ///
     /// A key transformed in any other way is not found: split over two
     /// links, in hex, in base64, cut to a prefix, reversed, percent-encoded,
-    /// or as a list of its bytes. A rendering that holds the key only in
+    /// as a list of its bytes, or with a JSON `\u` escape for a character
+    /// `serde_json` writes as it is. A rendering that holds the key only in
     /// such a shape is not a hit, unless that shape happens to hold one of
-    /// the four spellings as well.
+    /// the listed spellings as well.
     ///
     /// A chain longer than [`MAX_SCANNED_LINKS`] cannot be searched to its
     /// end and counts as a hit.
@@ -470,7 +493,7 @@ pub(crate) struct Exchange<'a> {
 ///   the [`source`](StdError::source), unless the search described at
 ///   [`KeyHeader::holds_key`] has a hit in it or in the message built from
 ///   it: then the error has a fixed text and no source. That search finds
-///   the key as written or as `Debug` writes it, not a key transformed in
+///   the key in the spellings listed there, not a key transformed in
 ///   another way.
 /// - [`ErrorKind::ResponseTooLarge`](typesafe_sdk::ErrorKind::ResponseTooLarge)
 ///   when a success response's body is larger than the limit. A body over
@@ -599,7 +622,7 @@ const MAX_MESSAGE_LINKS: usize = 8;
 /// A service's error may hold the request's headers, and so the key: the
 /// default [`Transport`] formats no header value, but a caller's own service
 /// can. So the chain is searched first, as [`KeyHeader::holds_key`]
-/// describes: for the key as written or as `Debug` writes it, not for a key
+/// describes: for the key in the spellings listed there, not for a key
 /// transformed in another way. On a hit the whole chain is dropped for a
 /// fixed text. Otherwise an SDK error the service raised itself, a timeout
 /// say, is passed through as it is, and anything else is a connection error
