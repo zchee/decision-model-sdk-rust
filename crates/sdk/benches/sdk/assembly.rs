@@ -73,8 +73,8 @@ fn header_map() -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(6);
     headers.insert("authorization", HeaderValue::from_static("Bearer bench-key"));
     headers.insert("accept", HeaderValue::from_static("application/json"));
-    headers.insert("user-agent", HeaderValue::from_static("typesafe-sdk-rust/0.2.0"));
-    headers.insert("x-typesafe-sdk", HeaderValue::from_static("typesafe-sdk-rust/0.2.0"));
+    headers.insert("user-agent", HeaderValue::from_static("typesafe-sdk-rust/0.2.1"));
+    headers.insert("x-typesafe-sdk", HeaderValue::from_static("typesafe-sdk-rust/0.2.1"));
     headers.insert("x-typesafe-runtime", HeaderValue::from_static("rust"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     // The first clone of a map moves its names into shared storage, once; a
