@@ -6,9 +6,8 @@ use std::{error::Error as _, time::Instant};
 
 use typesafe_sdk::RetryPolicy;
 
-use super::{Evaluation, InvalidReply, NON_ANSWER, add, evaluate};
+use super::{Evaluation, InvalidReply, add, evaluate};
 use crate::{
-    error::{Error, ErrorKind},
     model::QuestionModel,
     options::{AnswerMode, StructuredOutputs},
     prompt::{self, Location, Problem},
@@ -29,14 +28,6 @@ fn a_total_is_unknown_once_any_count_is() {
     for (total, count, expected) in cases {
         assert_eq!(add(total, count), expected, "add({total:?}, {count:?})");
     }
-}
-
-#[test]
-fn the_error_type_of_a_refused_reply_is_the_kind_name() {
-    let error = Error::non_answer(NonAnswer::new("refused"));
-
-    assert_eq!(error.kind().name(), NON_ANSWER);
-    assert!(matches!(error.kind(), ErrorKind::NonAnswer(_)));
 }
 
 #[test]

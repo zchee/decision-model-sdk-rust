@@ -16,7 +16,7 @@ use typesafe_sdk::{Answers, Error as SdkError, RetryPolicy};
 use crate::{
     convert::{Converted, convert},
     decode::decode,
-    error::{Error, provider_kind_name},
+    error::{Error, ErrorKind, provider_kind_name},
     model::QuestionModel,
     options::{AnswerMode, StructuredOutputs},
     prompt::{self, Problem},
@@ -29,10 +29,6 @@ use crate::{
 /// The target of the adapter's own events.
 #[cfg(feature = "tracing")]
 const TARGET: &str = "system_one_adapter";
-
-/// The `error_type` of an attempt the vendor answered without an answer: the
-/// name of [`ErrorKind::NonAnswer`](crate::ErrorKind::NonAnswer).
-const NON_ANSWER: &str = "NonAnswer";
 
 /// What one provider call ends with: a reply, a reply that is not an answer,
 /// or a failure of the exchange.
@@ -194,8 +190,10 @@ async fn attempt(
             None
         }
         Ok(Err(non_answer)) => {
-            attempt.record_error(non_answer.to_string(), NON_ANSWER);
-            Some(NON_ANSWER)
+            // The adapter's own kind name, where a failed exchange has the SDK's.
+            let kind = ErrorKind::NonAnswer(non_answer.clone()).name();
+            attempt.record_error(non_answer.to_string(), kind);
+            Some(kind)
         }
         Err(error) => {
             let kind = provider_kind_name(error);
