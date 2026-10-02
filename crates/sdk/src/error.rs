@@ -176,12 +176,13 @@ impl Error {
     /// [`RetryPolicy::api_connection_error`](crate::RetryPolicy::api_connection_error)
     /// is on, or a [`timeout`](Self::timeout). The client then redacts the
     /// error as it redacts its own transport's: when the error has a cause,
-    /// and that cause or the message holds a credential of the request or
-    /// the cause chain is longer than 32 links, the message is rewritten to
-    /// start with `Connection error: ` and the cause can be replaced by a
-    /// redacted copy that cannot be downcast. The kind, and so the retry
-    /// class, stays the same. This adds a way to build an error; it does not
-    /// change how an existing transport's errors are classified.
+    /// and that cause, or the message after a leading `Connection error: `,
+    /// holds a credential of the request or the cause chain is longer than
+    /// 32 links, the message is rewritten to start with `Connection error: `
+    /// and the cause can be replaced by a redacted copy that cannot be
+    /// downcast. The kind, and so the retry class, stays the same. This adds
+    /// a way to build an error; it does not change how an existing
+    /// transport's errors are classified.
     ///
     /// ```
     /// use std::error::Error as _;
