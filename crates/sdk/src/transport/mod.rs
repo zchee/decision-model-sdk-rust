@@ -622,23 +622,32 @@ impl Uncut {
 
 /// `error` with the request's credentials kept out of it.
 ///
-/// Only a connection error with a cause can hold one: its cause is the
-/// transport's error, and its message is built from it. The credentials are
-/// read from the headers the request was built from, and only here, after
-/// the attempt failed. A chain that holds none is returned as it is; see
-/// [`redact::copy_chain`] for the other two outcomes.
+/// Only a connection error is searched. With a cause, the cause is the
+/// transport's error and the message is built from it: a chain that holds
+/// none is returned as it is; see [`redact::copy_chain`] for the other two
+/// outcomes. Without one, a custom service built the error with
+/// [`Error::connection`], and its message is all it holds: every form of a
+/// credential in it is replaced by `***`, and nothing else is changed. Any
+/// other kind is returned as it is: an [`ApiError`] a service built keeps the
+/// body and headers it was given. The credentials are read from the headers
+/// the request was built from, and only here, after the attempt failed.
 pub(crate) fn redacted(error: Error, exchange: Exchange<'_>) -> Error {
-    let Some(source) =
-        StdError::source(&error).filter(|_| matches!(error.kind(), ErrorKind::Connection))
-    else {
+    if !matches!(error.kind(), ErrorKind::Connection) {
         return error;
-    };
+    }
     let credentials = Credentials::new(
         exchange
             .base_headers
             .iter()
             .chain(exchange.call_headers.iter().map(|(name, value)| (name, value))),
     );
+    let Some(source) = StdError::source(&error) else {
+        let message = error.to_string();
+        if !credentials.occur_in(&message) {
+            return error;
+        }
+        return Error::connection(credentials.redact(&message), None);
+    };
     // The fixed prefix is the SDK's own text: only what follows it came from
     // the transport, as the Python SDK redacts the error before prefixing it.
     let message = error.to_string();

@@ -1,7 +1,15 @@
-//! Tests for the transport seam: the request body, header assembly, and one
-//! attempt against a real loopback server.
+//! Tests for the transport seam: the request body, header assembly, one
+//! attempt against a real loopback server, and what becomes of the SDK's own
+//! errors a custom service fails with.
 
-use std::{error::Error as StdError, io};
+use std::{
+    error::Error as StdError,
+    io,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use http::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 #[cfg(feature = "hyper")]
@@ -9,7 +17,7 @@ use test_support::{Protocol, TestServer};
 
 use super::*;
 use crate::{
-    ErrorKind,
+    ClientBuilder, ErrorKind, RetryPolicy,
     config::Explicit,
     constants::{RUNTIME_HEADER, SDK_HEADER},
     rendering_tests::assert_printable,
@@ -408,5 +416,305 @@ impl StdError for Wrapper<io::Error> {
 impl StdError for Wrapper<BoxError> {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         Some(&*self.source)
+    }
+}
+
+// ------------------------------------------- a custom service's own errors
+
+/// The key of the client under test, with a quote, a double quote and a
+/// backslash, which every escaping form writes differently.
+const SERVICE_KEY: &str = "ts_live_quo'te\"slash\\tail";
+
+/// The value of the client's secret default header.
+const SERVICE_SECRET: &str = "provider-credential";
+
+/// A custom transport that fails every request with the SDK error `fail`
+/// builds, in `poll_ready` or in `call`.
+#[derive(Clone)]
+struct Failing {
+    in_poll_ready: bool,
+    fail: Arc<dyn Fn() -> Error + Send + Sync>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl Failing {
+    fn new(in_poll_ready: bool, fail: impl Fn() -> Error + Send + Sync + 'static) -> Self {
+        Self { in_poll_ready, fail: Arc::new(fail), calls: Arc::default() }
+    }
+
+    fn error(&self) -> BoxError {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::new((self.fail)())
+    }
+}
+
+impl Service<Request<Body>> for Failing {
+    type Response = Response<http_body_util::Empty<Bytes>>;
+    type Error = BoxError;
+    type Future = std::future::Ready<Result<Self::Response, BoxError>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        Poll::Ready(if self.in_poll_ready { Err(self.error()) } else { Ok(()) })
+    }
+
+    fn call(&mut self, _: Request<Body>) -> Self::Future {
+        std::future::ready(Err(self.error()))
+    }
+}
+
+/// Lists the models through `service` under `retry`, with [`SERVICE_KEY`] as
+/// the key and [`SERVICE_SECRET`] as a secret default header, and returns
+/// the error the call fails with.
+async fn fail_through(service: Failing, retry: RetryPolicy) -> Error {
+    ClientBuilder::new()
+        .api_key(SERVICE_KEY)
+        .base_url("https://api.typesafe.ai")
+        .default_header("x-client-secret", SERVICE_SECRET)
+        .retry(retry.backoff_initial(Duration::ZERO).backoff_max(Duration::ZERO))
+        .build_with_service(service)
+        .expect("the client builds")
+        .models()
+        .list()
+        .send()
+        .await
+        .expect_err("the service fails")
+}
+
+/// Every form in which `secret` can be printed: as it is, as `{:?}` of a
+/// `str`, `escape_debug`, `{:?}` of a `HeaderValue` and of `Bytes`, and a
+/// JSON string write it, without their quotes; and each of those once more as
+/// `{:?}` of a `str` writes it.
+fn spellings(secret: &str) -> Vec<String> {
+    let unquote = |text: String, open: usize| text[open..text.len() - 1].to_owned();
+    let forms = [
+        secret.to_owned(),
+        unquote(format!("{secret:?}"), 1),
+        secret.escape_debug().to_string(),
+        unquote(format!("{:?}", HeaderValue::from_str(secret).expect("a header value")), 1),
+        unquote(format!("{:?}", Bytes::copy_from_slice(secret.as_bytes())), 2),
+        unquote(serde_json::to_string(secret).expect("a string encodes"), 1),
+    ];
+    let again = forms.clone().map(|form| unquote(format!("{form:?}"), 1));
+    forms.into_iter().chain(again).collect()
+}
+
+/// The credentials of the client [`fail_through`] builds, as a service could
+/// copy them out of the request: the key, the whole `Authorization` value and
+/// the secret header's value.
+fn service_credentials() -> [String; 3] {
+    [SERVICE_KEY.to_owned(), format!("Bearer {SERVICE_KEY}"), SERVICE_SECRET.to_owned()]
+}
+
+/// `Display`, `{:?}` and `{:#?}` of `error`.
+fn renderings(error: &Error) -> [String; 3] {
+    [error.to_string(), format!("{error:?}"), format!("{error:#?}")]
+}
+
+/// A connection error a custom service builds without a cause, and whose
+/// message copies a credential of the request in any spelling the SDK knows,
+/// reaches the caller with every one replaced by `***`: in `Display`, `Debug`
+/// and the alternate `Debug`, and still a connection error. A message that
+/// holds none is kept byte for byte, neither escaped nor cut.
+#[tokio::test]
+async fn a_causeless_connection_error_from_a_service_has_its_credentials_replaced() {
+    let mut cases = Vec::new();
+    for credential in service_credentials() {
+        for spelling in spellings(&credential) {
+            cases.push((
+                format!("proxy refused {spelling} for /v1/models"),
+                String::from("proxy refused *** for /v1/models"),
+            ));
+        }
+    }
+    let plain = [
+        String::from("Connection error: refused"),
+        format!("bad\nline \u{1b}[31mred {}", "x".repeat(300)),
+    ];
+    for message in plain {
+        cases.push((message.clone(), message));
+    }
+
+    for (message, expected) in cases {
+        for in_poll_ready in [false, true] {
+            let case = format!("{message:?}, in poll_ready {in_poll_ready}");
+            let built = message.clone();
+            let service =
+                Failing::new(in_poll_ready, move || Error::connection(built.clone(), None));
+            let error = fail_through(service, RetryPolicy::default().max_retries(0)).await;
+
+            assert!(matches!(error.kind(), ErrorKind::Connection), "{case}: {error:?}");
+            assert!(error.source().is_none(), "{case}: {error:?}");
+            assert_eq!(error.to_string(), expected, "{case}");
+            assert_eq!(
+                format!("{error:?}"),
+                format!("Error {{ kind: Connection, message: {expected:?} }}"),
+                "{case}"
+            );
+            for rendering in renderings(&error) {
+                for credential in service_credentials() {
+                    for spelling in spellings(&credential) {
+                        assert!(
+                            !rendering.contains(&spelling),
+                            "{case}: {spelling:?} in {rendering}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The replacement keeps the retry class: the built-in rule retries the
+/// redacted connection error exactly while it retries connection errors, and
+/// a caller's rule sees the redacted error, still a connection error.
+#[tokio::test]
+async fn a_redacted_connection_error_is_retried_as_any_connection_error_is() {
+    let message = format!("proxy refused Bearer {SERVICE_KEY}");
+    for (retried, attempts) in [(true, 3), (false, 1)] {
+        let built = message.clone();
+        let service = Failing::new(false, move || Error::connection(built.clone(), None));
+        let calls = Arc::clone(&service.calls);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        let policy = RetryPolicy::default().max_retries(2).api_connection_error(retried).predicate(
+            move |error| {
+                let connection = matches!(error.kind(), ErrorKind::Connection);
+                recorded.lock().expect("not poisoned").push((connection, error.to_string()));
+                false
+            },
+        );
+
+        let error = fail_through(service, policy).await;
+
+        assert!(matches!(error.kind(), ErrorKind::Connection), "retried {retried}: {error:?}");
+        assert_eq!(error.to_string(), "proxy refused ***", "retried {retried}");
+        assert_eq!(calls.load(Ordering::SeqCst), attempts, "retried {retried}");
+        let seen = seen.lock().expect("not poisoned").clone();
+        // The built-in rule decides first; the caller's rule is asked only
+        // when it says no.
+        let asked =
+            if retried { Vec::new() } else { vec![(true, String::from("proxy refused ***"))] };
+        assert_eq!(seen, asked, "retried {retried}");
+    }
+}
+
+/// Any other SDK error a custom service returns is the caller's as the
+/// service built it: kind, status, body, headers and every rendering, a
+/// credential in its text included. The adapter's providers rely on this.
+#[tokio::test]
+async fn an_sdk_error_of_another_kind_from_a_service_is_kept_unsearched() {
+    let body = serde_json::json!({"error": {"message": format!("key {SERVICE_KEY} was refused")}})
+        .to_string();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-echoed-key", HeaderValue::from_str(SERVICE_KEY).expect("a header value"));
+    headers.insert("x-typesafe-request-id", HeaderValue::from_static("req-1"));
+    let api = {
+        let (body, headers) = (Bytes::from(body.clone()), headers.clone());
+        move |status: StatusCode| ApiError::from_response(status, body.clone(), headers.clone())
+    };
+    let invalid = || {
+        let decode_error = crate::codec::decode::<bool>(b"\"x\"").expect_err("not a bool");
+        crate::error::ResponseValidationError::new(
+            StatusCode::OK,
+            Bytes::from_static(b"\"x\""),
+            HeaderMap::new(),
+            None,
+            decode_error,
+        )
+    };
+    // The name, the attempts the default rule makes with the timeout retry
+    // off and two retries, and the error.
+    type Build = Box<dyn Fn() -> Error + Send + Sync>;
+    let kinds: Vec<(&str, usize, Build)> = vec![
+        (
+            "api 401",
+            1,
+            Box::new({
+                let api = api.clone();
+                move || api(StatusCode::UNAUTHORIZED).into()
+            }),
+        ),
+        ("api 503", 3, Box::new(move || api(StatusCode::SERVICE_UNAVAILABLE).into())),
+        ("timeout", 1, Box::new(|| Error::timeout(Duration::from_millis(250)))),
+        ("too large", 1, Box::new(|| Error::response_too_large(7))),
+        ("validation", 1, Box::new(move || invalid().into())),
+        ("config", 1, Box::new(|| Error::config(format!("key {SERVICE_KEY}")))),
+        ("invalid request", 1, Box::new(|| Error::invalid_request(format!("key {SERVICE_KEY}")))),
+    ];
+
+    for (name, attempts, build) in kinds {
+        let twin = build();
+        let build: Arc<dyn Fn() -> Error + Send + Sync> = Arc::from(build);
+        let service = Failing::new(false, move || build());
+        let calls = Arc::clone(&service.calls);
+        let policy = RetryPolicy::default().max_retries(2).api_timeout_error(false);
+        let error = fail_through(service, policy).await;
+
+        assert_eq!(renderings(&error), renderings(&twin), "{name}");
+        assert_eq!(format!("{:?}", error.kind()), format!("{:?}", twin.kind()), "{name}");
+        assert_eq!(calls.load(Ordering::SeqCst), attempts, "{name}: retried as its kind is");
+        if let (ErrorKind::Api(kept), ErrorKind::Api(built)) = (error.kind(), twin.kind()) {
+            assert_eq!(kept.status(), built.status(), "{name}");
+            assert_eq!(kept.body(), body.as_bytes(), "{name}");
+            assert_eq!(kept.headers(), &headers, "{name}");
+            let shown = error.to_string();
+            assert!(shown.contains(" was refused"), "{name}: read from the body: {shown}");
+            assert!(
+                spellings(SERVICE_KEY).iter().any(|spelling| shown.contains(spelling)),
+                "{name}: the message read from the body is not searched: {shown}"
+            );
+        }
+    }
+}
+
+/// A connection error a custom service builds with a cause is redacted as
+/// the SDK's own transport's is: kept when nothing holds a credential; its
+/// message alone rewritten when only the message holds one; message and
+/// cause replaced when the cause holds one.
+#[tokio::test]
+async fn a_connection_error_with_a_cause_from_a_service_is_redacted_as_before() {
+    let refused =
+        || -> BoxError { Box::new(io::Error::new(io::ErrorKind::ConnectionRefused, "refused")) };
+
+    let kept = fail_through(
+        Failing::new(false, move || Error::connection("vendor unreachable", Some(refused()))),
+        RetryPolicy::default().max_retries(0),
+    )
+    .await;
+    assert_eq!(kept.to_string(), "vendor unreachable");
+    let cause = kept.source().and_then(|source| source.downcast_ref::<io::Error>());
+    assert_eq!(cause.map(io::Error::kind), Some(io::ErrorKind::ConnectionRefused), "{kept:?}");
+
+    let message_only = fail_through(
+        Failing::new(false, move || {
+            Error::connection(format!("Connection error: sent {SERVICE_SECRET}"), Some(refused()))
+        }),
+        RetryPolicy::default().max_retries(0),
+    )
+    .await;
+    assert!(matches!(message_only.kind(), ErrorKind::Connection), "{message_only:?}");
+    assert_eq!(message_only.to_string(), "Connection error: sent ***");
+    let cause = message_only.source().and_then(|source| source.downcast_ref::<io::Error>());
+    assert_eq!(
+        cause.map(io::Error::kind),
+        Some(io::ErrorKind::ConnectionRefused),
+        "{message_only:?}"
+    );
+
+    let replaced = fail_through(
+        Failing::new(false, move || {
+            let cause: BoxError = Box::new(io::Error::other(format!("sent {SERVICE_SECRET}")));
+            Error::connection("vendor unreachable", Some(cause))
+        }),
+        RetryPolicy::default().max_retries(0),
+    )
+    .await;
+    assert!(matches!(replaced.kind(), ErrorKind::Connection), "{replaced:?}");
+    assert_eq!(replaced.to_string(), "Connection error: sent ***");
+    let cause = replaced.source().expect("a redacted copy of the cause");
+    assert_eq!(cause.to_string(), "sent ***");
+    assert!(cause.downcast_ref::<io::Error>().is_none(), "{cause:?}");
+    for rendering in renderings(&replaced) {
+        assert!(!rendering.contains(SERVICE_SECRET), "{rendering}");
     }
 }
