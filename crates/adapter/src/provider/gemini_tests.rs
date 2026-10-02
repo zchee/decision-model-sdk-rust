@@ -773,3 +773,85 @@ fn a_key_variable_that_is_not_utf_8_is_refused_by_name() {
         "The GOOGLE_API_KEY environment variable is not valid UTF-8."
     );
 }
+
+// ------------------------------------------------------ a caller's service
+
+/// A caller's service that fails every call with an error whose message and
+/// `Debug` spell the request's headers, the key's among them.
+#[derive(Clone, Default)]
+struct Leaking {
+    /// The text of every error it returned.
+    dumps: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// The error of [`Leaking`]: the request's headers as text.
+#[derive(Debug)]
+struct HeaderDump {
+    headers: String,
+}
+
+impl fmt::Display for HeaderDump {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "the request with the headers [{}] failed", self.headers)
+    }
+}
+
+impl std::error::Error for HeaderDump {}
+
+impl tower_service::Service<::http::Request<typesafe_sdk::Body>> for Leaking {
+    type Response = ::http::Response<http_body_util::Full<Bytes>>;
+    type Error = HeaderDump;
+    type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: ::http::Request<typesafe_sdk::Body>) -> Self::Future {
+        // `to_str` reads a header value whether or not it is marked
+        // sensitive: what a careless service would log.
+        let headers = request
+            .headers()
+            .iter()
+            .map(|(name, value)| format!("{name}: {}", value.to_str().unwrap_or("?")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.dumps.lock().expect("not poisoned").push(headers.clone());
+        std::future::ready(Err(HeaderDump { headers }))
+    }
+}
+
+#[tokio::test]
+async fn foreign_service_error_holding_the_headers_never_shows_the_key() {
+    let service = Leaking::default();
+    let provider = builder("http://127.0.0.1:1")
+        .build_with_service(service.clone())
+        .expect("a provider over the caller's service");
+
+    let (outcome, trace) = ask(&provider, &messages(), true).await;
+
+    // The service did receive the key and did put it into its error.
+    let dumps = service.dumps.lock().expect("not poisoned").clone();
+    assert_eq!(dumps.len(), 1);
+    assert!(dumps[0].contains(&format!("x-goog-api-key: {KEY}")), "{dumps:?}");
+
+    let error = outcome.expect_err("the service fails");
+    assert!(matches!(error.kind(), SdkErrorKind::Connection), "{error:?}");
+    let mut link: Option<&(dyn std::error::Error + 'static)> = Some(&error);
+    let mut links = 0;
+    while let Some(current) = link {
+        for text in [current.to_string(), format!("{current:?}"), format!("{current:#?}")] {
+            assert!(!text.contains(KEY), "{text}");
+            assert!(!text.contains("x-goog-api-key"), "{text}");
+        }
+        links += 1;
+        link = current.source();
+    }
+    assert_eq!(links, 1, "the service's error is not kept as the cause");
+    assert!(trace.request().is_some());
+    assert_eq!(trace.response(), None);
+    assert!(!format!("{trace:?}").contains(KEY));
+}
