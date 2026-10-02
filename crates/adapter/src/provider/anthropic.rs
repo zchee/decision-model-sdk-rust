@@ -472,10 +472,7 @@ fn read_reply(json: &str, trace: &mut AttemptTrace) -> Result<ProviderResult, No
     // text.
     let Ok(reply) = serde_json::from_str::<MessagesReply>(json) else {
         trace.record_response(json, None);
-        return Err(non_answer(
-            VENDOR,
-            "a success status with a body that is not a Messages reply",
-        ));
+        return Err(non_answer(VENDOR, "a body that is not the vendor's reply"));
     };
     trace.record_response(json, reply.stop_reason.as_deref());
 

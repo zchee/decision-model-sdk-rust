@@ -630,8 +630,7 @@ async fn a_success_body_that_is_not_a_messages_reply_is_not_an_answer() {
             .to_string();
 
         assert_eq!(
-            message,
-            "Anthropic did not answer: a success status with a body that is not a Messages reply",
+            message, "Anthropic did not answer: a body that is not the vendor's reply",
             "{body}"
         );
         // The body is in the trace, and only there.
