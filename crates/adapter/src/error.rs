@@ -143,6 +143,7 @@ impl Error {
     }
 
     /// A provider could not be built.
+    #[cfg(any(test, feature = "openai", feature = "anthropic", feature = "gemini"))]
     pub(crate) fn config(message: impl Into<Box<str>>) -> Self {
         Self::new(ErrorKind::Config, message)
     }

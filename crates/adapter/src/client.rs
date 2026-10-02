@@ -2,9 +2,15 @@
 //!
 //! Ported from `_client.py` of system-one-adapter-python.
 
-use std::{fmt, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    time::Instant,
+};
 
 use serde::Serialize;
+use tokio::sync::OnceCell;
 use typesafe_sdk::{
     AnswerContext, AnswerSet, Answers, PreparedQuestions, QuestionSet, RetryPolicy,
 };
@@ -14,7 +20,7 @@ use crate::{
     model::QuestionModel,
     options::{AnswerMode, StructuredOutputs},
     prompt::{self, StateError},
-    provider::{Provider, ProviderName},
+    provider::{Provider, ProviderName, factory},
     response::{Response, Trace},
     run::{self, Evaluation},
 };
@@ -25,21 +31,70 @@ const MODEL_REQUIRED: &str = "An LLM model is required on the client or call.";
 /// Upstream's sentence for a model name without a provider to ask it of.
 const PROVIDER_REQUIRED: &str = "A provider is required: set provider='openai', 'anthropic', or 'gemini', or pass a provider instance as the model.";
 
-/// The sentence for a call that names a built-in provider and a model: this
-/// build has no way to construct the provider from the two.
-pub(crate) const NAMED_PROVIDER_UNAVAILABLE: &str = "This build cannot construct a built-in provider from a provider name and a model; pass a provider instance.";
-
 /// Asks a model TypeSafe System One questions about a state.
 ///
 /// A client holds the options of every call it makes and, optionally, the
 /// model the calls go to. It is cheap to clone: the clones share one set of
 /// options. Building it connects to nothing.
 ///
-/// `Debug` prints the options, the provider name and the model, and for a
-/// provider instance only its type name, never its fields.
+/// A call that names a built-in provider and a model is asked of a provider
+/// the client builds from the two at the first such call, with the key and
+/// the base URL the environment holds then, and keeps for every later call
+/// that names the same pair. A build that fails is not kept: the next call
+/// tries again. Clones share these providers; they are dropped with the last
+/// clone.
+///
+/// `Debug` prints the options, the provider name and the model, for a
+/// provider instance only its type name, and the provider name and model of
+/// each provider the client built; never a provider's fields.
 #[derive(Clone)]
 pub struct Client {
     inner: Arc<Settings>,
+    owned: Arc<Owned>,
+}
+
+/// The providers a client built itself, by provider name and model.
+///
+/// A cell is created empty on the first call that names its pair and filled
+/// by the first build that succeeds; calls that arrive during a build wait
+/// for it instead of building their own.
+#[derive(Default)]
+struct Owned {
+    cells: Mutex<Cells>,
+}
+
+/// A cell per provider name and model, empty until a build succeeds.
+type Cells = HashMap<(ProviderName, String), Arc<OnceCell<Arc<dyn Provider>>>>;
+
+impl Owned {
+    /// The map, whether or not a thread panicked while it held the lock: an
+    /// entry is inserted in one step, so the map is never left half-written.
+    fn cells(&self) -> MutexGuard<'_, Cells> {
+        self.cells.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The provider for `provider` and `model`, built now unless an earlier
+    /// call built it.
+    async fn get(&self, provider: ProviderName, model: &str) -> Result<Arc<dyn Provider>, Error> {
+        let cell = Arc::clone(self.cells().entry((provider, model.to_owned())).or_default());
+        let built = cell.get_or_try_init(|| async { factory::build(provider, model) }).await?;
+        Ok(Arc::clone(built))
+    }
+
+    /// The provider name and model of every provider built so far, in a
+    /// stable order.
+    fn keys(&self) -> Vec<(ProviderName, String)> {
+        let mut keys: Vec<_> = self
+            .cells()
+            .iter()
+            .filter(|(_, cell)| cell.initialized())
+            .map(|(key, _)| key.clone())
+            .collect();
+        keys.sort_by(|(left, left_model), (right, right_model)| {
+            (left.as_str(), left_model).cmp(&(right.as_str(), right_model))
+        });
+        keys
+    }
 }
 
 /// The options of a client, and the model it asks by default.
@@ -132,45 +187,64 @@ impl Client {
     /// The provider a call goes to (upstream's `_resolve_provider`): the
     /// call's instance, else the call's model name, else the client's
     /// instance, else the client's model name. A model name needs a provider
-    /// name, from the call or else from the client.
-    fn resolve(&self, call: &Target) -> Result<Arc<dyn Provider>, Error> {
+    /// name, from the call or else from the client; the pair is asked of the
+    /// provider the client built for it, built now if this is its first call.
+    async fn resolve(&self, call: &Target) -> Result<Arc<dyn Provider>, Error> {
         let client = &self.inner.target;
         if let Some(instance) = &call.instance {
             return Ok(Arc::clone(instance));
         }
-        if call.model.is_none() {
-            if let Some(instance) = &client.instance {
-                return Ok(Arc::clone(instance));
+        let model = match &call.model {
+            Some(model) => model,
+            None => {
+                if let Some(instance) = &client.instance {
+                    return Ok(Arc::clone(instance));
+                }
+                client.model.as_ref().ok_or_else(|| Error::invalid_request(MODEL_REQUIRED))?
             }
-            if client.model.is_none() {
-                return Err(Error::invalid_request(MODEL_REQUIRED));
-            }
-        }
-        if call.provider.or(client.provider).is_none() {
-            return Err(Error::invalid_request(PROVIDER_REQUIRED));
-        }
-        Err(Error::config(NAMED_PROVIDER_UNAVAILABLE))
+        };
+        let provider = call
+            .provider
+            .or(client.provider)
+            .ok_or_else(|| Error::invalid_request(PROVIDER_REQUIRED))?;
+        self.owned.get(provider, model).await
     }
 }
 
 impl fmt::Debug for Client {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let instance = self.inner.target.instance.as_deref().map(Provider::type_name);
-        self.inner.fmt_as("Client", &instance, formatter)
+        let owned = OwnedKeys(self.owned.keys());
+        self.inner.fmt_as("Client", &instance, Some(&owned), formatter)
+    }
+}
+
+/// The provider name and model of each provider a client built, as `Debug`
+/// prints them: `[openai/gpt-4o-mini, ...]`.
+struct OwnedKeys(Vec<(ProviderName, String)>);
+
+impl fmt::Debug for OwnedKeys {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_list()
+            .entries(self.0.iter().map(|(provider, model)| format!("{provider}/{model}")))
+            .finish()
     }
 }
 
 impl Settings {
-    /// The options, the provider name and the model, and `instance` in the
-    /// place of the provider instance.
+    /// The options, the provider name and the model, `instance` in the
+    /// place of the provider instance, and `owned` when there is a cache of
+    /// built providers to print.
     fn fmt_as(
         &self,
         name: &str,
         instance: &dyn fmt::Debug,
+        owned: Option<&dyn fmt::Debug>,
         formatter: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
-        formatter
-            .debug_struct(name)
+        let mut debug = formatter.debug_struct(name);
+        debug
             .field("structured_outputs", &self.structured_outputs)
             .field("llm_answer_mode", &self.llm_answer_mode)
             .field("normalize_probabilities", &self.normalize_probabilities)
@@ -178,8 +252,11 @@ impl Settings {
             .field("retry", &self.retry)
             .field("provider", &self.target.provider)
             .field("model", &self.target.model)
-            .field("provider_instance", instance)
-            .finish()
+            .field("provider_instance", instance);
+        if let Some(owned) = owned {
+            debug.field("owned_providers", owned);
+        }
+        debug.finish()
     }
 }
 
@@ -251,13 +328,13 @@ impl ClientBuilder {
     /// provider is reported by the call that needs it, because a call may
     /// name its own.
     pub fn build(self) -> Result<Client, Error> {
-        Ok(Client { inner: Arc::new(self.settings) })
+        Ok(Client { inner: Arc::new(self.settings), owned: Arc::default() })
     }
 }
 
 impl fmt::Debug for ClientBuilder {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.settings.fmt_as("ClientBuilder", &self.settings.target.instance, formatter)
+        self.settings.fmt_as("ClientBuilder", &self.settings.target.instance, None, formatter)
     }
 }
 
@@ -338,7 +415,7 @@ impl<T: Serialize + ?Sized, A> Request<'_, T, A> {
         A: AnswerSet,
     {
         let settings = &*self.client.inner;
-        let provider = self.client.resolve(&self.target)?;
+        let provider = self.client.resolve(&self.target).await?;
         let user_message = prompt::user_message(self.state).map_err(|error| match error {
             StateError::Null => {
                 Error::invalid_request("The state must not serialize to JSON `null`.")

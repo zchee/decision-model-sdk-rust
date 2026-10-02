@@ -2,7 +2,10 @@
 //! `Debug` prints and the typed decoding. What a call does over a provider is
 //! tested in `tests/client.rs`.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use typesafe_sdk::{Answers, RetryPolicy};
 
@@ -90,8 +93,8 @@ fn the_setters_reach_the_client() {
     assert_eq!(format!("{:?}", settings.retry), format!("{:?}", RetryPolicy::default()));
 }
 
-#[test]
-fn the_instance_of_the_call_is_asked_before_anything_else() {
+#[tokio::test]
+async fn the_instance_of_the_call_is_asked_before_anything_else() {
     let client = builder()
         .model("client-model")
         .provider_instance(Fixed::named("client-instance"))
@@ -100,42 +103,44 @@ fn the_instance_of_the_call_is_asked_before_anything_else() {
 
     let resolved = client
         .resolve(&target(Some("call-model"), Some(Fixed::named("call-instance"))))
+        .await
         .expect("an instance needs nothing else");
 
     assert_eq!(resolved.model_name(), "call-instance");
 }
 
-#[test]
-fn the_instance_of_the_client_is_asked_when_the_call_names_nothing() {
+#[tokio::test]
+async fn the_instance_of_the_client_is_asked_when_the_call_names_nothing() {
     let client = builder()
         .model("client-model")
         .provider_instance(Fixed::named("client-instance"))
         .build()
         .expect("builds");
 
-    let resolved = client.resolve(&Target::default()).expect("the client holds an instance");
+    let resolved = client.resolve(&Target::default()).await.expect("the client holds an instance");
 
     assert_eq!(resolved.model_name(), "client-instance");
 }
 
-#[test]
-fn a_model_name_on_the_call_is_resolved_before_the_instance_of_the_client() {
+#[tokio::test]
+async fn a_model_name_on_the_call_is_resolved_before_the_instance_of_the_client() {
     let client =
         builder().provider_instance(Fixed::named("client-instance")).build().expect("builds");
 
     let error = client
         .resolve(&target(Some("call-model"), None))
+        .await
         .expect_err("a model name without a provider cannot be asked");
 
     assert!(matches!(error.kind(), ErrorKind::InvalidRequest));
     assert_eq!(error.to_string(), PROVIDER_REQUIRED);
 }
 
-#[test]
-fn a_call_without_any_model_is_refused_with_upstreams_sentence() {
+#[tokio::test]
+async fn a_call_without_any_model_is_refused_with_upstreams_sentence() {
     let client = builder().build().expect("builds");
 
-    let error = client.resolve(&Target::default()).expect_err("no model anywhere");
+    let error = client.resolve(&Target::default()).await.expect_err("no model anywhere");
 
     assert!(matches!(error.kind(), ErrorKind::InvalidRequest));
     assert_eq!(error.to_string(), MODEL_REQUIRED);
@@ -143,11 +148,11 @@ fn a_call_without_any_model_is_refused_with_upstreams_sentence() {
     assert!(error.debug().is_none(), "no attempt was made");
 }
 
-#[test]
-fn a_model_name_of_the_client_without_a_provider_is_refused_with_upstreams_sentence() {
+#[tokio::test]
+async fn a_model_name_of_the_client_without_a_provider_is_refused_with_upstreams_sentence() {
     let client = builder().model("gpt-4o-mini").build().expect("builds");
 
-    let error = client.resolve(&Target::default()).expect_err("no provider anywhere");
+    let error = client.resolve(&Target::default()).await.expect_err("no provider anywhere");
 
     assert!(matches!(error.kind(), ErrorKind::InvalidRequest));
     assert_eq!(
@@ -157,51 +162,18 @@ fn a_model_name_of_the_client_without_a_provider_is_refused_with_upstreams_sente
     );
 }
 
-/// The one pin of the text a call ends with when it resolves to a provider
-/// name and a model.
-#[cfg(feature = "openai")]
-#[test]
-fn a_provider_name_and_a_model_end_in_the_fixed_config_error() {
-    use super::NAMED_PROVIDER_UNAVAILABLE;
-    use crate::provider::ProviderName;
-
-    let on_the_client =
-        builder().provider(ProviderName::OpenAi).model("gpt-4o-mini").build().expect("builds");
-    let on_the_call = builder().build().expect("builds");
-    let call = Target {
-        provider: Some(ProviderName::OpenAi),
-        model: Some("gpt-4o-mini".to_owned()),
-        instance: None,
-    };
-
-    let errors = [
-        on_the_client.resolve(&Target::default()).expect_err("no provider can be built"),
-        on_the_call.resolve(&call).expect_err("no provider can be built"),
-    ];
-
-    for error in errors {
-        assert!(matches!(error.kind(), ErrorKind::Config));
-        assert_eq!(error.to_string(), NAMED_PROVIDER_UNAVAILABLE);
-        assert_eq!(
-            error.to_string(),
-            "This build cannot construct a built-in provider from a provider name and a model; \
-             pass a provider instance."
-        );
-    }
-}
-
 /// A provider name alone on the call changes nothing while an instance is
 /// there to ask.
 #[cfg(feature = "openai")]
-#[test]
-fn a_provider_name_alone_does_not_displace_an_instance() {
+#[tokio::test]
+async fn a_provider_name_alone_does_not_displace_an_instance() {
     use crate::provider::ProviderName;
 
     let client =
         builder().provider_instance(Fixed::named("client-instance")).build().expect("builds");
     let call = Target { provider: Some(ProviderName::OpenAi), model: None, instance: None };
 
-    let resolved = client.resolve(&call).expect("the instance is asked");
+    let resolved = client.resolve(&call).await.expect("the instance is asked");
 
     assert_eq!(resolved.model_name(), "client-instance");
 }
@@ -219,6 +191,7 @@ fn debug_of_a_client_names_the_type_of_its_instance_and_none_of_its_fields() {
     assert!(of_the_client.contains(r#"model: Some("a-model")"#), "{of_the_client}");
     assert!(of_the_client.contains(std::any::type_name::<Fixed>()), "{of_the_client}");
     assert!(!of_the_client.contains("an-instance"), "{of_the_client}");
+    assert!(of_the_client.ends_with("owned_providers: [] }"), "{of_the_client}");
     // The builder prints the instance through the instance's own `Debug`.
     assert!(of_the_builder.starts_with("ClientBuilder {"), "{of_the_builder}");
     assert!(of_the_builder.contains(r#"Fixed { model: "an-instance" }"#), "{of_the_builder}");
@@ -243,6 +216,38 @@ fn debug_of_a_request_prints_the_overrides_and_never_the_state() {
     assert!(shown.contains("retry: Some("), "{shown}");
     assert!(!shown.contains("document"), "{shown}");
     assert!(!shown.contains("question-text"), "{shown}");
+}
+
+/// A state that takes `delay` to serialize, as a large or computed one can.
+struct SlowState {
+    delay: Duration,
+}
+
+impl serde::Serialize for SlowState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        std::thread::sleep(self.delay);
+        serializer.serialize_str("A slow document.")
+    }
+}
+
+/// The latency starts after the steps before the first model request:
+/// resolving the provider (building it, for a provider the client owns),
+/// writing the state and validating the questions take no part of it.
+#[tokio::test]
+async fn the_latency_starts_after_the_state_is_written() {
+    let delay = Duration::from_millis(500);
+    let client = builder().provider_instance(Fixed::named("an-instance")).build().expect("builds");
+    let questions = typesafe_sdk::Questions::new()
+        .noul("answer", typesafe_sdk::Noul::new())
+        .prepare()
+        .expect("one noul prepares");
+
+    let started = Instant::now();
+    let response =
+        client.system_one(&SlowState { delay }, &questions).send().await.expect("it answers");
+
+    assert!(started.elapsed() >= delay, "the state was written once");
+    assert!(response.usage().latency() < delay, "{:?}", response.usage().latency());
 }
 
 /// The future of `send` is `Send` for a state that is `Sync`, so a caller can
