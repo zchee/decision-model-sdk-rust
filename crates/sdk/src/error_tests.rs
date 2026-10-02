@@ -1052,3 +1052,158 @@ fn a_wait_is_truncated_to_whole_milliseconds_and_saturates_rather_than_wrapping(
         Some(Duration::ZERO)
     );
 }
+
+// ------------------------------------------------------------ the seam
+//
+// The four constructors a crate outside the SDK builds its failures with, so
+// that a retry policy and a caller's `match` classify them as they classify
+// the SDK's own.
+
+#[test]
+fn seam_timeout() {
+    let error = Error::timeout(Duration::from_millis(600_000));
+
+    assert!(
+        matches!(error.kind(), ErrorKind::Timeout { timeout } if *timeout == Duration::from_secs(600)),
+        "{error:?}"
+    );
+    assert_eq!(error.to_string(), "Request timed out (timeout=600s).");
+    assert_eq!(error.kind().words().0, "timeout");
+    assert!(error.source().is_none(), "a deadline has no cause underneath it");
+}
+
+#[test]
+fn seam_connection() {
+    let cause: BoxError =
+        Box::new(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset by peer"));
+    let error = Error::connection("Connection error: reset by peer", Some(cause));
+
+    assert!(matches!(error.kind(), ErrorKind::Connection), "{error:?}");
+    assert_eq!(error.to_string(), "Connection error: reset by peer");
+    let source = error.source().expect("the caller's cause is kept as the source");
+    assert_eq!(
+        source.downcast_ref::<std::io::Error>().map(std::io::Error::kind),
+        Some(std::io::ErrorKind::ConnectionReset),
+        "the caller's own type survives the boxing"
+    );
+
+    let bare = Error::connection(String::from("no route to host"), None);
+    assert!(matches!(bare.kind(), ErrorKind::Connection), "{bare:?}");
+    assert_eq!(bare.to_string(), "no route to host");
+    assert!(bare.source().is_none());
+}
+
+#[test]
+fn seam_response_too_large() {
+    let limit = 16 * 1024 * 1024;
+    let error = Error::response_too_large(limit);
+
+    assert!(
+        matches!(error.kind(), ErrorKind::ResponseTooLarge { limit: seen } if *seen == limit),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.to_string(),
+        "The response body exceeded the limit of 16777216 bytes and was not read."
+    );
+    assert!(error.source().is_none());
+}
+
+#[test]
+fn seam_from_response() {
+    let body = r#"{"detail":{"error_type":"authentication_error","message":"Bad key"}}"#;
+    let response_headers = headers(&[("retry-after", "3"), (REQUEST_ID_HEADER, "req-1")]);
+    let error = ApiError::from_response(
+        status(403),
+        Bytes::copy_from_slice(body.as_bytes()),
+        response_headers.clone(),
+    );
+    let reference =
+        ApiError::new(status(403), Bytes::copy_from_slice(body.as_bytes()), response_headers, None);
+
+    // The public constructor is the four-argument one without an endpoint.
+    assert_eq!(error.status(), reference.status());
+    assert_eq!(error.kind(), ApiErrorKind::PermissionDenied);
+    assert_eq!(error.message(), reference.message());
+    assert_eq!(error.message(), "Bad key");
+    assert_eq!(error.error_type(), Some("authentication_error"));
+    assert!(error.is_authentication());
+    assert_eq!(error.endpoint(), None);
+    assert_eq!(error.request_id(), Some("req-1"));
+    assert_eq!(error.body(), body.as_bytes());
+    assert_eq!(error.headers(), reference.headers());
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(3)));
+    assert_eq!(error.to_string(), reference.to_string());
+    assert_eq!(format!("{error:?}"), format!("{reference:?}"));
+
+    let wrapped = Error::from(error);
+    assert!(matches!(wrapped.kind(), ErrorKind::Api(api) if api.status() == status(403)));
+}
+
+// -------------------------------------------------- vendor error bodies
+//
+// The adapter turns a vendor's non-2xx answer into an `ApiError` with
+// `from_response`, so the message a caller reads must come out of each
+// vendor's envelope. Upstream's tests use `{"error":{"message":..}}` for all
+// three vendors (`tests/test_provider_retries.py:53`,
+// `tests/utils/test_error_handling.py:60`); the members each vendor adds
+// beside `message` are written from the vendors' documented error shapes and
+// were not checked against a live answer.
+
+/// The `ApiError` the adapter builds for `body`, answered with `code`.
+fn vendor(code: u16, body: &str, response_headers: HeaderMap) -> ApiError {
+    ApiError::from_response(status(code), Bytes::copy_from_slice(body.as_bytes()), response_headers)
+}
+
+#[test]
+fn vendor_error_body_openai() {
+    let body = concat!(
+        r#"{"error":{"message":"Incorrect API key provided.","#,
+        r#""type":"invalid_request_error","param":null,"code":"invalid_api_key"}}"#
+    );
+    let error = vendor(401, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "Incorrect API key provided.");
+    assert_eq!(error.kind(), ApiErrorKind::Authentication);
+    assert_eq!(error.error_type(), None, "only detail.error_type is read, not error.type");
+    assert_eq!(error.to_string(), "401 Incorrect API key provided.");
+}
+
+#[test]
+fn vendor_error_body_anthropic() {
+    let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+    let error = vendor(529, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "Overloaded");
+    assert_eq!(error.kind(), ApiErrorKind::InternalServer);
+    assert_eq!(error.error_type(), None);
+    assert_eq!(error.to_string(), "529 Overloaded");
+}
+
+#[test]
+fn vendor_error_body_gemini() {
+    let body = concat!(
+        r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","#,
+        r#""status":"INVALID_ARGUMENT"}}"#
+    );
+    let error = vendor(400, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "API key not valid. Please pass a valid API key.");
+    assert_eq!(error.kind(), ApiErrorKind::BadRequest);
+    assert_eq!(error.to_string(), "400 API key not valid. Please pass a valid API key.");
+}
+
+#[test]
+fn vendor_error_body_retry_after() {
+    let body = concat!(
+        r#"{"error":{"message":"Rate limit reached for requests","#,
+        r#""type":"requests","param":null,"code":"rate_limit_exceeded"}}"#
+    );
+    let error = vendor(429, body, headers(&[("retry-after", "2")]));
+
+    assert_eq!(error.message(), "Rate limit reached for requests");
+    assert_eq!(error.kind(), ApiErrorKind::RateLimit);
+    // Whole seconds: the answer does not depend on the clock the accessor reads.
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(2)));
+    assert!(matches!(Error::from(error).kind(), ErrorKind::Api(_)));
+}
