@@ -247,6 +247,17 @@ jobs:
       - name: Line coverage of the derive
         run: cargo llvm-cov nextest -p typesafe-sdk-rust-macros --all-features --fail-under-lines 85
 
+      # The adapter is held to the SDK's threshold on its own. `-p` on the
+      # report is what keeps it to the adapter: under the virtual root the
+      # report mixes the crates otherwise. `--no-report` does not clean, so
+      # the first line drops the derive step's profiles, which would be
+      # merged in.
+      - name: Line coverage of the adapter
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest -p typesafe-sdk-rust-adapter --all-features --no-report
+          cargo llvm-cov report -p typesafe-sdk-rust-adapter --fail-under-lines 85
+
   hygiene:
     name: text hygiene
     runs-on: ubuntu-26.04
