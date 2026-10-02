@@ -524,9 +524,10 @@ impl ClientBuilder {
     /// each attempt in its own deadline and reads the response under its own
     /// limit.
     ///
-    /// When the service fails, its error's text becomes the connection
-    /// error's message, escaped and cut at 200 characters. The request's
-    /// credentials are replaced by `***` first: the API key, and the value of
+    /// When the service fails with an error of its own type, that error's
+    /// text becomes the connection error's message, escaped and cut at 200
+    /// characters. The request's credentials are replaced by `***` first: the
+    /// API key, and the value of
     /// every header whose name is a secret one (`authorization`,
     /// `proxy-authorization`, `x-api-key`, `api-key`, `cookie`, `set-cookie`,
     /// or any name containing `token` or `secret`) or that is flagged
@@ -541,6 +542,17 @@ impl ClientBuilder {
     /// `***` too. The value of any other header a service prints stays in the
     /// message, and so does a credential written in a form not listed here:
     /// as a list of byte values, `{:x?}`, percent-encoded or in base64.
+    ///
+    /// When the service fails with an error of the SDK's own type, the client
+    /// keeps that error and its kind. A connection error the service built
+    /// with [`Error::connection`] and no cause keeps the message the service
+    /// wrote, with every form of a credential listed above replaced by
+    /// `***`; it is neither escaped nor cut. One built with a cause is
+    /// searched as that constructor describes. Any other error of the SDK's
+    /// type - an [`ApiError`](crate::ApiError) built from a body the service
+    /// chose, a [`timeout`](Error::timeout) - is kept as it is and is not
+    /// searched: the service must put no credential into its message, body
+    /// or headers.
     ///
     /// # Errors
     ///

@@ -162,11 +162,12 @@ impl Error {
     /// text that a server or a transport chose should be made safe to print
     /// first. `cause` is the transport's own error, kept as the
     /// [`source`](StdError::source). Outside a [`Client`](crate::Client) the
-    /// error stays as it was built, nothing is redacted, and a caller can
-    /// downcast `source()` to the cause; under a `Client` it can too, unless
-    /// the client replaced the cause, as below. The cause is printed by
-    /// `Debug` and returned by `source()`, so it must not carry a credential:
-    /// an API key, a token, or a URL with userinfo or a key in its query.
+    /// error stays as it was built, nothing in it is searched or redacted,
+    /// and a caller can downcast `source()` to the cause; under a `Client` it
+    /// can too, unless the client replaced the cause, as below. The message
+    /// is printed by `Display` and `Debug`, and the cause by `Debug` and
+    /// `source()`, so neither may carry a credential: an API key, a token, or
+    /// a URL with userinfo or a key in its query.
     ///
     /// A custom [`HttpService`](crate::HttpService) under the SDK's `Client`
     /// can fail with this error, boxed as its own error type: the client
@@ -180,8 +181,11 @@ impl Error {
     /// holds a credential of the request or the cause chain is longer than
     /// 32 links, the message is rewritten to start with `Connection error: `
     /// and the cause can be replaced by a redacted copy that cannot be
-    /// downcast. The kind, and so the retry class, stays the same. This adds
-    /// a way to build an error; it does not change how an existing
+    /// downcast. When the error has no cause, the message is all the client
+    /// can search: every form of a credential of the request in it is
+    /// replaced by `***`, and the message is otherwise kept as given, neither
+    /// escaped nor cut. The kind, and so the retry class, stays the same.
+    /// This adds a way to build an error; it does not change how an existing
     /// transport's errors are classified.
     ///
     /// ```
