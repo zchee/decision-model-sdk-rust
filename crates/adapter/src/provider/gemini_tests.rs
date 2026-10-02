@@ -538,6 +538,15 @@ fn the_provider_names_its_model_and_its_public_path() {
 }
 
 #[test]
+fn a_builder_left_at_its_defaults_holds_the_shared_limits() {
+    // The key is given and Gemini reads no base URL from the environment,
+    // so no variable is read here.
+    let provider = GeminiProvider::builder(MODEL).api_key(KEY).build().expect("a provider");
+
+    assert_eq!(provider.limits, Limits::new(None, None).expect("the defaults are legal"));
+}
+
+#[test]
 fn gemini_names_its_endpoint_for_the_retry_line() {
     let fixed = |base_url: &str| {
         let provider = provider(base_url);

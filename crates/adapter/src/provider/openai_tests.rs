@@ -201,6 +201,21 @@ async fn a_provider_reports_its_model_and_its_public_type_path() {
     assert_eq!(provider.type_name(), "system_one_adapter::OpenAiProvider");
 }
 
+#[test]
+fn a_builder_left_at_its_defaults_holds_the_shared_limits() {
+    // With the `internals` feature another test's variables could be in
+    // force in this process, a base URL among them; an empty replacement of
+    // this test's own rules that out. Without the feature a unit-test build
+    // finds no variable.
+    #[cfg(feature = "internals")]
+    let _environment = crate::__internals::env::replace();
+
+    let provider =
+        OpenAiProvider::builder("test-model").api_key(KEY).build().expect("the provider builds");
+
+    assert_eq!(provider.limits, Limits::new(None, None).expect("the defaults are legal"));
+}
+
 #[tokio::test]
 async fn neither_the_provider_nor_its_builder_prints_the_key_or_the_base_url() {
     let server = answering(StatusCode::OK, "{}").await;

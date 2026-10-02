@@ -281,6 +281,21 @@ fn the_names_are_the_model_and_the_public_type_path() {
 }
 
 #[test]
+fn a_builder_left_at_its_defaults_holds_the_shared_limits() {
+    // With the `internals` feature another test's variables could be in
+    // force in this process, a base URL among them; an empty replacement of
+    // this test's own rules that out. Without the feature a unit-test build
+    // finds no variable.
+    #[cfg(feature = "internals")]
+    let _environment = crate::__internals::env::replace();
+
+    let provider =
+        AnthropicProvider::builder("claude-haiku-4-5").api_key(KEY).build().expect("it builds");
+
+    assert_eq!(provider.settings.limits, Limits::new(None, None).expect("the defaults are legal"));
+}
+
+#[test]
 fn anthropic_names_its_endpoint_for_the_retry_line() {
     // The key as a path segment of the base URL, a prefix after it, and a
     // port that is not the scheme's own.
