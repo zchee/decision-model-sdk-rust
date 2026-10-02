@@ -4,7 +4,8 @@ Every error is planted on a copy of the page or of the README under the test's
 temporary directory; the tracked files are only read.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType
 
@@ -15,6 +16,7 @@ README = "README.md"
 CLIENTS = "tests/test_clients.py"
 CONFIG = "tests/test_config.py"
 ERRORS = "tests/test_errors.py"
+SDK_NAME = "typesafe-sdk-python"
 TOOLING_FILES = (
     "tests/test_docs.py, tests/test_public_api_surface.py, tests/test_public_sync.py,"
     " tests/test_release_notes.py, tests/test_typing.py"
@@ -22,21 +24,30 @@ TOOLING_FILES = (
 
 
 def summary(
-    rows: int = 129, rust: int = 94, deviation: int = 17, excluded: int = 18
+    rows: int = 129,
+    rust: int = 94,
+    deviation: int = 17,
+    excluded: int = 18,
+    tests: int = 129,
+    files: int = 15,
 ) -> str:
     """The checker's closing line for the given tallies.
+
+    The defaults are the tallies of the tracked page.
 
     Args:
         rows: The rows the page holds.
         rust: The rows mapped to Rust tests.
         deviation: The rows mapped to a deviation.
         excluded: The excluded rows.
+        tests: The upstream tests the pin names.
+        files: The upstream files the pin names.
 
     Returns:
         The summary line, without its line feed.
     """
     return (
-        f"{rows} rows for 129 upstream tests in 15 files: {rust} to Rust tests, "
+        f"{rows} rows for {tests} upstream tests in {files} files: {rust} to Rust tests, "
         f"{deviation} to deviations, {excluded} excluded as Python tooling"
     )
 
@@ -125,8 +136,8 @@ def run(
     """
     matrix = tmp_path / "port-test-matrix.md"
     readme = tmp_path / "README.md"
-    monkeypatch.setattr(port_test_matrix, "MATRIX", matrix)
-    monkeypatch.setattr(port_test_matrix, "README", readme)
+    sdk = replace(port_test_matrix.SDK, matrix=matrix, readme=readme)
+    monkeypatch.setattr(port_test_matrix, "UPSTREAMS", (sdk,))
 
     def invoke(
         edit_matrix: Callable[[str], str] = lambda text: text,
@@ -434,8 +445,26 @@ def test_reworded_deviation_fails(run: Run, repository: Path) -> None:
     )
 
 
+def fake_checkout(pin: Mapping[tuple[str, str], int | None], directory: Path) -> Path:
+    """A checkout defining exactly the tests a pin names.
+
+    Args:
+        pin: The pin, ``(file, name) -> cases``.
+        directory: Where the checkout is written.
+
+    Returns:
+        The checkout's root.
+    """
+    root = directory / "upstream"
+    for file, name in sorted(pin):
+        (root / file).parent.mkdir(parents=True, exist_ok=True)
+        with (root / file).open("a", encoding="utf-8") as module:
+            module.write(f"def {name}():\n    pass\n\n\n")
+    return root
+
+
 def fake_upstream(port_test_matrix: ModuleType, directory: Path) -> Path:
-    """A checkout defining exactly the pinned upstream tests.
+    """A checkout defining exactly the Python SDK's pinned upstream tests.
 
     Args:
         port_test_matrix: The loaded ``port-test-matrix.py``.
@@ -444,12 +473,7 @@ def fake_upstream(port_test_matrix: ModuleType, directory: Path) -> Path:
     Returns:
         The checkout's root.
     """
-    root = directory / "upstream"
-    (root / "tests").mkdir(parents=True)
-    for file, name in sorted(port_test_matrix.UPSTREAM_TESTS):
-        with (root / file).open("a", encoding="utf-8") as module:
-            module.write(f"def {name}():\n    pass\n\n\n")
-    return root
+    return fake_checkout(port_test_matrix.UPSTREAM_TESTS, directory)
 
 
 def test_upstream_matching_the_pin_passes(
@@ -458,7 +482,7 @@ def test_upstream_matching_the_pin_passes(
     """A checkout that defines exactly the pinned tests passes."""
     upstream = fake_upstream(port_test_matrix, tmp_path)
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert (status, out) == (0, summary() + "\n")
 
@@ -471,7 +495,7 @@ def test_upstream_function_missing_from_the_pin_fails(
     with (upstream / "tests/test_config.py").open("a", encoding="utf-8") as module:
         module.write("async def test_new_thing():\n    pass\n")
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert status == 1
     assert out == failed(
@@ -493,7 +517,7 @@ def test_pinned_function_missing_upstream_fails(
     typing = upstream / "tests/test_typing.py"
     typing.write_text("def helper():\n    pass\n", encoding="utf-8")
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert status == 1
     assert out == failed(
@@ -516,7 +540,7 @@ def test_upstream_file_missing_from_the_pin_fails(
         "def test_new():\n    pass\n", encoding="utf-8"
     )
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert status == 1
     assert out == failed(
@@ -539,7 +563,7 @@ def test_upstream_file_without_test_functions_fails(
         "def helper():\n    pass\n", encoding="utf-8"
     )
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert status == 1
     assert out == failed(
@@ -563,7 +587,7 @@ def test_upstream_file_of_test_methods_fails(
         encoding="utf-8",
     )
 
-    status, out = run(argv=("--upstream", str(upstream)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={upstream}"))
 
     assert status == 1
     assert out == failed(
@@ -579,7 +603,7 @@ def test_upstream_file_of_test_methods_fails(
 
 def test_upstream_without_tests_fails(run: Run, tmp_path: Path) -> None:
     """A directory holding no upstream test file fails."""
-    status, out = run(argv=("--upstream", str(tmp_path)))
+    status, out = run(argv=("--upstream", f"{SDK_NAME}={tmp_path}"))
 
     assert status == 1
     assert out == failed([f"{tmp_path}: no tests/test_*.py found"], summary())
