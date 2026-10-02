@@ -975,6 +975,10 @@ impl http_body::Body for Frames {
 #[derive(Debug)]
 struct ServiceError {
     display: String,
+    #[expect(
+        dead_code,
+        reason = "read only by the derived `Debug`, which is what the tests print"
+    )]
     debug_only: String,
     source: Option<Box<ServiceError>>,
 }
