@@ -1139,3 +1139,71 @@ fn seam_from_response() {
     let wrapped = Error::from(error);
     assert!(matches!(wrapped.kind(), ErrorKind::Api(api) if api.status() == status(403)));
 }
+
+// -------------------------------------------------- vendor error bodies
+//
+// The adapter turns a vendor's non-2xx answer into an `ApiError` with
+// `from_response`, so the message a caller reads must come out of each
+// vendor's envelope. Upstream's tests use `{"error":{"message":..}}` for all
+// three vendors (`tests/test_provider_retries.py:53`,
+// `tests/utils/test_error_handling.py:60`); the members each vendor adds
+// beside `message` are written from the vendors' documented error shapes and
+// were not checked against a live answer.
+
+/// The `ApiError` the adapter builds for `body`, answered with `code`.
+fn vendor(code: u16, body: &str, response_headers: HeaderMap) -> ApiError {
+    ApiError::from_response(status(code), Bytes::copy_from_slice(body.as_bytes()), response_headers)
+}
+
+#[test]
+fn vendor_error_body_openai() {
+    let body = concat!(
+        r#"{"error":{"message":"Incorrect API key provided.","#,
+        r#""type":"invalid_request_error","param":null,"code":"invalid_api_key"}}"#
+    );
+    let error = vendor(401, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "Incorrect API key provided.");
+    assert_eq!(error.kind(), ApiErrorKind::Authentication);
+    assert_eq!(error.error_type(), None, "only detail.error_type is read, not error.type");
+    assert_eq!(error.to_string(), "401 Incorrect API key provided.");
+}
+
+#[test]
+fn vendor_error_body_anthropic() {
+    let body = r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+    let error = vendor(529, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "Overloaded");
+    assert_eq!(error.kind(), ApiErrorKind::InternalServer);
+    assert_eq!(error.error_type(), None);
+    assert_eq!(error.to_string(), "529 Overloaded");
+}
+
+#[test]
+fn vendor_error_body_gemini() {
+    let body = concat!(
+        r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","#,
+        r#""status":"INVALID_ARGUMENT"}}"#
+    );
+    let error = vendor(400, body, HeaderMap::new());
+
+    assert_eq!(error.message(), "API key not valid. Please pass a valid API key.");
+    assert_eq!(error.kind(), ApiErrorKind::BadRequest);
+    assert_eq!(error.to_string(), "400 API key not valid. Please pass a valid API key.");
+}
+
+#[test]
+fn vendor_error_body_retry_after() {
+    let body = concat!(
+        r#"{"error":{"message":"Rate limit reached for requests","#,
+        r#""type":"requests","param":null,"code":"rate_limit_exceeded"}}"#
+    );
+    let error = vendor(429, body, headers(&[("retry-after", "2")]));
+
+    assert_eq!(error.message(), "Rate limit reached for requests");
+    assert_eq!(error.kind(), ApiErrorKind::RateLimit);
+    // Whole seconds: the answer does not depend on the clock the accessor reads.
+    assert_eq!(error.retry_after(), Some(Duration::from_secs(2)));
+    assert!(matches!(Error::from(error).kind(), ErrorKind::Api(_)));
+}
