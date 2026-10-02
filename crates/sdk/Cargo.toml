@@ -149,6 +149,11 @@ required-features = ["macros", "hyper"]
 name = "alloc_derive"
 required-features = ["internals", "macros"]
 
+# A derived set's answers read through a deserializer the caller built.
+[[test]]
+name = "foreign_deserializer"
+required-features = ["macros"]
+
 # The examples use the built-in transport; typed_answers also needs the derive.
 [[example]]
 name = "typed_answers"
