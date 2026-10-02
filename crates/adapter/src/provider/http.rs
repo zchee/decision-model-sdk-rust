@@ -585,7 +585,10 @@ where
 const CONNECTION_PREFIX: &str = "Connection error: ";
 
 /// The message of a connection error whose cause the key search withheld.
-const WITHHELD: &str = "Connection error: the transport's error held the API key and is not shown.";
+/// One text for every way the search has a hit: a link of the chain holds
+/// the key, the message built from the chain would spell it, or the chain
+/// is longer than [`MAX_SCANNED_LINKS`] and may hold no key at all.
+const WITHHELD: &str = "Connection error: the transport's error is not shown, because showing it could reveal the API key or its chain of causes was too long to search.";
 
 /// How many links of an error chain a connection error's message names.
 const MAX_MESSAGE_LINKS: usize = 8;

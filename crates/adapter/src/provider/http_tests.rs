@@ -707,7 +707,8 @@ async fn http_foreign_error_holding_the_key_is_withheld() {
         assert!(matches!(error.kind(), SdkErrorKind::Connection), "{error:?}");
         assert_eq!(
             error.to_string(),
-            "Connection error: the transport's error held the API key and is not shown."
+            "Connection error: the transport's error is not shown, because showing it could \
+             reveal the API key or its chain of causes was too long to search."
         );
         assert!(error.source().is_none(), "the chain is dropped whole");
         assert_eq!(key_occurrences(&error), 0);
