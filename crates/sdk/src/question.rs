@@ -567,8 +567,28 @@ impl PreparedQuestions {
         &self.buf[..self.json_len]
     }
 
-    /// The JSON object as text.
-    fn json(&self) -> &str {
+    /// The prepared questions as the SDK serialized them: the JSON object
+    /// sent after `"questions":` in a request body, compact and in the order
+    /// the questions were given.
+    ///
+    /// A set declared with `#[derive(QuestionSet)]` is compiled into the
+    /// program in this form only, so this text is the one way to read the
+    /// instructions and criteria of any set, however it was made.
+    ///
+    /// ```
+    /// use typesafe_sdk::question::{Noul, Questions};
+    ///
+    /// let prepared = Questions::new()
+    ///     .noul("billing", Noul::new().instructions("Is this about billing?"))
+    ///     .prepare()?;
+    /// assert_eq!(
+    ///     prepared.as_json(),
+    ///     r#"{"billing":{"type":"noul","instructions":"Is this about billing?"}}"#,
+    /// );
+    /// # Ok::<(), typesafe_sdk::Error>(())
+    /// ```
+    #[must_use]
+    pub fn as_json(&self) -> &str {
         std::str::from_utf8(&self.buf[..self.json_len]).expect("invariant: the codec emits UTF-8")
     }
 }
@@ -577,7 +597,7 @@ impl fmt::Debug for PreparedQuestions {
     /// Prints the JSON the set is sent as: questions are not secrets, and the
     /// wire form is the one thing worth seeing.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("PreparedQuestions").field("json", &self.json()).finish()
+        formatter.debug_struct("PreparedQuestions").field("json", &self.as_json()).finish()
     }
 }
 
