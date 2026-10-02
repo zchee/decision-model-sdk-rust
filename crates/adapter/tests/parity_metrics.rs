@@ -30,12 +30,36 @@ struct Expected {
     answers: Pairs<Answer>,
 }
 
+/// One answer, as a plain struct and not as an enum tagged by `type`: serde
+/// buffers the content of an internally tagged enum, and a buffered number is
+/// a map when serde_json's `arbitrary_precision` feature is on. Here every
+/// `f64` is read from the JSON text by `deserialize_f64`, which is the same
+/// code with and without that feature.
 #[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum Answer {
-    Noul {},
-    Score { score: f64, confidence: f64, probabilities: Pairs<f64> },
-    Choice { confidence: f64, probabilities: Pairs<f64> },
+struct Answer {
+    #[serde(rename = "type")]
+    kind: Kind,
+    score: Option<f64>,
+    confidence: Option<f64>,
+    probabilities: Option<Pairs<f64>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Kind {
+    Noul,
+    Score,
+    Choice,
+}
+
+impl Answer {
+    /// The value of a member that an answer of this kind always has.
+    #[track_caller]
+    fn required<'a, T>(&self, member: &'a Option<T>, what: &str, context: &str) -> &'a T {
+        member
+            .as_ref()
+            .unwrap_or_else(|| panic!("{context}: a {:?} answer has no `{what}`", self.kind))
+    }
 }
 
 /// The members of a JSON object in document order, which is the order
@@ -106,9 +130,14 @@ fn parity_metrics_expected_responses() {
         let expected: Expected = serde_json::from_str(&text)
             .unwrap_or_else(|error| panic!("{name}: not an expected response: {error}"));
         for (id, answer) in &expected.answers.0 {
-            match answer {
-                Answer::Noul {} => {}
-                Answer::Score { score, confidence, probabilities } => {
+            let context = format!("{name}: {id}");
+            match answer.kind {
+                Kind::Noul => {}
+                Kind::Score => {
+                    let score = answer.required(&answer.score, "score", &context);
+                    let confidence = answer.required(&answer.confidence, "confidence", &context);
+                    let probabilities =
+                        answer.required(&answer.probabilities, "probabilities", &context);
                     let levels = probabilities
                         .0
                         .iter()
@@ -129,7 +158,10 @@ fn parity_metrics_expected_responses() {
                     );
                     scores += 1;
                 }
-                Answer::Choice { confidence, probabilities } => {
+                Kind::Choice => {
+                    let confidence = answer.required(&answer.confidence, "confidence", &context);
+                    let probabilities =
+                        answer.required(&answer.probabilities, "probabilities", &context);
                     assert_same_bits(
                         choice_confidence(&probabilities.values()),
                         *confidence,
