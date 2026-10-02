@@ -8,10 +8,18 @@ mod cassette;
 #[path = "support/expected.rs"]
 mod expected;
 
-use std::{error::Error as StdError, sync::Arc, time::Duration};
+use std::{
+    error::Error as StdError,
+    fmt,
+    future::{Ready, ready},
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode, header::LOCATION};
+use http_body_util::Full;
 use serde_json::{Value, json};
 use system_one_adapter::{
     AnswerMode, Answers, AttemptTrace, Client, ClientBuilder, Error, ErrorKind, GeminiProvider,
@@ -22,6 +30,8 @@ use system_one_adapter::{
 use test_support::{
     Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, json_response,
 };
+
+use tower_service::Service;
 
 use crate::cassette::{CASSETTES, Cassette};
 
@@ -626,6 +636,93 @@ async fn key_never_printed_by_the_retry_line_when_the_key_is_in_the_path() {
         }
     }
     assert_eq!(occurrences(&serde_json::to_string(response.debug()).expect("a trace"), KEY), 0);
+}
+
+// ------------------------------------------------------ a caller's service
+
+/// A caller's service that fails every call with an error whose message and
+/// `Debug` spell the request's headers, the key's among them.
+#[derive(Clone, Default)]
+struct Leaking {
+    /// The text of every error it returned.
+    dumps: Arc<Mutex<Vec<String>>>,
+}
+
+/// The error of [`Leaking`]: the request's headers as text.
+#[derive(Debug)]
+struct HeaderDump {
+    headers: String,
+}
+
+impl fmt::Display for HeaderDump {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "the request with the headers [{}] failed", self.headers)
+    }
+}
+
+impl StdError for HeaderDump {}
+
+impl Service<http::Request<typesafe_sdk::Body>> for Leaking {
+    type Response = http::Response<Full<Bytes>>;
+    type Error = HeaderDump;
+    type Future = Ready<Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: http::Request<typesafe_sdk::Body>) -> Self::Future {
+        // `to_str` reads a header value whether or not it is marked
+        // sensitive: what a careless service would log.
+        let headers = request
+            .headers()
+            .iter()
+            .map(|(name, value)| format!("{name}: {}", value.to_str().unwrap_or("?")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.dumps.lock().expect("not poisoned").push(headers.clone());
+        ready(Err(HeaderDump { headers }))
+    }
+}
+
+#[tokio::test]
+async fn foreign_service_error_holding_the_headers_never_shows_the_key() {
+    let service = Leaking::default();
+    let provider = GeminiProvider::builder(MODEL)
+        .api_key(KEY)
+        .base_url("http://127.0.0.1:1")
+        .build_with_service(service.clone())
+        .expect("a provider over the caller's service");
+    let client = discrete(StructuredOutputs::Native)
+        .retry(retries(1))
+        .provider_instance(Arc::new(provider))
+        .build()
+        .expect("a client");
+
+    let error = client.system_one(STATE, &positive()).send().await.expect_err("the service fails");
+
+    // The service did receive the key and did put it into each error.
+    let dumps = service.dumps.lock().expect("not poisoned").clone();
+    assert_eq!(dumps.len(), 2, "the failure is retried once");
+    for dump in &dumps {
+        assert!(dump.contains(&format!("x-goog-api-key: {KEY}")), "{dump}");
+    }
+
+    let failure = provider_failure(&error);
+    assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Connection), "{failure:?}");
+    let links = chain(&error);
+    assert_eq!(links.len(), 2, "the service's error is not kept as a cause");
+    for link in links {
+        for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
+            assert_eq!(occurrences(&text, KEY), 0, "{text}");
+            assert_eq!(occurrences(&text, "x-goog-api-key"), 0, "{text}");
+        }
+    }
+    let trace = error.debug().expect("a trace");
+    assert_eq!(trace.attempts().len(), 2);
+    let serialized = serde_json::to_string(trace).expect("a trace serializes");
+    assert_eq!(occurrences(&serialized, KEY), 0, "{serialized}");
+    assert_eq!(occurrences(&format!("{trace:?} {trace:#?}"), KEY), 0);
 }
 
 // ------------------------------------------------------- the caller's data
