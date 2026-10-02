@@ -114,3 +114,92 @@ the merged report (14 lines); neither backend is represented only by the other.
 | --- | --- |
 | 182-184 | `Debug` for the default transport's response future. **Cheap to cover**. |
 | 247-249 | A connect timeout mapped to `ErrorKind::Timeout`. Loopback connections are accepted or refused immediately, not left pending; the timeout detection is unit-tested separately. |
+
+## The System One adapter (`crates/adapter`)
+
+Measured at commit `6c00e6f` on 2026-10-03 (every line number below is a line
+of that commit; `main` at `0789254` has the same `crates/adapter/src`), on macOS
+arm64 with rustc 1.98.1 and cargo-llvm-cov 0.9.1, in CI's form (no target
+directory configuration):
+
+```sh
+env -u RUSTFLAGS cargo llvm-cov clean --workspace
+env -u RUSTFLAGS cargo llvm-cov nextest -p typesafe-sdk-rust-adapter --all-features --no-report
+env -u RUSTFLAGS cargo llvm-cov report -p typesafe-sdk-rust-adapter --fail-under-lines 85 --show-missing-lines
+```
+
+The run passes 550 tests of the adapter package. It uses the default serde_json
+backend; the test run under serde_json's `arbitrary_precision` feature is not
+part of this report. CI's `coverage` job holds the adapter to 85% line coverage.
+
+### Total
+
+| Lines | Missed | Line coverage | Regions | Missed | Functions | Missed |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3,156 | 58 | **98.16%** | 5,233 | 175 | 486 | 11 |
+
+The summary reports 58 missed lines; `--show-missing-lines` lists 49 distinct
+source lines, below, that no instantiation reaches. The files under
+`crates/adapter/src/__internals/`, `metrics.rs`, `retry.rs`, `run.rs`,
+`schema.rs`, `provider/factory.rs` and the three provider modules are fully
+covered.
+
+### `crates/adapter/src/client.rs`
+
+| Lines | Why |
+| --- | --- |
+| 445-449, 473-475 | The answers of `Client::ask` that do not fit the question set's type. A derived question set always fits the answers of its own prepared questions; only a hand-written `AnswerSet` that disagrees with its own questions reaches these lines. |
+
+### `crates/adapter/src/convert.rs`
+
+| Lines | Why |
+| --- | --- |
+| 149-150 | The SDK refusing a score criterion's JSON. The criterion was read as one JSON value when the questions were checked, so the SDK's `Content` accepts it; the error is defensive. |
+
+### `crates/adapter/src/decode.rs`
+
+| Lines | Why |
+| --- | --- |
+| 354-356, 394-396, 413-415, 462-464 | `Visitor::expecting` of the four visitors. serde calls it only to write its own error message, and the decoder turns every serde error into its own problem text without rendering serde's. |
+
+### `crates/adapter/src/error.rs`
+
+| Lines | Why |
+| --- | --- |
+| 99-102 | The kind names `ResponseValidation`, `InvalidRequest`, `Config` and the catch-all for an SDK error a provider fails with. The built-in providers fail only with `Api`, `Connection`, `Timeout` and `ResponseTooLarge`; a provider of the caller's own could return the others. **Cheap to cover** with a scripted provider. |
+
+### `crates/adapter/src/model.rs`
+
+| Lines | Why |
+| --- | --- |
+| 184 | Equality of a text criterion and a JSON criterion, which no test compares. **Cheap to cover**. |
+| 305 | An unknown question type in the second match. The type was already checked to be `noul`, `choice` or `score` at line 265, so this arm is unreachable; it exists because the match is over a string. |
+
+### `crates/adapter/src/prompt.rs`
+
+| Lines | Why |
+| --- | --- |
+| 127 | A number held as text with a fraction or an exponent, written as Python writes the float. `serde_json` holds numbers as text only under its `arbitrary_precision` feature, whose test run is not part of this report. |
+| 189 | The name `an object` of the JSON type found where a question expects another type. The tests find the other five types there. **Cheap to cover**. |
+
+### `crates/adapter/src/provider/http.rs`
+
+| Lines | Why |
+| --- | --- |
+| 361 | A base URL whose authority has an empty host. The URLs the tests give without a host are refused earlier, by `http::Uri`'s parser or by the scheme and authority check, so this check is defensive. |
+| 907 | A piece written after a capped text is already full. No test writes another piece once the cap is reached. **Cheap to cover** with a long error chain. |
+| 933, 935-936 | Three ranges of format characters (word joiners and invisible operators, interlinear annotation marks, tag characters) that a message escapes. The tests use characters of the other ranges. **Cheap to cover**. |
+| 1082-1084, 1111-1113 | `Debug` of `TransportFuture` and `TransportBody`. **Cheap to cover**. |
+| 1128-1130 | `TransportBody::is_end_stream`. `http-body-util`'s `Limited` and `collect` read frames until the body ends and never ask. |
+
+### `crates/adapter/src/provider/mod.rs`
+
+| Lines | Why |
+| --- | --- |
+| 529-530, 532-533 | The message of an unknown provider name with no provider or with one provider compiled in. This run has all three providers; a unit test checks the text with none in the `--no-default-features` test run, which is not part of this report. |
+
+### `crates/adapter/src/response.rs`
+
+| Lines | Why |
+| --- | --- |
+| 287 | The error path of serializing `original_probabilities`. Serializing into a `String` with `serde_json` does not fail; the `?` is what a generic serializer needs. |
