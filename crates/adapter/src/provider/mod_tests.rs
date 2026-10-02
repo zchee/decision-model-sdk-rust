@@ -299,6 +299,52 @@ fn a_trait_object_reports_the_concrete_type_name_unless_overridden() {
 }
 
 #[test]
+fn log_uri_of_a_provider_that_does_not_override_it_is_none() {
+    let provider: Arc<dyn Provider> = Arc::new(EchoProvider);
+
+    assert!(
+        provider.log_uri().is_none(),
+        "the default names no endpoint: {:?}",
+        provider.log_uri()
+    );
+}
+
+#[test]
+fn log_uri_of_a_provider_that_overrides_it_is_its_own_uri() {
+    /// A provider that names its endpoint, as the built-in ones do.
+    #[derive(Debug)]
+    struct Located(::http::Uri);
+
+    impl Provider for Located {
+        fn model_name(&self) -> &str {
+            "located-1"
+        }
+
+        fn request<'a>(
+            &'a self,
+            _call: ProviderCall<'a>,
+        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+            Box::pin(async { Ok(Err(NonAnswer::new("never asked"))) })
+        }
+
+        fn log_uri(&self) -> Option<&::http::Uri> {
+            Some(&self.0)
+        }
+    }
+
+    let located = Located(::http::Uri::from_static("https://api.example.test:8443/v1/responses"));
+    let provider: &dyn Provider = &located;
+
+    let uri = provider.log_uri().expect("the override names an endpoint");
+
+    assert!(std::ptr::eq(uri, &located.0), "the provider's own value, not a copy");
+    assert_eq!(uri.scheme_str(), Some("https"));
+    assert_eq!(uri.host(), Some("api.example.test"));
+    assert_eq!(uri.port_u16(), Some(8443));
+    assert_eq!(uri.path(), "/v1/responses");
+}
+
+#[test]
 fn messages_and_schema_outlive_the_borrow_of_the_call() {
     let messages = [Message::new(Role::User, "hello")];
     let schema = schema();

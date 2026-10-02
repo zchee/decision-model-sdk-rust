@@ -68,6 +68,26 @@ pub trait Provider: Send + Sync + fmt::Debug {
     fn type_name(&self) -> &str {
         std::any::type_name::<Self>()
     }
+
+    /// The URI that names this provider's endpoint in the retry policy's log
+    /// line: the line the SDK writes before each retry, when it is built
+    /// with its `tracing` feature. The URI is only printed, never used to
+    /// send a request.
+    ///
+    /// It should hold the scheme, the host, the port when it is not the
+    /// scheme's default, and the fixed path of the vendor operation, such as
+    /// `/v1/responses`. The path is printed as it is, so it must hold no
+    /// credential in a path segment and no path prefix taken from a caller's
+    /// base URL. A query and userinfo are not printed.
+    ///
+    /// The default is `None`, for a provider with no endpoint worth naming,
+    /// such as a fake or an in-process model; the line then names the
+    /// request as `POST /`. The built-in providers return their vendor
+    /// endpoint. A provider that wraps another returns the inner provider's
+    /// value.
+    fn log_uri(&self) -> Option<&::http::Uri> {
+        None
+    }
 }
 
 /// What one model request is asked with.
