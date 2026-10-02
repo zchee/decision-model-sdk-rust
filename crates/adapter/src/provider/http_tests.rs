@@ -161,8 +161,8 @@ fn an_empty_key_is_refused() {
 
 #[test]
 fn a_key_is_found_in_the_forms_debug_writes_it_in() {
-    // A quote, a backslash and a tab are what `Debug` of a string and of a
-    // header value write differently from the key itself.
+    // A quote, a backslash and a tab are among the characters `Debug` of a
+    // string and of a header value write differently from the key itself.
     let key = "ab\"cd\\ef\tgh";
     let header = key_header(AUTHORIZATION, true, &SecretString::from(key)).expect("a legal key");
 

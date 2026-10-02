@@ -13,10 +13,14 @@
 //! per attempt: one [`post`].
 //!
 //! The key is turned into a header value in one place and is never formatted
-//! by this module: no error text, no `Debug` and no event holds it. A
-//! caller's own service may put the request's headers into its error, so a
-//! failed call's error chain is searched for the key before it is kept; see
-//! [`KeyHeader::holds_key`].
+//! by this module. Text that others wrote can still hold it: a response
+//! body, which is not searched, and the error of a caller's own service,
+//! which may hold the request's headers. A failed call's error chain is
+//! therefore searched before it is kept. The search looks for the key as
+//! written and as `Debug` writes it, four spellings in all, listed at
+//! [`KeyHeader::holds_key`], and for nothing else: a key the service
+//! transformed in another way, into hex or base64 say, or split over two
+//! links of the chain, is not found.
 
 use std::{
     error::Error as StdError,
@@ -81,9 +85,9 @@ pub(crate) struct KeyHeader {
     /// Marked sensitive, so `http` and hyper print `Sensitive` for it and
     /// HTTP/2 never puts it into the header compression table.
     value: HeaderValue,
-    /// The key without its `Bearer ` prefix, as it is and as `Debug` of a
-    /// string or of a header value would write it. An error chain is
-    /// searched for each of them.
+    /// The key without its `Bearer ` prefix, in the spellings [`key_forms`]
+    /// lists. An error chain is searched for each of them and for nothing
+    /// else.
     forms: Arc<[Box<str>]>,
 }
 
@@ -120,10 +124,12 @@ pub(crate) fn key_header(
     Ok(KeyHeader { name, value, forms: key_forms(key).into() })
 }
 
-/// The texts a key can appear as in an error's rendering: itself, and what
-/// `Debug` of a string, `escape_debug` and `Debug` of a header value write
-/// for it, which differ from it only for a key holding a quote, a backslash
-/// or a tab.
+/// The spellings of a key that an error's rendering is searched for: the
+/// key as written, and what `Debug` of a `str`, `str::escape_debug` and
+/// `Debug` of a [`HeaderValue`] that is not marked sensitive write for it,
+/// each without the quotes around it. Equal spellings are kept once: for a
+/// key of ASCII letters, digits, `-` and `_` all four are the key as
+/// written.
 fn key_forms(key: &str) -> Vec<Box<str>> {
     let mut forms = vec![
         Box::from(key),
@@ -144,11 +150,12 @@ fn unquoted(text: &str) -> &str {
 }
 
 /// How many links of an error chain are searched for the key. A longer chain
-/// is treated as holding it.
+/// is treated as a hit of the search.
 const MAX_SCANNED_LINKS: usize = 32;
 
 impl KeyHeader {
-    /// Whether `text` holds the key in any of its forms.
+    /// Whether `text` holds, byte for byte, one of the spellings of the key
+    /// that [`key_forms`] lists. A key written in any other way is not found.
     fn occurs_in(&self, text: &str) -> bool {
         let text = text.as_bytes();
         self.forms.iter().any(|form| {
@@ -157,13 +164,28 @@ impl KeyHeader {
         })
     }
 
-    /// Whether any rendering of `error` or of a link below it holds the key.
+    /// Whether the key search has a hit in `error` or in a link below it.
     ///
     /// Every link is rendered three ways, `Display`, `{:?}` and `{:#?}`: an
     /// error's `Debug` prints its source's `Debug`, and `{:#?}` passes the
-    /// alternate flag down, so each of the three can reach a caller. A chain
-    /// longer than [`MAX_SCANNED_LINKS`] cannot be searched to its end and
-    /// counts as holding the key.
+    /// alternate flag down, so each of the three can reach a caller. Each
+    /// rendering is searched, byte for byte, for four spellings of the key
+    /// and for nothing else:
+    ///
+    /// - the key as written;
+    /// - what `Debug` of a `str` writes for it, without the quotes;
+    /// - what `str::escape_debug` writes for it;
+    /// - what `Debug` of a [`HeaderValue`] that is not marked sensitive
+    ///   writes for it, without the quotes.
+    ///
+    /// A key transformed in any other way is not found: split over two
+    /// links, in hex, in base64, cut to a prefix, reversed, percent-encoded,
+    /// or as a list of its bytes. A rendering that holds the key only in
+    /// such a shape is not a hit, unless that shape happens to hold one of
+    /// the four spellings as well.
+    ///
+    /// A chain longer than [`MAX_SCANNED_LINKS`] cannot be searched to its
+    /// end and counts as a hit.
     fn holds_key(&self, error: &(dyn StdError + 'static)) -> bool {
         let mut link = Some(error);
         for _ in 0..MAX_SCANNED_LINKS {
@@ -439,8 +461,11 @@ pub(crate) struct Exchange<'a> {
 ///   whose body is over the limit is an API error without the body.
 /// - [`ErrorKind::Connection`](typesafe_sdk::ErrorKind::Connection) when the
 ///   service fails or the body cannot be read. The service's own error is
-///   the [`source`](StdError::source), unless a rendering of it holds the
-///   key: then the error has a fixed text and no source.
+///   the [`source`](StdError::source), unless the search described at
+///   [`KeyHeader::holds_key`] has a hit in it or in the message built from
+///   it: then the error has a fixed text and no source. That search finds
+///   the key as written or as `Debug` writes it, not a key transformed in
+///   another way.
 /// - [`ErrorKind::ResponseTooLarge`](typesafe_sdk::ErrorKind::ResponseTooLarge)
 ///   when a success response's body is larger than the limit. A body over
 ///   the limit is not read past it.
@@ -554,7 +579,7 @@ where
 /// What every connection error's message starts with, as in the SDK.
 const CONNECTION_PREFIX: &str = "Connection error: ";
 
-/// The message of a connection error whose cause held the key.
+/// The message of a connection error whose cause the key search withheld.
 const WITHHELD: &str = "Connection error: the transport's error held the API key and is not shown.";
 
 /// How many links of an error chain a connection error's message names.
@@ -564,11 +589,13 @@ const MAX_MESSAGE_LINKS: usize = 8;
 ///
 /// A service's error may hold the request's headers, and so the key: the
 /// default [`Transport`] formats no header value, but a caller's own service
-/// can. So every rendering of the chain is searched for the key first, and
-/// on a hit the whole chain is dropped for a fixed text. Otherwise an SDK
-/// error the service raised itself, a timeout say, is passed through as it
-/// is, and anything else is a connection error whose message is the chain's
-/// own messages and whose source is the chain.
+/// can. So the chain is searched first, as [`KeyHeader::holds_key`]
+/// describes: for the key as written or as `Debug` writes it, not for a key
+/// transformed in another way. On a hit the whole chain is dropped for a
+/// fixed text. Otherwise an SDK error the service raised itself, a timeout
+/// say, is passed through as it is, and anything else is a connection error
+/// whose message is the chain's own messages and whose source is the chain;
+/// that message is searched in the same way before it is used.
 fn connection(error: impl Into<BoxError>, key: &KeyHeader) -> SdkError {
     let error = error.into();
     if key.holds_key(&*error) {
