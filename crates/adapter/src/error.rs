@@ -21,6 +21,12 @@ pub(crate) type Cause = Box<dyn StdError + Send + Sync>;
 /// sentence to show a user; it holds no model output and no response text.
 /// [`debug`](Error::debug) holds the trace of every attempt made before the
 /// failure, which does hold the caller's document and the model's text.
+///
+/// One exception to what `Display` and `Debug` leave out: an
+/// [`ErrorKind::Provider`] renders the SDK's error by the SDK's own rules,
+/// which for a failure status are the status, the endpoint, the vendor's
+/// message escaped and cut to 200 characters, and the body as a byte count.
+/// A vendor's error message may quote parts of the request.
 pub struct Error(Box<Inner>);
 
 /// The heap half of [`Error`].
@@ -69,21 +75,31 @@ impl ErrorKind {
     /// own otherwise.
     pub(crate) fn name(&self) -> &'static str {
         match self {
-            Self::Provider(error) => match error.kind() {
-                typesafe_sdk::ErrorKind::Api(_) => "Api",
-                typesafe_sdk::ErrorKind::Connection => "Connection",
-                typesafe_sdk::ErrorKind::Timeout { .. } => "Timeout",
-                typesafe_sdk::ErrorKind::ResponseTooLarge { .. } => "ResponseTooLarge",
-                typesafe_sdk::ErrorKind::ResponseValidation(_) => "ResponseValidation",
-                typesafe_sdk::ErrorKind::InvalidRequest => "InvalidRequest",
-                typesafe_sdk::ErrorKind::Config => "Config",
-                _ => "Provider",
-            },
+            Self::Provider(error) => provider_kind_name(error),
             Self::NonAnswer(_) => "NonAnswer",
             Self::MalformedStructure => "MalformedStructure",
             Self::InvalidRequest => "InvalidRequest",
             Self::Config => "Config",
         }
+    }
+}
+
+/// The fixed name of the SDK error a provider failed with, for an attempt's
+/// `error_type` and the adapter's events.
+///
+/// It takes the SDK's error by reference, so the run can name a failed
+/// attempt and still hand the error back to the retry policy, and the HTTP
+/// module names its event with the same word the trace records.
+pub(crate) fn provider_kind_name(error: &typesafe_sdk::Error) -> &'static str {
+    match error.kind() {
+        typesafe_sdk::ErrorKind::Api(_) => "Api",
+        typesafe_sdk::ErrorKind::Connection => "Connection",
+        typesafe_sdk::ErrorKind::Timeout { .. } => "Timeout",
+        typesafe_sdk::ErrorKind::ResponseTooLarge { .. } => "ResponseTooLarge",
+        typesafe_sdk::ErrorKind::ResponseValidation(_) => "ResponseValidation",
+        typesafe_sdk::ErrorKind::InvalidRequest => "InvalidRequest",
+        typesafe_sdk::ErrorKind::Config => "Config",
+        _ => "Provider",
     }
 }
 
@@ -153,6 +169,9 @@ impl Error {
 }
 
 impl fmt::Display for Error {
+    /// The SDK error's own sentence for a provider failure, which for a
+    /// failure status includes the vendor's message, escaped and cut; the
+    /// non-answer's message; the adapter's sentence otherwise.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0.kind {
             ErrorKind::Provider(error) => error.fmt(formatter),
@@ -167,6 +186,11 @@ impl fmt::Display for Error {
 impl fmt::Debug for Error {
     /// The kind and the trace's counts, never the sentence of a malformed
     /// reply (it is a retry reason's message) nor anything the trace holds.
+    ///
+    /// The kind of a provider failure is the SDK error's own `Debug`: for a
+    /// failure status that is the status, the endpoint, the vendor's message
+    /// escaped and cut to 200 characters, and the body as a byte count. A
+    /// vendor's message may quote parts of the request.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Error")

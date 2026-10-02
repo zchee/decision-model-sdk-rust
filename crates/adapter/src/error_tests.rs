@@ -2,6 +2,10 @@
 
 use std::{mem, time::Duration};
 
+use bytes::Bytes;
+use http::{HeaderMap, StatusCode};
+use typesafe_sdk::ApiError;
+
 use super::*;
 use crate::response::{RetryCategory, RetryReason};
 
@@ -132,4 +136,70 @@ fn an_error_trace_serializes_upstream_two_members() {
             r#"{{"llm_attempts":[],"retry_reasons":[["malformed_structure","{VALIDATION}"]]}}"#
         )
     );
+}
+
+#[test]
+fn a_vendor_failure_renders_by_the_sdk_rules_message_present_body_absent() {
+    // The exception to "counts and kinds only": the vendor's message is
+    // printed, escaped and cut by the SDK; the rest of the body is not.
+    let body = Bytes::from_static(
+        br#"{"error":{"message":"Invalid schema for response_format","type":"invalid_request_error","param":"the-callers-private-parameter"}}"#,
+    );
+    let error = Error::provider(
+        ApiError::from_response(StatusCode::BAD_REQUEST, body.clone(), HeaderMap::new()).into(),
+    );
+
+    let debug = format!("{error:?}");
+    let display = error.to_string();
+
+    assert_eq!(display, "400 Invalid schema for response_format");
+    assert!(debug.contains("status: 400"), "{debug}");
+    assert!(debug.contains("message: \"Invalid schema for response_format\""), "{debug}");
+    assert!(debug.contains(&format!("body: <{} bytes>", body.len())), "{debug}");
+    assert!(debug.contains("debug: None"), "{debug}");
+    for rendered in [&debug, &display] {
+        assert!(
+            !rendered.contains("the-callers-private-parameter"),
+            "a body member outside the message was printed: {rendered}"
+        );
+    }
+    assert_eq!(error.kind().name(), "Api");
+}
+
+#[test]
+fn a_long_vendor_message_is_cut_at_200_characters() {
+    let message = "x".repeat(5_000);
+    let body = Bytes::from(format!(r#"{{"error":{{"message":"{message}"}}}}"#));
+    let error = Error::provider(
+        ApiError::from_response(StatusCode::BAD_REQUEST, body, HeaderMap::new()).into(),
+    );
+
+    let display = error.to_string();
+
+    assert!(
+        !display.contains(&"x".repeat(201)),
+        "the vendor message was not cut: {} characters",
+        display.chars().count()
+    );
+    assert!(display.contains(&"x".repeat(200)), "{display}");
+}
+
+#[test]
+fn the_kind_name_of_a_provider_failure_needs_only_a_reference() {
+    let cases = [
+        (typesafe_sdk::Error::timeout(Duration::from_secs(1)), "Timeout"),
+        (typesafe_sdk::Error::response_too_large(16), "ResponseTooLarge"),
+        (typesafe_sdk::Error::connection("refused", None), "Connection"),
+        (
+            ApiError::from_response(StatusCode::TOO_MANY_REQUESTS, Bytes::new(), HeaderMap::new())
+                .into(),
+            "Api",
+        ),
+    ];
+
+    for (error, want) in cases {
+        assert_eq!(provider_kind_name(&error), want);
+        // The error is still owned here, as the retry policy needs it.
+        assert_eq!(Error::provider(error).kind().name(), want);
+    }
 }
