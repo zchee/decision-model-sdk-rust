@@ -707,8 +707,8 @@ async fn openai_transport_preserves_corrections_and_usage() {
     // without a base URL and without an api is the row that names Responses.
     let rows = [
         (Some(OpenAiApi::Responses), "/v1/responses", "responses"),
-        (None, "/v1/chat/completions", "chat.completions"),
-        (Some(OpenAiApi::ChatCompletions), "/v1/chat/completions", "chat.completions"),
+        (None, "/v1/chat/completions", "chat_completions"),
+        (Some(OpenAiApi::ChatCompletions), "/v1/chat/completions", "chat_completions"),
     ];
     for (api, endpoint, api_name) in rows {
         for structured in [false, true] {

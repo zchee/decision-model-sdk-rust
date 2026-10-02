@@ -385,7 +385,7 @@ pub struct AttemptTrace {
 
 impl AttemptTrace {
     /// Records the JSON body of the request and the vendor API it is sent
-    /// to (`responses`, `chat.completions`, `messages`, `interactions`).
+    /// to (`responses`, `chat_completions`, `messages`, `interactions`).
     ///
     /// Text that is not one JSON value is kept as a JSON string holding it,
     /// so the serialized trace stays valid JSON.

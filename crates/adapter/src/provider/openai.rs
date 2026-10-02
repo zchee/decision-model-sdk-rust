@@ -62,7 +62,7 @@ impl OpenAiApi {
     const fn name(self) -> &'static str {
         match self {
             Self::Responses => "responses",
-            Self::ChatCompletions => "chat.completions",
+            Self::ChatCompletions => "chat_completions",
         }
     }
 

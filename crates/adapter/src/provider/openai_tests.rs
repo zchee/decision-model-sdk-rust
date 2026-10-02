@@ -547,7 +547,7 @@ async fn chat_completions_in_native_mode_sends_the_wrapped_schema() {
     );
     assert_eq!(server.requests()[0].uri.path(), "/v1/chat/completions");
     assert_eq!(parsed(trace.request()), body);
-    assert_eq!(trace.api(), Some("chat.completions"));
+    assert_eq!(trace.api(), Some("chat_completions"));
     assert_eq!(parsed(trace.response()), chat_reply(ANSWER, Some("stop")));
     assert_eq!(trace.finish_reason(), Some("stop"));
 }
