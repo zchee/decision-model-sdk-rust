@@ -723,6 +723,19 @@ where
     run_on(&Tokio, policy, method, uri, attempt)
 }
 
+// The future of `RetryPolicy::run` that ships, the one above, is `Send` for a
+// `Send` attempt: checked by every build of the library, every feature set
+// included. The unit tests see the `cfg(test)` twin below instead.
+#[cfg(not(test))]
+const _: () = {
+    fn assert_send<T: Send>(_: &T) {}
+    #[expect(dead_code, reason = "compiled for its Send check, never called")]
+    fn check(policy: &RetryPolicy, method: &Method, uri: &Uri) {
+        let future = policy.run(method, uri, |_| async { Ok::<(), Error>(()) });
+        assert_send(&future);
+    }
+};
+
 /// [`run`], on the fake clock of the crate's own tests when the policy
 /// carries one.
 #[cfg(test)]
