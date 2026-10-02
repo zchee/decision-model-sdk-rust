@@ -61,10 +61,16 @@ pub(crate) fn read(name: &str) -> Value {
 ///
 /// Then row 11 of the deviations: numbers compare by value (the OpenAI dump
 /// holds `created_at` and `completed_at` as floats where the wire body holds
-/// integers); `debug_info.provider` compares by vendor only, because upstream
-/// names a Python class (`system_one_adapter.providers.<vendor>.<Class>`,
-/// the synchronous one in prompted mode) where this crate names a Rust type
-/// path (`..::provider::<vendor>::..`); for a Gemini attempt, the members on
+/// integers); `debug_info.provider` compares by vendor only where `vendor`
+/// finds one, because upstream names a Python class
+/// (`system_one_adapter.providers.<vendor>.<Class>`, the synchronous one in
+/// prompted mode) where this crate names what `Provider::type_name()`
+/// returns: the public path of a built-in provider
+/// (`system_one_adapter::OpenAiProvider`, `::AnthropicProvider`,
+/// `::GeminiProvider`), or the type path of a provider that does not override
+/// it, which holds the vendor when the type lives under
+/// `..::provider::<vendor>::..`. A provider text of any other shape compares
+/// as it is. For an attempt whose provider is `gemini` after that, the members on
 /// one side only are left out of the comparison on both sides: `id` and
 /// `output_text` of `llm_response` (in the dump only), and
 /// `model_invocation_token_counts`, `non_grounding_model_invocation_token_counts`
@@ -131,8 +137,19 @@ fn drop_nulls(value: &mut Value) {
     }
 }
 
-/// The vendor a provider name holds, from either language's form.
+/// The vendor of a provider text of one of three forms: exactly the public
+/// path of a built-in provider (`system_one_adapter::OpenAiProvider`,
+/// `::AnthropicProvider`, `::GeminiProvider`); upstream's Python class path,
+/// the segment after `system_one_adapter.providers.`; a Rust type path, the
+/// segment after the first `::provider::`. The segment must be followed by `.`
+/// or `:` and must not be empty. `None` for any other text.
 fn vendor(provider: &str) -> Option<&str> {
+    match provider {
+        "system_one_adapter::OpenAiProvider" => return Some("openai"),
+        "system_one_adapter::AnthropicProvider" => return Some("anthropic"),
+        "system_one_adapter::GeminiProvider" => return Some("gemini"),
+        _ => {}
+    }
     let (_, rest) = provider
         .split_once("system_one_adapter.providers.")
         .or_else(|| provider.split_once("::provider::"))?;

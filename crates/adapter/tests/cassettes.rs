@@ -74,6 +74,17 @@ fn vendor(name: &str) -> Option<&str> {
     Some(vendor)
 }
 
+/// The public path the built-in provider of `vendor` returns from
+/// `Provider::type_name()`.
+fn public_path(vendor: &str) -> &'static str {
+    match vendor {
+        "openai" => "system_one_adapter::OpenAiProvider",
+        "anthropic" => "system_one_adapter::AnthropicProvider",
+        "gemini" => "system_one_adapter::GeminiProvider",
+        other => panic!("no built-in provider of the vendor `{other}`"),
+    }
+}
+
 #[test]
 fn cassette_reader_reads_all() {
     assert_eq!(stems("cassettes"), sorted(&CASSETTES), "the cassette files differ from the list");
@@ -151,7 +162,8 @@ fn expected_response_equals_itself_and_its_wire_form() {
         let Some(vendor) = vendor(name) else { continue };
 
         // What this crate builds from the cassette: the wire body as
-        // `llm_response`, a Rust type path as the provider, and a latency.
+        // `llm_response`, a Rust type path as the provider (first the form of
+        // a provider that does not override `type_name()`), and a latency.
         let cassette = Cassette::read(name).unwrap_or_else(|error| panic!("{error}"));
         let mut found = response.clone();
         found["usage"]["latency"] = json!(0.25);
@@ -161,6 +173,18 @@ fn expected_response_equals_itself_and_its_wire_form() {
         attempt["debug_info"]["provider"] =
             json!(format!("system_one_adapter::provider::{vendor}::Provider"));
         assert_eq!(expected::compare(&found, &response), Ok(()), "{name}: the wire form");
+
+        // A built-in provider names its public path instead: the same
+        // vendor's is equal, another vendor's is not.
+        let other = if vendor == "openai" { "gemini" } else { "openai" };
+        found["debug"]["llm_attempts"][0]["debug_info"]["provider"] = json!(public_path(vendor));
+        assert_eq!(expected::compare(&found, &response), Ok(()), "{name}: the public path");
+        found["debug"]["llm_attempts"][0]["debug_info"]["provider"] = json!(public_path(other));
+        assert_eq!(
+            expected::compare(&found, &response).map_err(|difference| difference.pointer),
+            Err("/debug/llm_attempts/0/debug_info/provider".to_owned()),
+            "{name}: the public path of `{other}`",
+        );
         wire_forms += 1;
     }
     assert_eq!(wire_forms, 12);
