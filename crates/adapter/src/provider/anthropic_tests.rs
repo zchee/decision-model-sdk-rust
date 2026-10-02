@@ -460,6 +460,32 @@ async fn a_callers_own_service_carries_the_request() {
     assert!(format!("{provider:?}").starts_with("AnthropicProvider {"));
 }
 
+#[tokio::test]
+async fn a_provider_left_at_the_default_base_url_sends_to_anthropics_path() {
+    let service = Canned { reply: Bytes::from(reply(json!("end_turn"))), seen: Arc::default() };
+    let seen = Arc::clone(&service.seen);
+    let provider = {
+        // With the `internals` feature another test's variables could be in
+        // force in this process; an empty replacement of this test's own
+        // leaves the default as the only base URL. It is dropped before the
+        // call: the environment is read when the provider is built.
+        #[cfg(feature = "internals")]
+        let _environment = crate::__internals::env::replace();
+        AnthropicProvider::builder("claude-haiku-4-5")
+            .api_key(KEY)
+            .build_with_service(service)
+            .expect("it builds")
+    };
+
+    let (outcome, _) = ask(&provider, true).await;
+
+    assert_eq!(outcome.expect("an exchange").expect("an answer").text(), ANSWER);
+    assert_eq!(
+        *seen.lock().expect("the lock is not poisoned"),
+        [("https://api.anthropic.com/v1/messages".to_owned(), KEY.as_bytes().to_vec())]
+    );
+}
+
 #[test]
 fn an_added_root_is_refused_with_a_callers_own_service() {
     let service = Canned { reply: Bytes::new(), seen: Arc::default() };

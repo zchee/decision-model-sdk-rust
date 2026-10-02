@@ -4,6 +4,7 @@
 
 use std::{
     future::{Ready, ready},
+    sync::{Arc, Mutex},
     task::{Context, Poll},
 };
 
@@ -301,9 +302,23 @@ async fn a_setting_that_cannot_be_used_is_refused_when_the_provider_is_built() {
 }
 
 /// A caller's own service: it answers every request with one fixed body and
-/// counts nothing.
+/// records the URI each request was sent to.
 #[derive(Clone)]
-struct Canned(&'static str);
+struct Canned {
+    reply: Bytes,
+    uris: Arc<Mutex<Vec<String>>>,
+}
+
+impl Canned {
+    fn new(reply: impl Into<Bytes>) -> Self {
+        Self { reply: reply.into(), uris: Arc::default() }
+    }
+
+    /// The URIs of the requests asked so far, in order.
+    fn uris(&self) -> Vec<String> {
+        self.uris.lock().expect("the lock is not poisoned").clone()
+    }
+}
 
 impl Service<Request<Body>> for Canned {
     type Response = Response<Full<Bytes>>;
@@ -316,7 +331,8 @@ impl Service<Request<Body>> for Canned {
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         assert_eq!(request.method(), Method::POST);
-        ready(Ok(Response::new(Full::new(Bytes::from_static(self.0.as_bytes())))))
+        self.uris.lock().expect("the lock is not poisoned").push(request.uri().to_string());
+        ready(Ok(Response::new(Full::new(self.reply.clone()))))
     }
 }
 
@@ -325,7 +341,8 @@ async fn a_provider_runs_over_a_service_of_the_callers_own() {
     const REPLY: &str = r#"{"choices":[{"finish_reason":"stop","message":{"content":"{}"}}]}"#;
     let server = answering(StatusCode::OK, "{}").await;
 
-    let provider = builder(&server).build_with_service(Canned(REPLY)).expect("the provider builds");
+    let provider =
+        builder(&server).build_with_service(Canned::new(REPLY)).expect("the provider builds");
     let (result, trace) = ask(&provider, true).await;
 
     let result = result.expect("the service answers").expect("the reply is an answer");
@@ -336,7 +353,7 @@ async fn a_provider_runs_over_a_service_of_the_callers_own() {
     // A root is a setting of the default transport, which is not there.
     let error = builder(&server)
         .add_root_certificate(vec![0x30, 0x00])
-        .build_with_service(Canned(REPLY))
+        .build_with_service(Canned::new(REPLY))
         .expect_err("a root with a service of the caller's own");
     assert!(matches!(error.kind(), ErrorKind::Config), "{error:?}");
     assert_eq!(
@@ -358,6 +375,40 @@ async fn a_clone_asks_the_same_model_at_the_same_endpoint() {
     }
     assert_eq!(server.request_count(), 2);
     assert_eq!(server.accepted_connections(), 1, "a clone shares the connection pool");
+}
+
+#[tokio::test]
+async fn a_provider_left_at_the_default_base_url_sends_to_openais_paths() {
+    for (api, reply, uri) in [
+        (None, responses_reply(ANSWER), "https://api.openai.com/v1/responses"),
+        (
+            Some(OpenAiApi::ChatCompletions),
+            chat_reply(ANSWER, Some("stop")),
+            "https://api.openai.com/v1/chat/completions",
+        ),
+    ] {
+        let service = Canned::new(reply.to_string());
+        let provider = {
+            // With the `internals` feature another test's variables could be
+            // in force in this process; an empty replacement of this test's
+            // own leaves the default as the only base URL. It is dropped
+            // before the call: the environment is read when the provider is
+            // built.
+            #[cfg(feature = "internals")]
+            let _environment = crate::__internals::env::replace();
+            let builder = OpenAiProvider::builder("test-model").api_key(KEY);
+            let builder = match api {
+                Some(api) => builder.api(api),
+                None => builder,
+            };
+            builder.build_with_service(service.clone()).expect("the provider builds")
+        };
+
+        let (result, _) = ask(&provider, true).await;
+
+        assert_eq!(result.expect("the service answers").expect("an answer").text(), ANSWER);
+        assert_eq!(service.uris(), [uri]);
+    }
 }
 
 // ------------------------------------------------------------ the environment

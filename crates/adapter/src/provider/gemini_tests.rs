@@ -2,10 +2,18 @@
 //! the text rule of the vendor's SDK, the builder's refusals and the key's
 //! sources. Every request goes to a loopback server.
 
-use ::http::StatusCode;
+use std::{
+    future::{Ready, ready},
+    sync::{Arc, Mutex},
+    task::{Context, Poll},
+};
+
+use ::http::{Request, Response, StatusCode};
+use http_body_util::Full;
 use serde_json::json;
 use test_support::{Protocol, TestServer, json_response};
-use typesafe_sdk::{ApiErrorKind, ErrorKind as SdkErrorKind};
+use tower_service::Service;
+use typesafe_sdk::{ApiErrorKind, Body, BoxError, ErrorKind as SdkErrorKind};
 
 use super::*;
 use crate::{
@@ -573,6 +581,52 @@ fn gemini_names_its_endpoint_for_the_retry_line() {
     assert_eq!(
         default.log_uri().expect("a log URI").to_string(),
         "https://generativelanguage.googleapis.com/v1beta/interactions"
+    );
+}
+
+/// A caller's service: it answers every request with one fixed reply and
+/// records the URI each request was sent to.
+#[derive(Clone)]
+struct Recording {
+    reply: Bytes,
+    uris: Arc<Mutex<Vec<String>>>,
+}
+
+impl Service<Request<Body>> for Recording {
+    type Response = Response<Full<Bytes>>;
+    type Error = BoxError;
+    type Future = Ready<Result<Self::Response, BoxError>>;
+
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        self.uris.lock().expect("the lock is not poisoned").push(request.uri().to_string());
+        ready(Ok(Response::new(Full::new(self.reply.clone()))))
+    }
+}
+
+#[tokio::test]
+async fn a_provider_left_at_the_default_base_url_sends_to_the_vendors_path() {
+    let service = Recording {
+        reply: Bytes::from(interaction("{}", "completed").to_string()),
+        uris: Arc::default(),
+    };
+    let uris = Arc::clone(&service.uris);
+    // The key is given and Gemini reads no base URL from the environment,
+    // so the default is the constant's.
+    let provider = GeminiProvider::builder(MODEL)
+        .api_key(KEY)
+        .build_with_service(service)
+        .expect("a provider");
+
+    let (outcome, _) = ask(&provider, &messages(), false).await;
+
+    outcome.expect("the exchange succeeds").expect("an answer");
+    assert_eq!(
+        *uris.lock().expect("the lock is not poisoned"),
+        ["https://generativelanguage.googleapis.com/v1beta/interactions"]
     );
 }
 
