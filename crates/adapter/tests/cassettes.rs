@@ -242,6 +242,35 @@ fn expected_response_change_names_first_pointer() {
         }),
         Err("/debug/llm_attempts/0/debug_info/provider".to_owned()),
     );
+    // The scope of row 11's exclusions. Of a Gemini `llm_response`, only the
+    // five listed members are left out: its `status` is compared.
+    assert_eq!(
+        difference(&|found| {
+            found["debug"]["llm_attempts"][0]["llm_response"]["status"] = json!("incomplete");
+        }),
+        Err("/debug/llm_attempts/0/llm_response/status".to_owned()),
+    );
+    // The Gemini exclusion is Gemini's: an OpenAI `llm_response.id` is compared.
+    let openai =
+        expected::read("test_live_responses_match_reference_shape[probabilities-native-openai]");
+    let mut found = openai.clone();
+    found["debug"]["llm_attempts"][0]["llm_response"]["id"] = json!("resp_other");
+    assert_eq!(
+        expected::compare(&found, &openai).map_err(|difference| difference.pointer),
+        Err("/debug/llm_attempts/0/llm_response/id".to_owned()),
+    );
+    // Only `debug_info.provider` is reduced to its vendor: a class path
+    // against a Rust path of the same vendor in `model_name` is a difference.
+    let mut expected_form = response.clone();
+    expected_form["debug"]["llm_attempts"][0]["debug_info"]["model_name"] =
+        json!("system_one_adapter.providers.gemini.AsyncGeminiProvider");
+    let mut found = response.clone();
+    found["debug"]["llm_attempts"][0]["debug_info"]["model_name"] =
+        json!("system_one_adapter::provider::gemini::Provider");
+    assert_eq!(
+        expected::compare(&found, &expected_form).map_err(|difference| difference.pointer),
+        Err("/debug/llm_attempts/0/debug_info/model_name".to_owned()),
+    );
     // Numbers compare by value; a null member of `llm_response` is no member.
     assert_eq!(difference(&|found| found["answers"]["positive"]["noul"] = json!(1)), Ok(()));
     assert_eq!(
