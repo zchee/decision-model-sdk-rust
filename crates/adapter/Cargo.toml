@@ -98,19 +98,19 @@ required-features = ["internals", "openai", "anthropic"]
 
 [[test]]
 name = "providers_openai"
-required-features = ["openai"]
+required-features = ["internals", "openai"]
 
 [[test]]
 name = "providers_anthropic"
-required-features = ["anthropic"]
+required-features = ["internals", "anthropic"]
 
 [[test]]
 name = "providers_gemini"
-required-features = ["gemini"]
+required-features = ["internals", "gemini"]
 
 [[test]]
 name = "cassettes"
-required-features = ["openai", "anthropic", "gemini"]
+required-features = ["internals", "openai", "anthropic", "gemini"]
 
 [[test]]
 name = "parity_schema"
