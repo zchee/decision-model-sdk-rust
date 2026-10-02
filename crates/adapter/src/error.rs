@@ -27,6 +27,12 @@ pub(crate) type Cause = Box<dyn StdError + Send + Sync>;
 /// which for a failure status are the status, the endpoint, the vendor's
 /// message escaped and cut to 200 characters, and the body as a byte count.
 /// A vendor's error message may quote parts of the request.
+///
+/// The SDK's error of a provider failure is reached through
+/// [`kind`](Error::kind), as the payload of [`ErrorKind::Provider`].
+/// `Display` already prints it, so [`source`](StdError::source) skips it and
+/// returns the SDK error's own cause: a reporter that walks the chain prints
+/// the SDK's message once.
 pub struct Error(Box<Inner>);
 
 /// The heap half of [`Error`].
@@ -150,7 +156,8 @@ impl Error {
 
     /// The same error with `source` as the failure underneath it: the decode
     /// failure of a malformed reply, or what a provider could not be built
-    /// from. A provider failure's source is its SDK error and is not replaced.
+    /// from. A provider failure's source is its SDK error's cause and is not
+    /// replaced.
     #[must_use]
     pub(crate) fn with_source(mut self, source: Cause) -> Self {
         self.0.source = Some(source);
@@ -202,11 +209,12 @@ impl fmt::Debug for Error {
 }
 
 impl StdError for Error {
-    /// The SDK's error for a provider failure; the recorded cause otherwise,
+    /// For a provider failure, the SDK error's own cause, one level below
+    /// the SDK error that `Display` prints; the recorded cause otherwise,
     /// such as the decode failure of a malformed reply.
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match &self.0.kind {
-            ErrorKind::Provider(error) => Some(error),
+            ErrorKind::Provider(error) => error.source(),
             _ => self.0.source.as_ref().map(|cause| &**cause as &(dyn StdError + 'static)),
         }
     }

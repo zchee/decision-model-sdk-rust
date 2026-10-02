@@ -1750,13 +1750,15 @@ async fn foreign_service_error_holding_the_headers_shows_no_key() {
     let error = client.system_one(STATE, &positive()).send().await.expect_err("the service fails");
 
     assert!(saw_the_key.load(Ordering::SeqCst), "the service's error did hold the key");
-    assert!(
-        matches!(error.kind(), ErrorKind::Provider(error) if matches!(error.kind(), typesafe_sdk::ErrorKind::Connection)),
-        "{error:?}"
-    );
+    let ErrorKind::Provider(failure) = error.kind() else {
+        panic!("expected a provider failure, got {error:?}");
+    };
+    assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Connection), "{failure:?}");
+    // `source()` starts below the SDK's error, which `kind()` gives: the
+    // service's error is not kept as the SDK error's cause either.
     let links = chain(&error);
-    assert!(links.len() >= 2, "the adapter's error and the SDK's");
-    for link in links {
+    assert_eq!(links.len(), 1, "the service's error is not kept as a cause");
+    for link in links.into_iter().chain([failure as &(dyn StdError + 'static)]) {
         for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
             assert_eq!(occurrences(&text, KEY), 0, "{text}");
             assert_eq!(occurrences(&text, "the proxy refused"), 0, "{text}");

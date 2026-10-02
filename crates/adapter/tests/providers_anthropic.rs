@@ -770,9 +770,11 @@ async fn foreign_service_error_holding_the_headers_shows_no_key() {
         panic!("expected a provider failure, got {error:?}");
     };
     assert!(matches!(failure.kind(), SdkErrorKind::Connection), "{failure:?}");
+    // `source()` starts below the SDK's error, which `kind()` gives: the
+    // service's error is not kept as the SDK error's cause either.
     let links = chain(&error);
-    assert!(links.len() >= 2, "the SDK's error is the source");
-    for link in links {
+    assert_eq!(links.len(), 1, "the service's error is not kept as a cause");
+    for link in links.into_iter().chain([failure as &(dyn StdError + 'static)]) {
         for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
             assert_eq!(occurrences(&text, KEY), 0, "{text}");
             assert_eq!(occurrences(&text, "x-api-key"), 0, "{text}");

@@ -80,21 +80,55 @@ fn the_kind_and_its_name_match_the_constructor() {
 }
 
 #[test]
-fn source_is_the_sdk_error_or_the_recorded_cause() {
-    let provider =
+fn source_is_the_sdk_errors_cause_or_the_recorded_cause() {
+    let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+    let provider = Error::provider(typesafe_sdk::Error::connection(
+        "could not reach the vendor",
+        Some(Box::new(refused)),
+    ));
+    let without_cause =
         Error::provider(typesafe_sdk::Error::connection("could not reach the vendor", None));
     let decode = serde_json::from_str::<u8>("\"seven\"").expect_err("a string is not a u8");
     let decode_text = decode.to_string();
     let malformed = Error::malformed_structure(VALIDATION).with_source(Box::new(decode));
     let plain = Error::invalid_request("A model is required.");
 
-    let provider_source = provider.source().expect("a provider error has its SDK error underneath");
+    let provider_source = provider.source().expect("the SDK error's cause is underneath");
     let malformed_source = malformed.source().expect("the decode failure was recorded");
 
-    assert_eq!(provider_source.to_string(), "could not reach the vendor");
-    assert!(provider_source.downcast_ref::<typesafe_sdk::Error>().is_some());
+    assert_eq!(provider_source.to_string(), "refused");
+    assert!(provider_source.downcast_ref::<std::io::Error>().is_some());
+    assert!(without_cause.source().is_none());
+    assert!(matches!(provider.kind(), ErrorKind::Provider(_)), "the SDK error is the kind's");
     assert_eq!(malformed_source.to_string(), decode_text);
     assert!(plain.source().is_none());
+}
+
+/// A reporter that prints each link of the `source()` chain, as `anyhow`'s
+/// `{:#}` does, prints the SDK's message once.
+#[test]
+fn a_chain_printer_prints_the_sdk_message_once() {
+    fn chain(error: &(dyn StdError + 'static)) -> String {
+        std::iter::successors(Some(error), |&link| link.source())
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(": ")
+    }
+    let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
+    let api = ApiError::from_response(
+        StatusCode::TOO_MANY_REQUESTS,
+        Bytes::from_static(br#"{"error":{"message":"Rate limit reached"}}"#),
+        HeaderMap::new(),
+    );
+    let sdk_api = typesafe_sdk::Error::from(api);
+    let api_text = sdk_api.to_string();
+
+    let connection = Error::provider(typesafe_sdk::Error::connection(
+        "could not reach the vendor",
+        Some(Box::new(refused)),
+    ));
+    assert_eq!(chain(&connection), "could not reach the vendor: refused");
+    assert_eq!(chain(&Error::provider(sdk_api)), api_text);
 }
 
 #[test]

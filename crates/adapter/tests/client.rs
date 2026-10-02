@@ -327,7 +327,8 @@ async fn retries_are_exhausted() {
         [RetryCategory::ProviderError, RetryCategory::ProviderError]
     );
     assert_eq!(error.debug().expect("a trace").attempts().len(), 3);
-    assert!(error.source().is_some(), "the SDK's error is the source");
+    assert!(matches!(error.kind(), ErrorKind::Provider(_)), "the SDK's error is the kind's");
+    assert!(error.source().is_none(), "an API error has no cause below the SDK's error");
 }
 
 // Upstream: tests/test_client_with_fake_model.py::test_malformed_retry_exhaustion_preserves_debug
