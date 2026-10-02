@@ -460,6 +460,150 @@ async fn a_failure_status_over_the_limit_is_still_an_api_error() {
     assert_eq!(api.kind(), ApiErrorKind::InternalServer);
 }
 
+// ------------------------------------- a failure response that repeats the key
+
+/// The text an API error has in the place of a response that repeated the
+/// key, and the body this module wrote for it.
+const KEY_REPEATED_TEXT: &str =
+    "The response repeated the API key, so its body and headers are not shown.";
+const KEY_REPEATED_BODY: &[u8] = br#"{"error":{"message":"The response repeated the API key, so its body and headers are not shown."}}"#;
+
+/// Checks that `error` is the API error of a response with `status` that
+/// repeated `key`: the status and nothing else of the response, and the key
+/// in no rendering.
+#[track_caller]
+fn assert_not_shown(error: SdkError, status: StatusCode, key: &str) {
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), status);
+    assert_eq!(api.message(), KEY_REPEATED_TEXT);
+    assert_eq!(error.to_string(), format!("{} {KEY_REPEATED_TEXT}", status.as_u16()));
+    assert_eq!(api.body(), KEY_REPEATED_BODY, "{}", api.body_text());
+    assert!(api.headers().is_empty(), "{:?}", api.headers());
+    assert_eq!(api.request_id(), None);
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, key), 0, "{text}");
+    }
+    // And as the adapter's own error, which a caller sees.
+    let error = Error::provider(error);
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, key), 0, "{text}");
+    }
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_in_its_body_is_not_shown() {
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {KEY}"}}}}"#);
+    // What the SDK would print for this body: the check below is not vacuous.
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 invalid token: Bearer {KEY}"));
+    let server = answering(StatusCode::UNAUTHORIZED, body).await;
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.kind(), ApiErrorKind::Authentication);
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_as_json_writes_it_is_not_shown() {
+    // The body is JSON, so a quote in the key arrives escaped; the message
+    // the SDK reads out of the body holds the key as written.
+    let key = "ab\"cd";
+    let body = serde_json::json!({ "error": { "message": format!("no such key: {key}") } });
+    let body = Bytes::from(body.to_string());
+    let shown = ApiError::from_response(StatusCode::BAD_REQUEST, body.clone(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("400 no such key: {key}"));
+    assert_eq!(occurrences(&String::from_utf8_lossy(&body), key), 0);
+    let fixture = Fixture::with_key("http://scripted.invalid", limits(None), key);
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::BAD_REQUEST, vec![body]))
+        .await
+        .expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::BAD_REQUEST, key);
+}
+
+#[tokio::test]
+async fn a_failure_response_that_repeats_the_key_in_a_header_is_not_shown() {
+    let server = TestServer::start(Protocol::Http1, |_| async {
+        let mut response =
+            json_response(StatusCode::FORBIDDEN, r#"{"error":{"message":"denied"}}"#);
+        let echoed = HeaderValue::from_str(&format!("Bearer {KEY}")).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        response
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    assert_not_shown(error, StatusCode::FORBIDDEN, KEY);
+    assert_eq!(server.request_count(), 1);
+}
+
+#[tokio::test]
+async fn a_failure_response_with_another_key_keeps_its_body_and_headers() {
+    // One character short of the key, in the body and in a header value.
+    let other = &KEY[..KEY.len() - 1];
+    let body = format!(r#"{{"error":{{"message":"invalid token: Bearer {other}"}}}}"#);
+    let sent = body.clone();
+    let server = TestServer::start(Protocol::Http1, move |_| {
+        let mut response = json_response(StatusCode::UNAUTHORIZED, sent.clone());
+        let echoed =
+            HeaderValue::from_str(&format!("Bearer {}", &KEY[1..])).expect("a legal value");
+        response.headers_mut().insert("x-echoed-authorization", echoed);
+        async move { response }
+    })
+    .await
+    .expect("a loopback server");
+    let fixture = Fixture::new(server.base_url(), limits(None));
+
+    let error = fixture.post(&transport()).await.expect_err("a failure status");
+
+    let SdkErrorKind::Api(api) = error.kind() else {
+        panic!("expected an API error, got {error:?}");
+    };
+    assert_eq!(api.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(api.body(), body.as_bytes());
+    assert_eq!(error.to_string(), format!("401 invalid token: Bearer {other}"));
+    assert_eq!(api.headers()["x-echoed-authorization"], format!("Bearer {}", &KEY[1..]).as_str());
+    assert_eq!(api.headers()[CONTENT_TYPE], "application/json");
+}
+
+#[tokio::test]
+async fn a_key_the_sdk_would_cut_out_of_a_failure_message_is_not_shown_in_part() {
+    // The SDK cuts a message at 200 characters: 190 of them, then the key,
+    // leave the key's first ten characters in the message and the whole key
+    // in the body.
+    let body = format!(r#"{{"error":{{"message":"{}{KEY}"}}}}"#, "x".repeat(190));
+    let cut = &KEY[..10];
+    let shown =
+        ApiError::from_response(StatusCode::UNAUTHORIZED, body.clone().into(), HeaderMap::new());
+    assert_eq!(shown.to_string(), format!("401 {}{cut}\u{2026}", "x".repeat(190)));
+    assert_eq!(occurrences(&shown.to_string(), KEY), 0);
+    let fixture = Fixture::new("http://scripted.invalid", limits(None));
+
+    let error = fixture
+        .post(&Scripted::answering(StatusCode::UNAUTHORIZED, vec![body.into()]))
+        .await
+        .expect_err("a failure status");
+
+    for text in [error.to_string(), format!("{error:?}"), format!("{error:#?}")] {
+        assert_eq!(occurrences(&text, cut), 0, "{text}");
+    }
+    assert_not_shown(error, StatusCode::UNAUTHORIZED, KEY);
+}
+
 // ----------------------------------------------------- status, deadline, connect
 
 /// Sends one request to a server answering `status` with upstream's body and

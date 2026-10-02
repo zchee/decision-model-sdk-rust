@@ -15,13 +15,18 @@
 //! The key is turned into a header value in one place, and this module puts
 //! it into no text of its own: no error message, `Debug` or event that this
 //! module writes holds it. Text that others wrote can still hold it: a
-//! response body, which is not searched, and the error of a caller's own
-//! service, which may hold the request's headers. A failed call's error
-//! chain is therefore searched before it is kept. The search looks for the
-//! key as written, as `Debug` writes it and as a JSON string holds it, the
-//! spellings listed at [`KeyHeader::holds_key`], and for nothing else: a key
-//! the service transformed in another way, into hex or base64 say, or split
-//! over two links of the chain, is not found.
+//! response, and the error of a caller's own service, which may hold the
+//! request's headers. So a failed call's error chain is searched before it
+//! is kept, and the body and the header values of a response with a status
+//! outside 2xx are searched before the API error is built from them. The
+//! body of a 2xx response is not searched: the provider reads it, and the
+//! trace holds it as received.
+//!
+//! The search looks for the key as written, as `Debug` writes it and as a
+//! JSON string holds it, the spellings listed at [`KeyHeader::holds_key`],
+//! and for nothing else: a key that a service or a server transformed in
+//! another way, into hex or base64 say, or split over two links of the
+//! chain, is not found.
 
 use std::{
     error::Error as StdError,
@@ -178,7 +183,12 @@ impl KeyHeader {
     /// Whether `text` holds, byte for byte, one of the spellings of the key
     /// that [`key_forms`] lists. A key written in any other way is not found.
     fn occurs_in(&self, text: &str) -> bool {
-        let text = text.as_bytes();
+        self.occurs_in_bytes(text.as_bytes())
+    }
+
+    /// The same for bytes that need not be text: a response body, a header
+    /// value.
+    fn occurs_in_bytes(&self, text: &[u8]) -> bool {
         self.forms.iter().any(|form| {
             let form = form.as_bytes();
             !form.is_empty() && text.windows(form.len()).any(|window| window == form)
@@ -487,7 +497,16 @@ pub(crate) struct Exchange<'a> {
 ///   deadline passes first.
 /// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
-///   whose body is over the limit is an API error without the body.
+///   whose body is over the limit is an API error without the body. Before
+///   the error is built, the bytes of the body, when it was read, and of
+///   each header value are searched for the key in the spellings listed at
+///   [`KeyHeader::holds_key`]. On a hit the error keeps the status and
+///   neither the body nor the headers: its header map is empty, and
+///   `ApiError::body()` returns a replacement this module wrote, not the
+///   server's bytes: a JSON object whose message says that the response
+///   repeated the API key. A body that spells the key in another way is not
+///   a hit, and the message the SDK reads out of the body can then hold the
+///   key: a JSON `\u` escape of one of its characters is decoded there.
 /// - [`ErrorKind::Connection`](typesafe_sdk::ErrorKind::Connection) when the
 ///   service fails or the body cannot be read. The service's own error is
 ///   the [`source`](StdError::source), unless the search described at
@@ -527,18 +546,55 @@ where
             (Some(status), Ok(json(exchange.vendor, status, body)))
         }
         Ok((status, headers, body)) => {
-            (Some(status), Err(ApiError::from_response(status, body, headers).into()))
+            (Some(status), Err(api_error(status, headers, Some(body), exchange.key).into()))
         }
         Err(Failure::TooLarge { status, .. }) if status.is_success() => {
             (Some(status), Err(SdkError::response_too_large(limit)))
         }
         Err(Failure::TooLarge { status, headers }) => {
-            (Some(status), Err(ApiError::from_response(status, Bytes::new(), headers).into()))
+            (Some(status), Err(api_error(status, headers, None, exchange.key).into()))
         }
         Err(Failure::Error(error)) => (None, Err(error)),
     };
     exchanged_event(exchange.endpoint, status, result.as_ref().err(), started);
     result
+}
+
+/// The message of an API error whose response held the key, in its body or
+/// in a header value. The SDK prints it after the status.
+const KEY_REPEATED: &str =
+    "The response repeated the API key, so its body and headers are not shown.";
+
+/// The API error a response with a status outside 2xx becomes. `body` is
+/// `None` for a body over the size limit, which was not read.
+///
+/// A server can send back what it was sent, a gateway that quotes a refused
+/// `authorization` header say, and the SDK prints the message it reads out
+/// of the body. So the body's bytes and each header value's bytes are
+/// searched for the key first, in the spellings [`key_forms`] lists. The
+/// bytes are searched as they arrived, not the message: the SDK cuts a
+/// message at 200 characters, and a key cut there is no longer found. On a
+/// hit the error is built from the status alone, with [`KEY_REPEATED`] as
+/// its message.
+fn api_error(
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Option<Bytes>,
+    key: &KeyHeader,
+) -> ApiError {
+    let repeated = body.as_deref().is_some_and(|body| key.occurs_in_bytes(body))
+        || headers.values().any(|value| key.occurs_in_bytes(value.as_bytes()));
+    if repeated {
+        return ApiError::from_response(status, replacement(KEY_REPEATED), HeaderMap::new());
+    }
+    ApiError::from_response(status, body.unwrap_or_default(), headers)
+}
+
+/// The body this module puts in the place of a response body it does not
+/// show: a JSON object in the shape the SDK reads an error's message from,
+/// `{"error":{"message":...}}`.
+fn replacement(message: &'static str) -> Bytes {
+    Bytes::from(serde_json::json!({ "error": { "message": message } }).to_string())
 }
 
 /// The body of a success response as JSON text, or the non-answer for a body
