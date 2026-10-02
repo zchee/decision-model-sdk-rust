@@ -295,6 +295,67 @@ impl RetryPolicy {
         self
     }
 
+    /// Runs `attempt` under this policy until it succeeds or the policy stops
+    /// retrying, and returns its success or its last error, unchanged: the
+    /// loop a call of this SDK runs, for a request the SDK does not send.
+    ///
+    /// `attempt` is called with the number of attempts made before it, `0`
+    /// first. The policy decides from the [`Error`] an attempt returns, as
+    /// for the SDK's own calls: which failures are retried, the wait before
+    /// the next attempt, the attempt count and the budget. A result the
+    /// caller does not want retried belongs in `R`, not in the error.
+    ///
+    /// `method` and `uri` only name the request. Before each retry the
+    /// method and the scheme, host, port and path of `uri` are logged at
+    /// `INFO` to the `typesafe_sdk` target, as
+    /// `POST https://api.example.com/v1/answers retry 1`; the line exists only
+    /// when the SDK is built with its `tracing` feature. The port is printed
+    /// only when it is not the scheme's default. The query and the userinfo
+    /// are not printed, but the path is, so `uri` must carry no credential.
+    ///
+    /// The returned future is `Send` when `F` and `Fut` are, so it can be
+    /// spawned. Nothing here spawns a task: the waits between attempts are
+    /// awaited inside the returned future, and dropping it cancels the
+    /// attempt in flight and every retry after it.
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use http::{Method, Uri};
+    /// use typesafe_sdk::{Error, RetryPolicy};
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// let policy = RetryPolicy::default().backoff_initial(Duration::ZERO);
+    /// // Scheme, host and path only: no query, no userinfo.
+    /// let uri = Uri::from_static("https://api.example.com/v1/answers");
+    /// let task = tokio::spawn(async move {
+    ///     policy
+    ///         .run(&Method::POST, &uri, |retry| async move {
+    ///             // Send the request here; `retry` attempts came before this one.
+    ///             Ok::<_, Error>(format!("answered on attempt {}", retry + 1))
+    ///         })
+    ///         .await
+    /// });
+    /// assert_eq!(task.await??, "answered on attempt 1");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn run<R, F, Fut>(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        attempt: F,
+    ) -> impl Future<Output = Result<R, Error>>
+    where
+        F: FnMut(u32) -> Fut,
+        Fut: Future<Output = Result<R, Error>>,
+    {
+        // The loop's own future, not an `async fn` awaiting it, for the
+        // reason `run` gives.
+        run(self, method, uri, attempt)
+    }
+
     /// Whether a call under this policy can make more than one attempt, and
     /// so has to keep its request body after the first.
     pub(crate) fn can_retry(&self) -> bool {
