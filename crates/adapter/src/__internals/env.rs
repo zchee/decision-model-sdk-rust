@@ -1,20 +1,28 @@
 //! The environment lookup the providers read their keys and base URLs
-//! through, replaceable so a test sets variables without touching the
-//! process environment.
+//! through, in a build with the `internals` feature: a test sets variables
+//! here without touching the process environment.
 //!
 //! Edition 2024 makes `std::env::set_var` unsafe, and this workspace forbids
 //! unsafe code, so a test cannot set `OPENAI_API_KEY` for itself. It calls
 //! [`replace`] instead: while the returned [`Replaced`] lives, every lookup a
-//! provider makes is answered from the variables set on it, and the process
-//! environment is not read at all. A test so sees neither the machine's own
-//! keys nor another test's.
+//! provider makes is answered from the variables set on it.
+//!
+//! A build with the `internals` feature never reads the process environment
+//! for a provider, whether or not a replacement is in force: while none is,
+//! every variable is unset. A test that forgets [`replace`] therefore gets a
+//! provider without a key, and not one that holds the key of the machine it
+//! runs on and could send a billed request with it. The same holds for any
+//! program built with the feature: its providers take their keys and base
+//! URLs from their builders or from a replacement, never from the process
+//! environment.
 //!
 //! The replacement is process-wide, because a provider the client builds for
 //! itself reads its variables wherever the call happens to run. Tests that
 //! replace the environment therefore run one after another: [`replace`]
 //! waits until the previous [`Replaced`] is dropped. A test that builds a
-//! provider from the environment without calling [`replace`] may see another
-//! test's variables when both run as threads of one process.
+//! provider from the environment without calling [`replace`] sees no
+//! variable when no replacement is in force, and another test's variables
+//! when that test's replacement is in force in the same process.
 
 #![cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
 
@@ -24,8 +32,7 @@ use std::{
     sync::{Condvar, Mutex, MutexGuard, PoisonError},
 };
 
-/// The variables of the replacement in force, or `None` while the process
-/// environment is read.
+/// The variables of the replacement in force, or `None` while none is.
 static REPLACEMENT: Mutex<Option<BTreeMap<String, OsString>>> = Mutex::new(None);
 
 /// Signalled when a replacement ends, for a [`replace`] that waits.
@@ -44,7 +51,8 @@ fn replacement() -> MutexGuard<'static, Option<BTreeMap<String, OsString>>> {
 pub struct Replaced(());
 
 /// Replaces the environment the providers read with an empty one, until the
-/// returned value is dropped.
+/// returned value is dropped. After that every variable is unset again: the
+/// process environment is read neither while the value lives nor afterwards.
 ///
 /// Waits while another replacement is in force, so a second call on the same
 /// thread without dropping the first never returns.
@@ -81,9 +89,9 @@ impl Drop for Replaced {
     }
 }
 
-/// The variable `name` in the replacement in force: `Some(None)` when it is
-/// unset there, and `None` when no replacement is in force and the process
-/// environment is to be read.
-pub(crate) fn lookup(name: &str) -> Option<Option<OsString>> {
-    replacement().as_ref().map(|variables| variables.get(name).cloned())
+/// The variable `name` in the replacement in force, or `None` when it is
+/// unset there or no replacement is in force. The process environment is
+/// never read.
+pub(crate) fn lookup(name: &str) -> Option<OsString> {
+    replacement().as_ref().and_then(|variables| variables.get(name).cloned())
 }

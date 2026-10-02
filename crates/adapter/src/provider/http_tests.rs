@@ -995,6 +995,17 @@ fn the_transport_types_and_an_attempt_cross_threads() {
 
 // ------------------------------------------------------------- environment
 
+/// A test build never reads the process environment: with the `internals`
+/// feature a variable comes from a replacement only, and this test holds
+/// none; without the feature every variable is unset.
+#[test]
+fn a_test_build_does_not_read_the_process_environment() {
+    // `PATH` is set on every machine that runs cargo.
+    assert!(std::env::var_os("PATH").is_some());
+
+    assert_eq!(env_var("PATH").expect("unset"), None, "the process environment was read");
+}
+
 #[cfg(feature = "internals")]
 #[test]
 fn the_environment_is_read_through_its_replacement() {
@@ -1019,6 +1030,14 @@ fn the_environment_is_read_through_its_replacement() {
     replaced.set("OPENAI_BASE_URL", "https://first.invalid/v1");
     replaced.remove("OPENAI_BASE_URL");
     assert_eq!(env_var("OPENAI_BASE_URL").expect("unset"), None);
+
+    // When the replacement ends its variables are gone, and the process
+    // environment is still not read.
+    replaced.set("OPENAI_API_KEY", "third-test-key");
+    drop(replaced);
+    assert_ne!(env_var("OPENAI_API_KEY").expect("unset").as_deref(), Some("third-test-key"));
+    assert_eq!(env_var("PATH").expect("unset"), None, "the process environment was read");
+    let replaced = env::replace();
 
     #[cfg(unix)]
     {

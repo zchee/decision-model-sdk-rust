@@ -200,12 +200,19 @@ pub(crate) fn request_headers(key: &KeyHeader) -> HeaderMap {
 
 // ------------------------------------------------------------- environment
 
-/// The environment variable `name`, or `None` when it is unset or empty.
+/// The variable `name` of the environment a provider reads, or `None` when
+/// it is unset or empty there.
 ///
 /// A provider reads its key and its base URL through this function, once,
-/// when it is built. With the `internals` feature a test replaces the whole
-/// environment (`__internals::env`), and the process environment is then not
-/// read at all.
+/// when it is built. Which environment that is depends on the build, so that
+/// no test build can pick up a key of the machine it runs on:
+///
+/// - with the `internals` feature, the replacement a test set up through
+///   `__internals::env::replace`; while no replacement is in force every
+///   variable is unset;
+/// - in this crate's unit-test build without that feature, none: every
+///   variable is unset;
+/// - in every other build, the process environment.
 ///
 /// # Errors
 ///
@@ -214,11 +221,10 @@ pub(crate) fn request_headers(key: &KeyHeader) -> HeaderMap {
 /// the value.
 pub(crate) fn env_var(name: &str) -> Result<Option<String>, Error> {
     #[cfg(feature = "internals")]
-    let value = match crate::__internals::env::lookup(name) {
-        Some(replaced) => replaced,
-        None => std::env::var_os(name),
-    };
-    #[cfg(not(feature = "internals"))]
+    let value = crate::__internals::env::lookup(name);
+    #[cfg(all(test, not(feature = "internals")))]
+    let value: Option<std::ffi::OsString> = None;
+    #[cfg(not(any(test, feature = "internals")))]
     let value = std::env::var_os(name);
 
     let Some(value) = value else {
