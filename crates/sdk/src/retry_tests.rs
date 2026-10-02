@@ -1901,3 +1901,134 @@ async fn every_attempt_sends_the_same_bytes_of_one_encoded_body() {
     assert_eq!(pointers.len(), 3);
     assert!(pointers.iter().all(|pointer| *pointer == pointers[0]), "{pointers:?}");
 }
+
+// ------------------------------------------------------- the public runner
+
+/// What an attempt of [`scripted`] answers with, attempt by attempt; once the
+/// script runs out, the attempt succeeds.
+#[derive(Clone, Copy, Debug)]
+enum Scripted {
+    RateLimited,
+    TimedOut,
+    InvalidRequest,
+}
+
+/// An attempt that follows `script`, records the retry number it is called
+/// with in `calls`, and succeeds with that number once the script runs out.
+fn scripted(
+    script: &[Scripted],
+    calls: &Arc<Mutex<Vec<u32>>>,
+) -> impl FnMut(u32) -> std::future::Ready<Result<u32, Error>> {
+    let script = script.to_vec();
+    let calls = Arc::clone(calls);
+    move |retry| {
+        lock(&calls).push(retry);
+        let outcome = usize::try_from(retry).ok().and_then(|index| script.get(index).copied());
+        std::future::ready(match outcome {
+            None => Ok(retry),
+            Some(Scripted::RateLimited) => Err(rate_limited(&[])),
+            Some(Scripted::TimedOut) => Err(Error::timeout(SHORT)),
+            Some(Scripted::InvalidRequest) => Err(Error::invalid_request("x")),
+        })
+    }
+}
+
+/// `RetryPolicy::run` is the crate-private loop: on the fake clock it calls
+/// the attempt with the same retry numbers, sleeps the same delays and ends
+/// with the same result. Each case also pins what that is, so two runs that
+/// both did nothing cannot pass.
+#[tokio::test]
+async fn seam_run_matches_private_run() {
+    use Scripted::{InvalidRequest, RateLimited, TimedOut};
+
+    /// One script, and what a run of it must observe.
+    struct Case {
+        name: &'static str,
+        script: &'static [Scripted],
+        calls: &'static [u32],
+        delays: &'static [Duration],
+        result: Result<u32, &'static str>,
+    }
+
+    // The default backoff at a draw of one half: 0.5 s and 1 s, each less
+    // an eighth, in whole milliseconds.
+    const FIRST: Duration = Duration::from_millis(438);
+    const SECOND: Duration = Duration::from_millis(875);
+    let cases = [
+        Case {
+            name: "the first attempt succeeds",
+            script: &[],
+            calls: &[0],
+            delays: &[],
+            result: Ok(0),
+        },
+        Case {
+            name: "recovers after two 429s",
+            script: &[RateLimited, RateLimited],
+            calls: &[0, 1, 2],
+            delays: &[FIRST, SECOND],
+            result: Ok(2),
+        },
+        Case {
+            name: "every attempt fails and the last error comes back",
+            script: &[RateLimited, RateLimited, TimedOut],
+            calls: &[0, 1, 2],
+            delays: &[FIRST, SECOND],
+            result: Err("Request timed out (timeout=0.05s)."),
+        },
+        Case {
+            name: "a failure the policy does not retry",
+            script: &[InvalidRequest],
+            calls: &[0],
+            delays: &[],
+            result: Err("x"),
+        },
+    ];
+    let method = Method::POST;
+    let uri = Uri::from_static("https://api.example.com/v1/answers");
+    for case in cases {
+        let name = case.name;
+        let mut runs = Vec::new();
+        for public in [true, false] {
+            let time = FakeTime::new();
+            let policy = RetryPolicy::default().on(&time);
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let attempt = scripted(case.script, &calls);
+            let result = if public {
+                policy.run(&method, &uri, attempt).await
+            } else {
+                run(&policy, &method, &uri, attempt).await
+            };
+            let result = result.map_err(|error| error.to_string());
+            let calls = lock(&calls).clone();
+            runs.push((calls, time.delays(), result));
+        }
+        let (public, private) = (&runs[0], &runs[1]);
+        assert_eq!(
+            public, private,
+            "{name}: the public runner (left) and the private loop (right)"
+        );
+        assert_eq!(public.0, case.calls, "{name}: the retry numbers the attempt was called with");
+        assert_eq!(public.1, case.delays, "{name}: the delays slept");
+        assert_eq!(public.2, case.result.map_err(str::to_owned), "{name}: the result");
+    }
+}
+
+/// Moves `value` through a `Send` bound: a call compiles only for a `Send`
+/// value.
+fn assert_send<T: Send>(value: T) -> T {
+    value
+}
+
+/// The future of `RetryPolicy::run` is `Send` when the attempt and its future
+/// are, so a caller can spawn it. The check is the compile; the run shows the
+/// future is the real one.
+#[tokio::test]
+async fn seam_run_future_is_send() {
+    let policy = RetryPolicy::default();
+    let method = Method::POST;
+    let uri = Uri::from_static("https://api.example.com/v1/answers");
+    let future =
+        assert_send(policy.run(&method, &uri, |retry| async move { Ok::<_, Error>(retry) }));
+    assert_eq!(future.await.expect("the first attempt succeeds"), 0);
+}
