@@ -110,6 +110,11 @@ fn main() -> Result<(), typesafe_sdk::Error> {
 }
 ```
 
+`PreparedQuestions::as_json()` returns a prepared set as the SDK serialized it: the JSON object
+sent after `"questions":` in a request body, compact and in the order the questions were given.
+A set declared with `#[derive(QuestionSet)]` is compiled into the program in this form only, so
+this text is the one way to read the instructions and criteria of any set, however it was made.
+
 The answers of a response are looked up by question name (`answers().noul(name)`,
 `.choice(name)`, `.score(name)`, `.get(name)`), iterated in wire order (`iter()`), or filtered
 by kind (`nouls()`, `choices()`, `scores()`, which copy nothing). An answer of a type this
@@ -232,6 +237,39 @@ async fn ask(client: &Client, questions: &PreparedQuestions) {
 }
 ```
 
+Code that sends its own requests builds the same kinds with four public constructors, so that a
+`RetryPolicy` classifies its failures as it does the SDK's own:
+
+- `Error::timeout(timeout)`: the attempt ran past `timeout`; a `Timeout` carrying it, with no
+  cause, retried while `api_timeout_error` is on. Code that puts its own deadline around an
+  attempt returns it to have the deadline classified as the SDK's own is.
+- `Error::connection(message, cause)`: the request failed without an HTTP response; a
+  `Connection` whose `Display` is `message`, retried while `api_connection_error` is on. `cause`
+  is the error's `source()` and is printed by `Debug`, so it must not carry a credential: an API
+  key, a token, or a URL with userinfo or a key in its query.
+- `Error::response_too_large(limit)`: a success body was larger than `limit` bytes; a
+  `ResponseTooLarge` carrying the limit, with no cause. Code that reads a body under its own cap
+  returns it for a success body over the cap, so that it reads as the SDK's own limit does. The
+  built-in rule of a `RetryPolicy` never retries it, because the same request gets as large an
+  answer again; only a `predicate` can ask for a retry. A failure status with a large body is an
+  `ApiError` instead.
+- `ApiError::from_response(status, body, headers)`: a response with an unsuccessful `status`,
+  its message read out of `body` as `message()` describes. It names no endpoint (`endpoint()` is
+  `None`), so `Display` is the status and the message, as `429 Rate limit reached`, followed by
+  ` (request_id=...)` when `headers` hold a request id (`x-typesafe-request-id`); the headers are
+  kept for `retry_after()` and `request_id()`. `Error::from` turns it into an `Api` error.
+
+A custom transport under the SDK's `Client` (see Custom transport) can fail with
+`Error::timeout` or `Error::connection`, boxed as its own error type: the SDK does not wrap an
+error of its own type in a new connection error, so such a transport chooses the kind of its
+failures and with it their retry class. The `Client` still checks a connection error that has a
+cause, as it checks every attempt error of a transport: when the message holds a credential of
+the request, the message is rewritten; when a link of the cause chain holds one, or the chain is
+longer than 32 links, the cause is replaced by a redacted copy that cannot be downcast, and the
+message is rebuilt from that copy. The kind and the retry class never change. Outside a `Client`
+nothing is rewritten. This adds a way to build an error; it does not change how an existing
+transport's errors are classified.
+
 ## Retries
 
 A `RetryPolicy` decides which failed attempts are repeated. The defaults are the Python SDK's:
@@ -284,6 +322,24 @@ async fn ask_twice(questions: &PreparedQuestions) -> Result<(), Error> {
   way to retry it.
 - The body is encoded once; every attempt sends the same bytes. Retries carry
   `X-TypeSafe-Retry-Count`. Dropping the call's future cancels a pending retry.
+
+`RetryPolicy::run(&method, &uri, attempt)` runs the loop a call of this SDK runs around a request
+the SDK does not send, until the attempt succeeds or the policy stops retrying, and returns its
+success or its last error, unchanged. `attempt` is a closure `F` (`FnMut(u32)`) returning a
+future `Fut`; it is called with the number of attempts made before it, `0` first. The policy
+decides from the `Error` an attempt returns, as for the SDK's own calls: which failures are
+retried, the wait before the next attempt, the attempt count and the budget. A result the caller
+does not want retried belongs in the success value, not in the error.
+
+`method` and `uri` only name the request. Before each retry the method and the
+scheme, host, port and path of `uri` are logged at `INFO` to the `typesafe_sdk` target, as
+`POST https://api.example.com/v1/answers retry 1`; the line exists only when the SDK is built
+with its `tracing` feature. The port is printed only when it is not the scheme's default. The
+query and the userinfo are not printed, but the path is, so `uri` must carry no credential.
+
+The returned future is `Send` when `F` and `Fut` are, so it can be spawned. Nothing in it spawns
+a task: the waits between attempts are awaited inside the returned future, and dropping it
+cancels the attempt in flight and every retry after it.
 
 ## Configuration
 
