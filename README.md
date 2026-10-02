@@ -640,8 +640,8 @@ Allocation counts are dhat block counts on the second identical call, 64-bit tar
 ## Testing
 
 `cargo nextest run` and `cargo test`, without `--workspace` or `-p`, run the default members: the
-SDK in `crates/sdk`, `crates/macros` and `crates/test-support`. Their tests run against local
-servers and need neither a key nor the network.
+SDK in `crates/sdk`, `crates/macros`, `crates/test-support` and the System One adapter in
+`crates/adapter`. Their tests run against local servers and need neither a key nor the network.
 
 `crates/live-tests` holds the tests against the live API. It is a workspace member, so `clippy
 --workspace` compiles it, but not a default member. **Its tests make real, billed calls** on the
@@ -655,16 +655,31 @@ makes those tests fail instead. Run them only on purpose:
 TYPESAFE_LIVE_TESTS=1 TYPESAFE_API_KEY=... cargo nextest run -p typesafe-sdk-rust-live-tests
 ```
 
+`crates/adapter-live-tests` is the second billed member: the adapter's tests against the live
+OpenAI, Anthropic and Gemini APIs. It follows the same rules with its own variables: its tests
+make real, billed calls when both `TYPESAFE_ADAPTER_LIVE_TESTS=1` and the provider's key are set,
+and fail, never skip, without either. Run them only on purpose:
+
+```sh
+TYPESAFE_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p typesafe-sdk-rust-adapter-live-tests --no-fail-fast --retries 0
+```
+
+`crates/adapter/README.md` documents the adapter: its providers and their variables, its
+deviations from the Python adapter, and its own tests, including the billed ones and why the
+command above carries `--no-fail-fast --retries 0`.
+
 - **Fuzzing.** `fuzz/` holds libFuzzer targets for the response decoders and the `Retry-After`
   parser, in a workspace of its own that needs the nightly toolchain and `cargo-fuzz`; see
   `fuzz/README.md`.
 - **Coverage.** CI holds the crate at 85% line coverage; `docs/uncovered-lines.md` records the
   measured total and why each uncovered line is not reached.
-- **The port.** `docs/port-test-matrix.md` maps every test of the Python SDK to the Rust tests
-  that cover it, the deviation that explains why none does, or the reason it was left out;
-  `python3 .github/scripts/port-test-matrix.py` checks that every Rust test and deviation it
-  names exists (CI runs it; `--upstream <checkout>` also checks it against a checkout of the
-  Python SDK).
+- **The port.** `docs/port-test-matrix.md` maps every test of the Python SDK, and
+  `docs/adapter-port-test-matrix.md` every test of the Python adapter, to the Rust tests that
+  cover it, the deviation that explains why none does, or the reason it was left out;
+  `python3 .github/scripts/port-test-matrix.py` checks both: that every Rust test and deviation
+  a matrix names exists (CI runs it). `--upstream <name>=<checkout>` also checks a matrix against
+  a checkout of its Python repository, `<name>` being `typesafe-sdk-python` or
+  `system-one-adapter-python`.
 
 ## Deviations from the Python SDK
 
