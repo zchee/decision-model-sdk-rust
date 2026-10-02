@@ -1140,13 +1140,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "typesafe-sdk-rust-adapter"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body",
+ "http-body-util",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "typesafe-sdk-rust",
+]
+
+[[package]]
 name = "typesafe-sdk-rust-fuzz"
 version = "0.0.0"
 dependencies = [
  "bytes",
  "http",
  "libfuzzer-sys",
+ "serde_json",
  "typesafe-sdk-rust",
+ "typesafe-sdk-rust-adapter",
 ]
 
 [[package]]

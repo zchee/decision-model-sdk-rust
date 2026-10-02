@@ -1,12 +1,16 @@
 # Fuzz targets
 
-Two [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) targets for the code
-that reads bytes a server chose:
+Four [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) targets for the code
+that reads bytes somebody else chose: two for the SDK (a server's response),
+two for the adapter in `crates/adapter` (a model's reply, a caller's
+questions):
 
 | Target | Input | Property |
 | --- | --- | --- |
 | `decode_response` | a response body | the depth guard, the System One decoder into `Answers` and into a derived answer set, the models decoder and the error-body reader behind `ApiError` each return `Ok` or `Err`; rendering what they return does not panic |
 | `retry_after` | a `retry-after-ms` and/or `Retry-After` value (the first byte picks which, see the target's docs) | the parser returns `None` or a `Duration`, and the same answer twice |
+| `adapter_decode` | a question set, a line feed, a model's reply (see [The adapter targets](#the-adapter-targets)) | the adapter's reply decoder returns a count of answers or a message, in both answer modes |
+| `adapter_schema` | a question set | the adapter's schema writer returns a schema or an error, in both answer modes, and a schema it returns parses as one JSON object |
 
 A panic, an abort (a stack overflow included), an input that runs past
 `-timeout` or a process that passes `-rss_limit_mb` is a finding.
@@ -18,8 +22,8 @@ repository's. `cargo check --manifest-path fuzz/Cargo.toml` works on the
 stable toolchain (it builds libFuzzer's C++ runtime, so a C++ compiler is
 needed). CI runs it on Linux (the "Fuzz targets compile" step, and again with
 the `sonic` feature, see [The sonic backend](#the-sonic-backend)), so that a
-change to the SDK's hidden `__internals` seam cannot break the targets
-unnoticed, and checks the directory's dependency policy against the
+change to the hidden `__internals` seam of the SDK or of the adapter cannot
+break the targets unnoticed, and checks the directory's dependency policy against the
 repository's `deny.toml` (`cargo deny --manifest-path fuzz/Cargo.toml check`,
 the "Dependency policy of the fuzz targets" step). That policy carries one
 crate-scoped license exception: `libfuzzer-sys` may carry NCSA, the license of
@@ -74,7 +78,37 @@ raw JSON they keep and the positions and syntax classification the codec
 rebuilds its errors from. A run without it exercises the same decoders over
 serde_json, so it is the control. The depth guard and the UTF-8 check are the
 codec's own and run before either parser, so both builds cover them alike.
-`retry_after` reads no JSON, so the feature changes nothing for it.
+`retry_after` reads no JSON, so the feature changes nothing for it. The two
+adapter targets read JSON through serde_json in either build (the adapter
+does not use the SDK's backend for a model's reply or for a schema), so the
+feature changes nothing for what they run either.
+
+## The adapter targets
+
+Both call the adapter through its hidden `__internals` module (feature
+`internals`, no semver promise), and the adapter is built without its default
+features: no provider and no transport is compiled for two pure parsers.
+
+A question set is the JSON object the SDK's `PreparedQuestions::as_json`
+writes, one member per question, on one line. `adapter_schema` takes the whole
+input as that object. `adapter_decode` splits its input at the first line
+feed: the text before it is the question set, the text after it is the reply,
+which may hold further line feeds (inside a string, or around a Markdown
+fence); an input without a line feed is a question set with an empty reply.
+Each target runs its input as probabilities and as discrete answers, and
+skips an input that is not UTF-8, since both entry points take text.
+
+The reply decoder finds a member of the reply by a linear scan of the
+question names, so its cost is the product of the two counts: 1,000 questions
+and 1,000,000 unknown members (11.9 MB) took 5.9 s in an unoptimized build.
+No target generates a question set, so both counts come out of one input, and
+the input's length bounds them. libFuzzer limits an input to 4,096 bytes
+while no seed is longer (the largest seed of `corpus/adapter_decode` is 940
+bytes), which is the limit of a run in this README's form and of the
+workflow's. `adapter_decode` also skips an input longer than 16,384 bytes, so
+a run with a larger `-max_len` stays bounded: a question takes 20 bytes or
+more and a reply member 6 or more, so the largest product an input of that
+length can hold is about 410 questions against 1,365 members.
 
 ## Fuzzing on x86_64 in CI
 
@@ -116,7 +150,8 @@ it. Start it from the Actions tab or with the GitHub CLI:
 gh workflow run fuzz.yaml -f target=decode_response -f backend=sonic -f cpu=x86-64-v3+pclmulqdq -f seconds=900
 ```
 
-`target` is `decode_response` (the default) or `retry_after`, `backend` is
+`target` is `decode_response` (the default), `retry_after`, `adapter_decode`
+or `adapter_schema`, `backend` is
 `sonic` (the default) or `default`, and `seconds` is the fuzzing time, a whole
 number from 60 to 3300 (900 by default); the run starts one job per core of
 the runner, each for that long. The run's summary names the CPU model and the
@@ -161,3 +196,31 @@ holding them as a second corpus to start a run from them.
 `u64`, `inf` and `NaN`, the three HTTP date formats (future and past against
 the target's fixed clock), padding, and the millisecond header alone and
 beside `Retry-After`.
+
+`corpus/adapter_decode` and `corpus/adapter_schema` are derived from the
+adapter's recorded fixtures, which are upstream material
+(`crates/adapter/LICENSE-THIRD-PARTY`): the 24 vendor cassettes under
+`crates/adapter/tests/fixtures/cassettes` (2 recorded tests x 2 answer modes
+x native and prompted output x 3 vendors) and the two question sets those
+tests ask (`crates/adapter/tests/support/expected.rs`). A seed whose bytes
+equal an earlier one is left out, and a seed is named for the first cassette
+that gave it: `shape` for the review question set (a noul, a score, a choice),
+`probe` for the two-choice one, then the answer mode, the output mode and the
+vendor.
+
+`corpus/adapter_decode` holds 17 seeds: a question set as `as_json` writes
+it, a line feed, and the reply text of a cassette, byte for byte. Each native
+reply and each prompted Gemini and OpenAI reply is accepted in the mode it
+was recorded in and refused in the other; the four prompted Anthropic replies
+are inside a Markdown fence, which the decoder does not strip (the adapter
+strips it before the decoder), so they are refused in both and seed that
+path.
+
+`corpus/adapter_schema` holds 8 seeds. `questions-shape` and
+`questions-probe` are the two question sets, which the writer accepts in both
+modes. The six `schema-` seeds are the schemas the recorded requests carry
+(the JSON of a native request's schema member written without white space,
+and the schema line of a prompted request's system message): each is a JSON
+object that is not a question set, so the writer refuses it, and they give
+the fuzzer the words a schema is made of. Four of them are, byte for byte,
+what the writer returns for one of the two question sets in one mode.
