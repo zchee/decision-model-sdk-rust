@@ -39,3 +39,7 @@ pub(crate) fn build(name: ProviderName, model: &str) -> Result<Arc<dyn Provider>
         ProviderName::Gemini => Ok(Arc::new(GeminiProvider::builder(model).build()?)),
     }
 }
+
+#[cfg(test)]
+#[path = "factory_tests.rs"]
+mod tests;
