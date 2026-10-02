@@ -43,11 +43,17 @@ fn sorted(names: &[&str]) -> Vec<String> {
     names
 }
 
-/// The raw recorded request of the cassette `name`, read without the reader.
-fn recorded_request(name: &str) -> (Method, Uri, Vec<u8>) {
+/// The cassette `name` as plain JSON, read without the reader.
+fn raw(name: &str) -> Value {
     let path = format!("{FIXTURES}/cassettes/{name}.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
-    let file: Value = serde_json::from_str(&text).unwrap_or_else(|error| panic!("{path}: {error}"));
+    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{path}: {error}"))
+}
+
+/// The recorded request of the cassette `name`, read without the reader.
+fn recorded_request(name: &str) -> (Method, Uri, Vec<u8>) {
+    let path = format!("{FIXTURES}/cassettes/{name}.json");
+    let file = raw(name);
     let member = |pointer: &str| {
         file.pointer(pointer).unwrap_or_else(|| panic!("{path}: no member `{pointer}`")).clone()
     };
@@ -334,4 +340,119 @@ fn expected_question_sets_match_the_recordings() {
         checked += 1;
     }
     assert_eq!(checked, 24);
+}
+
+/// The label the refusal tests give a changed copy of a cassette.
+const COPY: &str = "changed-copy.json";
+
+/// The reader's error for `changed`, a changed copy of a cassette, which must
+/// name the copy and the member `member`; returns the error's text.
+fn refusal(changed: &Value, member: &str) -> String {
+    let text = serde_json::to_string(changed).expect("a JSON value encodes");
+    match Cassette::parse(COPY, &text) {
+        Ok(_) => panic!("the reader takes a copy changed at `{member}`"),
+        Err(error) => {
+            assert_eq!((error.file.as_str(), error.member.as_str()), (COPY, member), "{error}");
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("`{COPY}`")) && message.contains(&format!("`{member}`")),
+                "{message}"
+            );
+            message
+        }
+    }
+}
+
+#[test]
+fn cassette_reader_refuses_wrong_version() {
+    for version in [json!(2), json!(0), json!("1"), Value::Null] {
+        let mut changed = raw(CASSETTES[0]);
+        changed["version"] = version.clone();
+        let message = refusal(&changed, "/version");
+        assert!(message.contains("the reader knows 1"), "{version}: {message}");
+    }
+}
+
+#[test]
+fn cassette_reader_refuses_two_interactions() {
+    let mut changed = raw(CASSETTES[0]);
+    let interaction = changed["interactions"][0].clone();
+    changed["interactions"].as_array_mut().expect("an array").push(interaction);
+    let message = refusal(&changed, "/interactions");
+    assert!(message.contains("2 interactions, a cassette holds exactly one"), "{message}");
+
+    changed["interactions"] = json!([]);
+    assert!(refusal(&changed, "/interactions").contains("0 interactions"));
+}
+
+#[test]
+fn cassette_reader_refuses_string_body() {
+    // VCR's own serializer stores a body as the text that crossed the wire;
+    // upstream's stores the parsed object (`U:tests/conftest.py:45-75`).
+    for member in ["/interactions/0/request/body", "/interactions/0/response/body/string"] {
+        let mut changed = raw(CASSETTES[0]);
+        let body = changed.pointer_mut(member).expect("a recorded body");
+        *body = Value::String(body.to_string());
+        let message = refusal(&changed, member);
+        assert!(message.contains("a string is not a JSON object"), "{message}");
+    }
+}
+
+#[test]
+fn cassette_reader_refuses_unknown_member() {
+    let mut changed = raw(CASSETTES[0]);
+    changed["recorded_with"] = json!("vcrpy");
+    assert!(refusal(&changed, "/recorded_with").contains("an unknown member"));
+}
+
+#[test]
+fn cassette_reader_refuses_filtered_request_header() {
+    // Upper case: the names are compared without regard to case.
+    let names = [
+        "AUTHORIZATION",
+        "X-API-KEY",
+        "X-GOOG-API-KEY",
+        "API-KEY",
+        "OPENAI-ORGANIZATION",
+        "OPENAI-PROJECT",
+        "COOKIE",
+        "SET-COOKIE",
+    ];
+    for name in names {
+        let mut changed = raw(CASSETTES[0]);
+        changed["interactions"][0]["request"]["headers"][name] = json!(["redacted"]);
+        let message = refusal(&changed, &format!("/interactions/0/request/headers/{name}"));
+        assert!(message.contains("a request header upstream's recorder strips"), "{message}");
+    }
+}
+
+#[test]
+fn cassette_reader_refuses_filtered_query_parameter() {
+    let member = "/interactions/0/request/uri";
+    let with_query = |query: &str| {
+        let mut changed = raw(CASSETTES[0]);
+        let uri = changed.pointer_mut(member).expect("a recorded URI");
+        *uri = json!(format!("{}?{query}", uri.as_str().expect("a URI is text")));
+        changed
+    };
+    for name in ["api_key", "key"] {
+        let message = refusal(&with_query(&format!("alt=json&{name}=redacted")), member);
+        assert!(message.contains(&format!("the query parameter `{name}`")), "{message}");
+    }
+    // Only the exact names are stripped.
+    let text =
+        serde_json::to_string(&with_query("monkey=1&api_keys=2")).expect("a JSON value encodes");
+    if let Err(error) = Cassette::parse(COPY, &text) {
+        panic!("{error}");
+    }
+}
+
+#[test]
+fn cassette_reader_refuses_response_header_outside_allowlist() {
+    for name in ["x-request-id", "openai-organization", "set-cookie"] {
+        let mut changed = raw(CASSETTES[0]);
+        changed["interactions"][0]["response"]["headers"][name] = json!(["recorded"]);
+        let message = refusal(&changed, &format!("/interactions/0/response/headers/{name}"));
+        assert!(message.contains("outside upstream's allowlist `content-type`"), "{message}");
+    }
 }

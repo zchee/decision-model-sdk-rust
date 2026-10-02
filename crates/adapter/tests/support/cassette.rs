@@ -15,6 +15,18 @@
 //! provider's base URL at a local server, which decides all three. A body
 //! mismatch names the first differing JSON pointer (RFC 6901).
 //!
+//! Upstream's recorder keeps credentials and account data out of a committed
+//! cassette (`U:tests/conftest.py:25-43,127`): it strips the request headers
+//! `authorization`, `x-api-key`, `x-goog-api-key`, `api-key`,
+//! `openai-organization`, `openai-project`, `cookie` and `set-cookie`, strips
+//! the query parameters `api_key` and `key`, and keeps one response header,
+//! `content-type`. The reader refuses a cassette that holds what that filter
+//! removes, so a re-recorded fixture that bypassed it fails here instead of
+//! being replayed. It also refuses what it does not know: a `version` other
+//! than 1, an interaction count other than 1, a request or response body that
+//! is not a JSON object, and a member it does not read. Each error names the
+//! file and the JSON pointer of the member.
+//!
 //! Every item here is used by each test binary that includes this file, so no
 //! lint is suppressed. `expected.rs` builds on `first_difference` and needs
 //! this file declared as `mod cassette` beside it.
@@ -61,6 +73,25 @@ pub(crate) const CASSETTES: [&str; 25] = [
 ];
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cassettes");
+
+/// The request headers upstream's recorder strips (`U:tests/conftest.py:25-34`).
+const FILTERED_HEADERS: [&str; 8] = [
+    "authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "api-key",
+    "openai-organization",
+    "openai-project",
+    "cookie",
+    "set-cookie",
+];
+
+/// The query parameters upstream's recorder strips (`U:tests/conftest.py:127`).
+const FILTERED_QUERY_PARAMETERS: [&str; 2] = ["api_key", "key"];
+
+/// The only response header upstream's recorder keeps
+/// (`U:tests/conftest.py:42`).
+const ALLOWED_RESPONSE_HEADERS: [&str; 1] = ["content-type"];
 
 /// One recorded exchange.
 #[derive(Debug)]
@@ -150,30 +181,70 @@ impl Cassette {
             reason: format!("not JSON: {error}"),
         })?;
         let root = Node { file, pointer: String::new(), value: &root };
-
-        let interaction = root.get("interactions")?.first()?;
+        root.only(&["version", "interactions"])?;
+        let version = root.get("version")?;
+        if version.value.as_u64() != Some(1) {
+            return Err(
+                version.error(format_args!("version {}, the reader knows 1", version.value))
+            );
+        }
+        let interaction = root.get("interactions")?.only_item()?;
+        interaction.only(&["request", "response"])?;
 
         let request = interaction.get("request")?;
+        request.only(&["method", "uri", "body", "headers"])?;
         let method = request.get("method")?;
         let method =
             Method::from_bytes(method.str()?.as_bytes()).map_err(|error| method.error(error))?;
-        let uri = request.get("uri")?;
-        let uri = uri.str()?.parse::<Uri>().map_err(|error| uri.error(error))?;
-        let body = request.get("body")?.value.clone();
+        let uri_member = request.get("uri")?;
+        let uri = uri_member.str()?.parse::<Uri>().map_err(|error| uri_member.error(error))?;
+        for pair in uri.query().unwrap_or_default().split('&') {
+            let name = pair.split_once('=').map_or(pair, |(name, _)| name);
+            if FILTERED_QUERY_PARAMETERS.contains(&name) {
+                return Err(uri_member.error(format_args!(
+                    "holds the query parameter `{name}`, which upstream's recorder strips"
+                )));
+            }
+        }
+        let headers = request.get("headers")?;
+        for name in headers.object()?.keys() {
+            if FILTERED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                return Err(headers
+                    .child(name, &Value::Null)
+                    .error("a request header upstream's recorder strips"));
+            }
+        }
+        let body = request.get("body")?;
+        body.object()?;
+        let body = body.value.clone();
 
         let response = interaction.get("response")?;
-        let code = response.get("status")?.get("code")?;
+        response.only(&["status", "headers", "body"])?;
+        let status = response.get("status")?;
+        status.only(&["code", "message"])?;
+        let code = status.get("code")?;
         let status = code
             .value
             .as_u64()
             .and_then(|code| u16::try_from(code).ok())
             .and_then(|code| StatusCode::from_u16(code).ok())
             .ok_or_else(|| code.error("not an HTTP status code"))?;
-        let content_type = response.get("headers")?.get("content-type")?;
+        let headers = response.get("headers")?;
+        for name in headers.object()?.keys() {
+            if !ALLOWED_RESPONSE_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                return Err(headers
+                    .child(name, &Value::Null)
+                    .error("a response header outside upstream's allowlist `content-type`"));
+            }
+        }
+        let content_type = headers.get("content-type")?;
         if !matches!(content_type.array()?, [only] if only == "application/json") {
             return Err(content_type.error("not the one value `application/json`"));
         }
-        let response_body = response.get("body")?.get("string")?;
+        let response_body = response.get("body")?;
+        response_body.only(&["string"])?;
+        let response_body = response_body.get("string")?;
+        response_body.object()?;
         let response_body = serde_json::to_vec(response_body.value).expect("a JSON value encodes");
 
         Ok(Self {
@@ -273,10 +344,19 @@ impl<'a> Node<'a> {
         }
     }
 
-    fn first(&self) -> Result<Self, CassetteError> {
+    fn only_item(&self) -> Result<Self, CassetteError> {
         match self.array()? {
-            [first, ..] => Ok(self.child("0", first)),
-            [] => Err(self.error("holds no interaction")),
+            [only] => Ok(self.child("0", only)),
+            items => Err(self
+                .error(format_args!("{} interactions, a cassette holds exactly one", items.len()))),
+        }
+    }
+
+    /// Refuses a member of this object that is not one of `known`.
+    fn only(&self, known: &[&str]) -> Result<(), CassetteError> {
+        match self.object()?.iter().find(|(name, _)| !known.contains(&name.as_str())) {
+            Some((name, value)) => Err(self.child(name, value).error("an unknown member")),
+            None => Ok(()),
         }
     }
 }
