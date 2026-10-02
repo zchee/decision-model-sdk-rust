@@ -1165,81 +1165,11 @@ async fn key_never_printed_in_a_serialized_trace() {
     assert_eq!(occurrences(&json, KEY), 0, "{json}");
 }
 
-/// Every event of every target and level, while it is the thread's
-/// subscriber: the target, then each field as ` name=value`. The shared
-/// recorder keeps the adapter's own events only.
+/// The lines of `target` among `lines`, without the target. The shared
+/// recorder starts every line with the target of its event or span.
 #[cfg(feature = "tracing")]
-mod every_event {
-    use std::{
-        fmt::{self, Write as _},
-        sync::{Arc, Mutex},
-    };
-
-    use tracing::{
-        Dispatch, Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-        subscriber::{DefaultGuard, NoSubscriber},
-    };
-
-    #[derive(Clone, Default)]
-    pub(crate) struct EveryEvent(Arc<Mutex<Vec<String>>>);
-
-    impl EveryEvent {
-        /// This recorder as the thread's subscriber until the guard drops. A
-        /// second dispatcher is held with it, so that a callsite another
-        /// test's thread reached first still asks this subscriber.
-        pub(crate) fn install(&self) -> (DefaultGuard, Dispatch) {
-            let second = Dispatch::new(NoSubscriber::default());
-            (tracing::subscriber::set_default(self.clone()), second)
-        }
-
-        pub(crate) fn lines(&self) -> Vec<String> {
-            self.0.lock().expect("not poisoned").clone()
-        }
-
-        /// The lines of `target`, without the target.
-        pub(crate) fn of(&self, target: &str) -> Vec<String> {
-            let lines = self.lines();
-            lines.iter().filter_map(|line| line.strip_prefix(target)).map(str::to_owned).collect()
-        }
-    }
-
-    struct Line(String);
-
-    impl Visit for Line {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            write!(self.0, " {}={value:?}", field.name()).expect("a String takes any write");
-        }
-    }
-
-    impl Subscriber for EveryEvent {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, attributes: &span::Attributes<'_>) -> span::Id {
-            // A span's fields are text a subscriber prints too.
-            let mut line = Line(attributes.metadata().target().to_owned());
-            attributes.record(&mut line);
-            self.0.lock().expect("not poisoned").push(line.0);
-            span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            let mut line = Line(event.metadata().target().to_owned());
-            event.record(&mut line);
-            self.0.lock().expect("not poisoned").push(line.0);
-        }
-
-        fn enter(&self, _: &span::Id) {}
-
-        fn exit(&self, _: &span::Id) {}
-    }
+fn lines_of(lines: &[String], target: &str) -> Vec<String> {
+    lines.iter().filter_map(|line| line.strip_prefix(target)).map(str::to_owned).collect()
 }
 
 /// The target of the SDK's events, the retry line among them.
@@ -1297,31 +1227,25 @@ async fn calls_that_log() -> String {
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn key_never_printed_in_the_events_of_any_target() {
-    // First the shared recorder: the adapter's own events.
-    let adapter = recorder::Recorder::default();
+    let events = recorder::Recorder::default();
     let log_uri = {
-        let _installed = recorder::install(&adapter);
+        let _installed = recorder::install(&events);
         calls_that_log().await
     };
-    let own = adapter.at(tracing::Level::DEBUG);
+
+    // The adapter's own events: one per exchange, named by the fixed path.
+    let own = events.at(tracing::Level::DEBUG);
     let exchanges: Vec<&String> = own.iter().filter(|line| line.contains(" uri=")).collect();
     assert_eq!(exchanges.len(), 8, "{own:?}");
     let named = exchanges.iter().filter(|line| line.contains(&format!(" uri={log_uri} "))).count();
     assert_eq!(named, 4, "{own:?}");
-    for line in &own {
-        assert_eq!(occurrences(line, KEY), 0, "{line}");
-    }
 
-    // Then every target at every level, spans included.
-    let events = every_event::EveryEvent::default();
-    {
-        let _installed = events.install();
-        calls_that_log().await;
-    }
-    let lines = events.lines();
-    assert!(!events.of(ADAPTER_TARGET).is_empty(), "{lines:?}");
+    // Every target at every level, span lines included.
+    let lines = events.all();
+    assert!(!lines_of(&lines, ADAPTER_TARGET).is_empty(), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("hyper_util")), "{lines:?}");
     let retries: Vec<String> =
-        events.of(SDK_TARGET).into_iter().filter(|line| line.contains(" retry ")).collect();
+        lines_of(&lines, SDK_TARGET).into_iter().filter(|line| line.contains(" retry ")).collect();
     // One retry each: the 503, the refused connect and the deadline.
     assert_eq!(retries.len(), 3, "{lines:?}");
     for line in &lines {
@@ -1351,12 +1275,13 @@ async fn key_never_printed_in_the_retry_line_for_a_key_in_the_base_url() {
     );
     let client = Client::builder(StructuredOutputs::Native, AnswerMode::Discrete)
         .retry(RetryPolicy::new().max_retries(1).backoff_initial(Duration::ZERO));
-    let events = every_event::EveryEvent::default();
+    let events = recorder::Recorder::default();
 
     {
-        let _installed = events.install();
+        let _installed = recorder::install(&events);
         evaluate(client, provider).await.expect("the second attempt answers");
     }
+    let lines = events.all();
 
     // The requests went to the caller's prefix, the key in their path.
     let requests = server.requests();
@@ -1365,11 +1290,96 @@ async fn key_never_printed_in_the_retry_line_for_a_key_in_the_base_url() {
         assert_eq!(request.uri.path(), format!("/{KEY}/v1/responses"));
     }
     let retries: Vec<String> =
-        events.of(SDK_TARGET).into_iter().filter(|line| line.contains(" retry ")).collect();
+        lines_of(&lines, SDK_TARGET).into_iter().filter(|line| line.contains(" retry ")).collect();
     assert_eq!(retries, [format!(" message=POST http://{addr}/v1/responses retry 1")]);
-    for line in events.lines() {
-        assert_eq!(occurrences(&line, KEY), 0, "{line}");
+    assert!(!lines_of(&lines, ADAPTER_TARGET).is_empty(), "{lines:?}");
+    for line in &lines {
+        assert_eq!(occurrences(line, KEY), 0, "{line}");
     }
+}
+
+/// A call that fails with `status` and `body`, through a provider that reads
+/// at most `limit` bytes of a response.
+async fn failing(status: StatusCode, body: String, limit: usize) -> Error {
+    let server = answering(status, body).await;
+    let provider = builder(server.base_url())
+        .api(OpenAiApi::Responses)
+        .max_response_bytes(limit)
+        .build()
+        .expect("the provider builds");
+    let client = Client::builder(StructuredOutputs::Prompted, AnswerMode::Discrete);
+    let error = evaluate(client, Arc::new(provider)).await.expect_err("a failure status");
+    assert_eq!(server.request_count(), 1);
+    error
+}
+
+/// `error` is the API error `status` with the fixed text `message`, and
+/// neither its renderings nor the serialized trace of the failed call hold
+/// the key.
+#[track_caller]
+fn assert_fixed_text(error: &Error, status: StatusCode, message: &str) {
+    let api = api_error(error);
+    assert_eq!(api.status(), status);
+    assert_eq!(api.message(), message);
+    assert!(error.to_string().contains(message), "{error}");
+    for link in chain(error) {
+        for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
+            assert_eq!(occurrences(&text, KEY), 0, "{text}");
+        }
+    }
+    let trace = error.debug().expect("the error carries a trace");
+    assert_eq!(trace.attempts().len(), 1);
+    let attempt = &trace.attempts()[0];
+    assert!(attempt.request().is_some());
+    assert_eq!(attempt.response(), None);
+    let recorded = attempt.error().expect("a failed attempt has an error");
+    assert!(recorded.contains(message), "{recorded}");
+    let json = serde_json::to_string(trace).expect("the trace serializes");
+    assert_eq!(occurrences(&json, KEY), 0, "{json}");
+}
+
+#[tokio::test]
+async fn a_failure_body_over_the_size_limit_is_reported_by_a_fixed_text() {
+    let body = json!({"error": {"message": "x".repeat(4096)}}).to_string();
+
+    let error = failing(StatusCode::BAD_GATEWAY, body, 64).await;
+
+    assert_fixed_text(
+        &error,
+        StatusCode::BAD_GATEWAY,
+        "The response body was larger than the limit and is not shown.",
+    );
+    assert_eq!(api_error(&error).kind(), ApiErrorKind::InternalServer);
+}
+
+#[tokio::test]
+async fn a_failure_body_that_repeats_the_key_is_not_shown() {
+    // A gateway that quotes the header it refused.
+    let body =
+        json!({"error": {"message": format!("Incorrect API key provided: {KEY}.")}}).to_string();
+
+    let error = failing(StatusCode::UNAUTHORIZED, body, 1 << 20).await;
+
+    assert_fixed_text(
+        &error,
+        StatusCode::UNAUTHORIZED,
+        "The response's body and headers are not shown, because showing them could reveal \
+         the API key.",
+    );
+    assert_eq!(api_error(&error).kind(), ApiErrorKind::Authentication);
+    assert!(api_error(&error).headers().is_empty(), "the headers are dropped with the body");
+
+    // The same body over the limit: a body over the limit is not kept, so
+    // the error holds nothing of it, whichever fixed text it carries.
+    let long = json!({"error": {"message": format!("{} {KEY}", "x".repeat(4096))}}).to_string();
+    let error = failing(StatusCode::UNAUTHORIZED, long, 64).await;
+    for link in chain(&error) {
+        for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
+            assert_eq!(occurrences(&text, KEY), 0, "{text}");
+        }
+    }
+    let json = serde_json::to_string(error.debug().expect("a trace")).expect("it serializes");
+    assert_eq!(occurrences(&json, KEY), 0, "{json}");
 }
 
 // ------------------------------------------------- user data is not printed
@@ -1416,10 +1426,10 @@ async fn calls_with_the_sentinel() -> (Response<Answers>, Vec<Error>) {
 #[tokio::test]
 async fn user_data_not_printed_by_an_error_a_response_or_an_event() {
     #[cfg(feature = "tracing")]
-    let events = every_event::EveryEvent::default();
+    let events = recorder::Recorder::default();
     let (response, errors) = {
         #[cfg(feature = "tracing")]
-        let _installed = events.install();
+        let _installed = recorder::install(&events);
         calls_with_the_sentinel().await
     };
 
@@ -1445,8 +1455,9 @@ async fn user_data_not_printed_by_an_error_a_response_or_an_event() {
     }
     #[cfg(feature = "tracing")]
     {
-        let lines = events.lines();
-        assert!(!events.of(ADAPTER_TARGET).is_empty(), "{lines:?}");
+        let lines = events.all();
+        assert!(!lines_of(&lines, ADAPTER_TARGET).is_empty(), "{lines:?}");
+        assert!(!events.at(tracing::Level::DEBUG).is_empty(), "{lines:?}");
         texts.extend(lines);
     }
 
