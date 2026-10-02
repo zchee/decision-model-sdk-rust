@@ -4,25 +4,27 @@
 //!
 //! Edition 2024 makes `std::env::set_var` unsafe, and this workspace forbids
 //! unsafe code, so a test cannot set `OPENAI_API_KEY` for itself. It calls
-//! [`replace`] instead: while the returned [`Replaced`] lives, every lookup a
-//! provider makes is answered from the variables set on it.
+//! [`replace`] instead: while the returned [`Replaced`] lives, this lookup
+//! is answered from the variables set on it.
 //!
-//! A build with the `internals` feature never reads the process environment
-//! for a provider, whether or not a replacement is in force: while none is,
-//! every variable is unset. A test in such a build that forgets [`replace`]
-//! therefore sees no variable of the process environment, and so never
-//! finds there the key of the machine it runs on, with which it could send
-//! a billed request. The same holds for any program built with the
-//! feature: the lookup its providers read their keys and base URLs through
-//! does not read the process environment.
+//! In a build with the `internals` feature this lookup never reads the
+//! process environment, whether or not a replacement is in force: while
+//! none is, it finds every variable unset. A test in such a build that
+//! forgets [`replace`] therefore sees no variable of the process
+//! environment through this lookup, and so never finds there the key of
+//! the machine it runs on, with which it could send a billed request. The
+//! same holds for any program built with the feature: the lookup its
+//! providers read their keys and base URLs through does not read the
+//! process environment.
 //!
-//! The replacement is process-wide, because a provider the client builds for
-//! itself reads its variables wherever the call happens to run. Tests that
-//! replace the environment therefore run one after another: [`replace`]
-//! waits until the previous [`Replaced`] is dropped. A test that builds a
-//! provider from the environment without calling [`replace`] sees no
-//! variable when no replacement is in force, and another test's variables
-//! when that test's replacement is in force in the same process.
+//! The replacement is process-wide: this lookup answers from it on whatever
+//! thread it is called, since the code that builds a provider need not run
+//! on the test's own thread. Tests that replace the environment therefore
+//! run one after another: [`replace`] waits until the previous [`Replaced`]
+//! is dropped. A test that reads through this lookup without calling
+//! [`replace`] finds no variable when no replacement is in force, and
+//! another test's variables when that test's replacement is in force in
+//! the same process.
 
 #![cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
 
