@@ -72,7 +72,7 @@ pub(crate) const CASSETTES: [&str; 25] = [
     "test_live_typesafe_response_matches_reference_shape",
 ];
 
-const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cassettes");
+pub(crate) const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cassettes");
 
 /// The request headers upstream's recorder strips (`U:tests/conftest.py:25-34`).
 const FILTERED_HEADERS: [&str; 8] = [

@@ -12,6 +12,7 @@ mod cassette;
 mod expected;
 
 use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use cassette::{CASSETTES, Cassette, first_difference};
 use http::{Method, StatusCode, Uri};
@@ -479,4 +480,124 @@ fn cassette_reader_refuses_response_header_outside_allowlist() {
         let message = refusal(&changed, &format!("/interactions/0/response/headers/{name}"));
         assert!(message.contains("outside upstream's allowlist `content-type`"), "{message}");
     }
+}
+
+/// What `name_set` finds in a directory against a name list.
+#[derive(Debug, PartialEq)]
+struct NameSet {
+    /// The file names that are not `<name>.json` of a listed name, sorted.
+    unlisted: Vec<String>,
+    /// The listed names without a `<name>.json` file, sorted.
+    missing: Vec<String>,
+}
+
+/// Compares the entries of `dir` with `names`: every entry must be the file
+/// `<name>.json` of one listed name, and every listed name must have one.
+/// Any other entry (another extension, a subdirectory) is unlisted.
+fn name_set(dir: &Path, names: &[&str]) -> NameSet {
+    let listed: BTreeSet<String> = names.iter().map(|name| format!("{name}.json")).collect();
+    let present: BTreeSet<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("{}: {error}", dir.display()))
+        .map(|entry| {
+            let entry = entry.unwrap_or_else(|error| panic!("{}: {error}", dir.display()));
+            entry.file_name().to_string_lossy().into_owned()
+        })
+        .collect();
+    NameSet {
+        unlisted: present.difference(&listed).cloned().collect(),
+        missing: listed
+            .difference(&present)
+            .map(|file| file.strip_suffix(".json").expect("a listed file name").to_owned())
+            .collect(),
+    }
+}
+
+/// A directory under the system's temporary directory, named after the test
+/// and the process, removed with everything in it when dropped (also when an
+/// assertion fails).
+struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    fn new(test: &str) -> Self {
+        let path = std::env::temp_dir()
+            .join(format!("typesafe-sdk-rust-adapter-{test}-{}", std::process::id()));
+        std::fs::create_dir(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        Self(path)
+    }
+
+    /// Creates the empty file `name` in the directory.
+    fn touch(&self, name: &str) {
+        let path = self.0.join(name);
+        std::fs::write(&path, b"").unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            eprintln!("{}: not removed: {error}", self.0.display());
+        }
+    }
+}
+
+/// `name_set` on a scratch directory holding a file for each of `names` and
+/// one unlisted file names that file; with one listed file removed, it names
+/// that name as missing.
+fn name_set_names_what_differs(test: &str, names: &[&str]) {
+    let dir = ScratchDir::new(test);
+    for name in names {
+        dir.touch(&format!("{name}.json"));
+    }
+    dir.touch("test_live_unlisted.json");
+    assert_eq!(
+        name_set(&dir.0, names),
+        NameSet { unlisted: vec!["test_live_unlisted.json".to_owned()], missing: Vec::new() },
+    );
+
+    let removed = names.last().expect("a name list is not empty");
+    let path = dir.0.join(format!("{removed}.json"));
+    std::fs::remove_file(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    assert_eq!(
+        name_set(&dir.0, names),
+        NameSet {
+            unlisted: vec!["test_live_unlisted.json".to_owned()],
+            missing: vec![(*removed).to_owned()],
+        },
+    );
+}
+
+#[test]
+fn cassette_name_set_equals_the_fixture_directory() {
+    let set = name_set(Path::new(cassette::DIR), &CASSETTES);
+    assert_eq!(set, NameSet { unlisted: Vec::new(), missing: Vec::new() }, "{}", cassette::DIR);
+
+    // 24 vendor cases, each replayed by `tests/providers_<vendor>.rs`, and the
+    // TypeSafe one, named in the list as deliberately unreplayed.
+    let unreplayed: Vec<&str> =
+        CASSETTES.into_iter().filter(|name| vendor(name).is_none()).collect();
+    assert_eq!(CASSETTES.len() - unreplayed.len(), 24);
+    assert_eq!(unreplayed, ["test_live_typesafe_response_matches_reference_shape"]);
+}
+
+#[test]
+fn cassette_name_set_check_names_an_unlisted_file() {
+    name_set_names_what_differs("cassette_name_set", &CASSETTES);
+}
+
+#[test]
+fn expected_name_set_equals_the_fixture_directory() {
+    let set = name_set(Path::new(expected::DIR), &expected::EXPECTED);
+    assert_eq!(set, NameSet { unlisted: Vec::new(), missing: Vec::new() }, "{}", expected::DIR);
+
+    // 12 vendor cases, each compared by `tests/providers_<vendor>.rs`, and the
+    // TypeSafe one, named in the list as deliberately unread.
+    let unread: Vec<&str> =
+        expected::EXPECTED.into_iter().filter(|name| vendor(name).is_none()).collect();
+    assert_eq!(expected::EXPECTED.len() - unread.len(), 12);
+    assert_eq!(unread, ["test_live_typesafe_response_matches_reference_shape"]);
+}
+
+#[test]
+fn expected_name_set_check_names_an_unlisted_file() {
+    name_set_names_what_differs("expected_name_set", &expected::EXPECTED);
 }

@@ -38,7 +38,8 @@ pub(crate) const EXPECTED: [&str; 13] = [
     "test_live_typesafe_response_matches_reference_shape",
 ];
 
-const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/expected_responses");
+pub(crate) const DIR: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/expected_responses");
 
 /// Reads the expected response `name`, one of `EXPECTED`.
 ///
