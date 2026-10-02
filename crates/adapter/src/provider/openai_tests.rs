@@ -227,10 +227,14 @@ async fn neither_the_provider_nor_its_builder_prints_the_key_or_the_base_url() {
         format!("{builder:#?}"),
         format!("{provider:?}"),
         format!("{provider:#?}"),
+        // The transport inside it, which no integration test can reach.
+        format!("{:?}", provider.service),
+        format!("{:#?}", provider.service),
     ] {
         assert!(!text.contains(KEY), "{text}");
         assert!(!text.contains("secret-path"), "{text}");
     }
+    assert_eq!(format!("{:?}", provider.service), "Transport { extra_roots: 0 }");
 }
 
 /// The `Config` error `builder` is refused with, after checking that no
