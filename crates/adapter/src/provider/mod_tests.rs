@@ -182,7 +182,7 @@ fn debug_of_a_schema_prints_its_length() {
 fn an_attempt_trace_keeps_text_that_is_not_json_as_a_json_string() {
     let mut trace = AttemptTrace::default();
 
-    trace.record_request("not json at all", "chat.completions");
+    trace.record_request("not json at all", "chat_completions");
     trace.record_response("{\"partial\":", None);
 
     assert_eq!(trace.request(), Some("\"not json at all\""));

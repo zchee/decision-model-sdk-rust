@@ -1,9 +1,5 @@
 #![doc = include_str!("../README.md")]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![allow(
-    dead_code,
-    reason = "frozen API items whose callers arrive with later lanes; removed when the last provider lane merges"
-)]
 
 mod client;
 mod convert;
@@ -60,6 +56,8 @@ pub use crate::provider::http::{Transport, TransportBody, TransportFuture};
 pub use crate::client::{Client, ClientBuilder, Request};
 
 // The OpenAI provider, for OpenAI's API and the services that speak it.
+#[cfg(feature = "openai")]
+pub use crate::provider::openai::{OpenAiApi, OpenAiProvider, OpenAiProviderBuilder};
 
 // The Anthropic provider.
 #[cfg(feature = "anthropic")]
