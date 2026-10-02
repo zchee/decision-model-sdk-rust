@@ -161,11 +161,12 @@ impl Error {
     /// `message` is used exactly as given, neither escaped nor shortened:
     /// text that a server or a transport chose should be made safe to print
     /// first. `cause` is the transport's own error, kept as the
-    /// [`source`](StdError::source) so a caller can downcast to it. The cause
-    /// is printed by `Debug` and returned by `source()`, so it must not carry
-    /// a credential: an API key, a token, or a URL with userinfo or a key in
-    /// its query. Outside a [`Client`](crate::Client) the error stays as it
-    /// was built: nothing is redacted.
+    /// [`source`](StdError::source). Outside a [`Client`](crate::Client) the
+    /// error stays as it was built, nothing is redacted, and a caller can
+    /// downcast `source()` to the cause; under a `Client` it can too, unless
+    /// the client replaced the cause, as below. The cause is printed by
+    /// `Debug` and returned by `source()`, so it must not carry a credential:
+    /// an API key, a token, or a URL with userinfo or a key in its query.
     ///
     /// A custom [`HttpService`](crate::HttpService) under the SDK's `Client`
     /// can fail with this error, boxed as its own error type: the client
@@ -397,7 +398,9 @@ impl ApiError {
     /// its message out of `body` as [`message`](Self::message) describes.
     ///
     /// The error names no endpoint ([`endpoint`](Self::endpoint) is `None`),
-    /// so `Display` is the status and the message alone. `headers` are kept
+    /// so `Display` is the status and the message, as
+    /// `429 Rate limit reached`, followed by ` (request_id=...)` when
+    /// `headers` hold a [`request_id`](Self::request_id). `headers` are kept
     /// for [`retry_after`](Self::retry_after) and
     /// [`request_id`](Self::request_id); `Debug` shows only their count and
     /// the body's length.
