@@ -1243,6 +1243,58 @@ async fn http_event_holds_method_log_uri_status_and_elapsed() {
     }
 }
 
+/// The events of `h2` and `hyper_util` are theirs, and what they print can
+/// change with a new version of either: this test reads every event of every
+/// target, where the test above reads the adapter's own.
+#[cfg(feature = "tracing")]
+#[tokio::test]
+async fn no_event_of_any_target_holds_the_key_or_the_base_urls_path() {
+    async fn answering_over(protocol: Protocol) -> TestServer {
+        TestServer::start(protocol, |_| async { json_response(StatusCode::OK, r#"{"ok":true}"#) })
+            .await
+            .expect("a loopback server")
+    }
+    let plain = answering_over(Protocol::Http1).await;
+    let secure = answering_over(Protocol::Http2Tls).await;
+    let root = secure.certificate_der().expect("a TLS server has a certificate").to_vec();
+    let service = Transport::new(vec![root]).expect("the transport builds");
+    let recorder = recorder::Recorder::default();
+    let installed = recorder::install(&recorder);
+
+    for server in [&plain, &secure] {
+        // A caller's path prefix, which no event may name.
+        let fixture = Fixture::new(&format!("{}/team-a/v1", server.base_url()), limits(None));
+        fixture.post(&service).await.expect("it answers").expect("it is JSON");
+    }
+    drop(installed);
+
+    // The key and the prefix did travel, over HTTP/1.1 and over HTTP/2 with
+    // TLS, so an event had the chance to print them.
+    for (server, version) in [(&plain, Version::HTTP_11), (&secure, Version::HTTP_2)] {
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].version, version);
+        assert_eq!(requests[0].uri.path(), "/team-a/v1/responses");
+        assert_eq!(requests[0].header_values("authorization"), [format!("Bearer {KEY}")]);
+    }
+
+    // The events are not the adapter's alone: the HTTP/2 codec's and the
+    // connection pool's are among them.
+    let lines = recorder.all();
+    for target in ["system_one_adapter ", "h2::", "hyper_util::"] {
+        assert!(
+            lines.iter().any(|line| line.starts_with(target)),
+            "no event of {target:?} among {} events",
+            lines.len()
+        );
+    }
+    for line in &lines {
+        assert_eq!(occurrences(line, KEY), 0, "{line}");
+        assert_eq!(occurrences(line, "Bearer"), 0, "{line}");
+        assert_eq!(occurrences(line, "team-a"), 0, "{line}");
+    }
+}
+
 // ------------------------------------------------------ the default transport
 
 #[tokio::test]
