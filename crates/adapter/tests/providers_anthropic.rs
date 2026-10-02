@@ -9,6 +9,9 @@
 mod cassette;
 #[path = "support/expected.rs"]
 mod expected;
+#[cfg(feature = "tracing")]
+#[path = "support/recorder.rs"]
+mod recorder;
 
 use std::{
     error::Error as StdError,
@@ -783,6 +786,89 @@ async fn foreign_service_error_holding_the_headers_shows_no_key() {
     assert_eq!(occurrences(&trace, KEY), 0);
 }
 
+// ------------------------- a failure response the HTTP module does not show
+
+/// What the two cases below share: one call through a client without a
+/// retry budget fails with an API error of `status` whose text is `status`
+/// and then the fixed `sentence`; one request was made; and the key is in no
+/// rendering of the error, of a link below it, or of the serialized trace.
+async fn assert_fixed_failure_text(
+    server: &TestServer,
+    provider: AnthropicProvider,
+    status: StatusCode,
+    sentence: &str,
+) {
+    let client = Client::builder(StructuredOutputs::Native, AnswerMode::Discrete)
+        .provider_instance(Arc::new(provider))
+        .build()
+        .expect("the client builds");
+    let questions = positive();
+
+    let error = client.system_one(DOCUMENT, &questions).send().await.expect_err("a failure status");
+
+    let ErrorKind::Provider(failure) = error.kind() else {
+        panic!("expected a provider failure, got {error:?}");
+    };
+    let SdkErrorKind::Api(api) = failure.kind() else {
+        panic!("expected an API error, got {failure:?}");
+    };
+    assert_eq!(api.status(), status);
+    assert_eq!(api.message(), sentence);
+    assert_eq!(error.to_string(), format!("{} {sentence}", status.as_u16()));
+    assert_eq!(server.request_count(), 1);
+    for link in chain(&error) {
+        for text in [link.to_string(), format!("{link:?}"), format!("{link:#?}")] {
+            assert_eq!(occurrences(&text, KEY), 0, "{text}");
+        }
+    }
+    let debug = error.debug().expect("the failed attempt leaves a trace");
+    assert_eq!(debug.attempts().len(), 1);
+    assert_eq!(debug.attempts()[0].error(), Some(error.to_string().as_str()));
+    assert_eq!(debug.attempts()[0].response(), None);
+    let trace = serde_json::to_string(debug).expect("the trace serializes");
+    assert_eq!(occurrences(&trace, KEY), 0, "the serialized trace holds the key");
+}
+
+#[tokio::test]
+async fn a_failure_body_over_the_size_limit_is_reported_with_a_fixed_text() {
+    // 65 bytes of JSON against a limit of 64.
+    let body = format!("\"{}\"", "x".repeat(63));
+    assert_eq!(body.len(), 65);
+    let server = answering(StatusCode::BAD_GATEWAY, body).await;
+    let provider =
+        builder(server.base_url()).max_response_bytes(64).build().expect("the provider builds");
+
+    assert_fixed_failure_text(
+        &server,
+        provider,
+        StatusCode::BAD_GATEWAY,
+        "The response body was larger than the limit and is not shown.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_failure_body_that_repeats_the_key_is_not_shown() {
+    // A gateway that quotes the header it refused.
+    let body = json!({
+        "type": "error",
+        "error": {"type": "authentication_error", "message": format!("invalid x-api-key: {KEY}")},
+    })
+    .to_string();
+    assert_eq!(occurrences(&body, KEY), 1);
+    let server = answering(StatusCode::UNAUTHORIZED, body).await;
+    let provider = builder(server.base_url()).build().expect("the provider builds");
+
+    assert_fixed_failure_text(
+        &server,
+        provider,
+        StatusCode::UNAUTHORIZED,
+        "The response's body and headers are not shown, \
+         because showing them could reveal the API key.",
+    )
+    .await;
+}
+
 // ------------------------------------------- AC-P4: the key is never printed
 
 /// One error of every path a call or a build can fail on, each named.
@@ -945,99 +1031,22 @@ async fn key_never_printed_in_a_trace_or_a_debug_of_what_holds_it() {
     }
 }
 
-/// Every event of every target and level, each as one line of text: the
-/// level, the target, then every field as ` name=value`.
+/// The lines of `lines` whose target is `target`: a recorded line starts
+/// with its target.
 #[cfg(feature = "tracing")]
-mod events {
-    use std::{
-        fmt::{self, Write as _},
-        sync::{Arc, Mutex},
-    };
-
-    use tracing::{
-        Dispatch, Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-        subscriber::{DefaultGuard, NoSubscriber},
-    };
-
-    /// The target of the adapter's own events.
-    pub(crate) const ADAPTER: &str = "system_one_adapter";
-
-    /// The target of the SDK's events, the retry line among them.
-    pub(crate) const SDK: &str = "typesafe_sdk";
-
-    #[derive(Clone, Default)]
-    pub(crate) struct Events(Arc<Mutex<Vec<(String, String)>>>);
-
-    impl Events {
-        /// This recorder as the thread's subscriber until the guard drops.
-        /// The tests run on a current-thread runtime, so the transport's and
-        /// the test server's tasks log to it too. A second dispatcher is
-        /// held with it, so that a callsite another test's thread reached
-        /// first still asks this subscriber.
-        pub(crate) fn install(&self) -> (DefaultGuard, Dispatch) {
-            let second = Dispatch::new(NoSubscriber::default());
-            (tracing::subscriber::set_default(self.clone()), second)
-        }
-
-        /// Every line recorded so far, of every target.
-        pub(crate) fn lines(&self) -> Vec<String> {
-            self.0.lock().expect("not poisoned").iter().map(|(_, line)| line.clone()).collect()
-        }
-
-        /// The lines of the events whose target is `target`.
-        pub(crate) fn of(&self, target: &str) -> Vec<String> {
-            let events = self.0.lock().expect("not poisoned");
-            events.iter().filter(|(at, _)| at == target).map(|(_, line)| line.clone()).collect()
-        }
-    }
-
-    struct Line(String);
-
-    impl Visit for Line {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            write!(self.0, " {}={value:?}", field.name()).expect("a String takes any write");
-        }
-    }
-
-    impl Subscriber for Events {
-        /// Everything, down to `TRACE`.
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, attributes: &span::Attributes<'_>) -> span::Id {
-            // A span's fields are text too: they are kept as a line.
-            let metadata = attributes.metadata();
-            let mut line = Line(format!("{} {} span", metadata.level(), metadata.target()));
-            attributes.record(&mut line);
-            self.0.lock().expect("not poisoned").push((metadata.target().to_owned(), line.0));
-            span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            let metadata = event.metadata();
-            let mut line = Line(format!("{} {}", metadata.level(), metadata.target()));
-            event.record(&mut line);
-            self.0.lock().expect("not poisoned").push((metadata.target().to_owned(), line.0));
-        }
-
-        fn enter(&self, _: &span::Id) {}
-
-        fn exit(&self, _: &span::Id) {}
-    }
+fn of_target<'a>(lines: &'a [String], target: &str) -> Vec<&'a str> {
+    lines
+        .iter()
+        .filter(|line| line.strip_prefix(target).is_some_and(|rest| rest.starts_with(' ')))
+        .map(String::as_str)
+        .collect()
 }
 
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn key_never_printed_in_an_event_of_any_target() {
-    let recorded = events::Events::default();
-    let _installed = recorded.install();
+    let recorded = recorder::Recorder::default();
+    let _installed = recorder::install(&recorded);
 
     // Every error path, and an answer over HTTP/1.1.
     let paths = error_paths().await.len();
@@ -1079,14 +1088,14 @@ async fn key_never_printed_in_an_event_of_any_target() {
     assert_eq!(secure.requests()[0].header_values("x-api-key"), [KEY], "the key was sent");
     assert_eq!(plain.requests()[0].header_values("x-api-key"), [KEY], "the key was sent");
 
-    let lines = recorded.lines();
+    let lines = recorded.all();
     for line in &lines {
         assert_eq!(occurrences(line, KEY), 0, "{line}");
         assert_eq!(occurrences(line, "tenant-4b1e"), 0, "{line}");
     }
     // The capture is not empty: the adapter logged one exchange per request
     // that reached the transport and one line per attempt.
-    let adapter = recorded.of(events::ADAPTER);
+    let adapter = recorded.at(tracing::Level::DEBUG);
     let exchanges = adapter.iter().filter(|line| line.contains(" method=POST ")).count();
     let attempts = adapter.iter().filter(|line| line.contains(" attempt=")).count();
     assert_eq!(paths, 7);
@@ -1098,8 +1107,8 @@ async fn key_never_printed_in_an_event_of_any_target() {
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn key_never_printed_in_the_retry_line_of_a_base_url_that_holds_it() {
-    let recorded = events::Events::default();
-    let _installed = recorded.install();
+    let recorded = recorder::Recorder::default();
+    let _installed = recorder::install(&recorded);
     let body = reply(Some("end_turn"), answer_content()).to_string();
     let server = TestServer::start_nth(Protocol::Http1, move |served, _| match served {
         1 => {
@@ -1126,16 +1135,17 @@ async fn key_never_printed_in_the_retry_line_of_a_base_url_that_holds_it() {
     assert_eq!(requests[1].uri.path(), format!("/{KEY}/v1/v1/messages"), "the prefix is kept");
 
     let port = server.addr().port();
-    let sdk = recorded.of(events::SDK);
-    let retries: Vec<&String> = sdk.iter().filter(|line| line.contains(" retry ")).collect();
+    let lines = recorded.all();
+    let sdk = of_target(&lines, "typesafe_sdk");
+    let retries: Vec<&str> = sdk.iter().copied().filter(|line| line.contains(" retry ")).collect();
     assert_eq!(retries.len(), 1, "exactly one retry line: {sdk:#?}");
     assert!(
         retries[0].contains(&format!("POST http://127.0.0.1:{port}/v1/messages retry 1")),
         "the line names the vendor's fixed path: {}",
         retries[0]
     );
-    for line in recorded.lines() {
-        assert_eq!(occurrences(&line, KEY), 0, "{line}");
+    for line in &lines {
+        assert_eq!(occurrences(line, KEY), 0, "{line}");
     }
     // The key in the trace's bodies is not this test's subject: no body
     // holds a header or a URL.
@@ -1155,9 +1165,9 @@ fn trace_renderings(debug: &Trace) -> Vec<String> {
 #[tokio::test]
 async fn user_data_not_printed() {
     #[cfg(feature = "tracing")]
-    let recorded = events::Events::default();
+    let recorded = recorder::Recorder::default();
     #[cfg(feature = "tracing")]
-    let _installed = recorded.install();
+    let _installed = recorder::install(&recorded);
 
     let state = json!({"review": format!("A delightful book. {SENTINEL}"), "stars": 5});
     let questions = positive();
@@ -1208,9 +1218,9 @@ async fn user_data_not_printed() {
 
     #[cfg(feature = "tracing")]
     {
-        let lines = recorded.lines();
-        assert!(!recorded.of(events::ADAPTER).is_empty(), "the adapter logged the exchanges");
-        assert!(!recorded.of(events::SDK).is_empty(), "the SDK logged the retries");
+        let lines = recorded.all();
+        assert!(!recorded.at(tracing::Level::DEBUG).is_empty(), "the adapter logged the exchanges");
+        assert!(!of_target(&lines, "typesafe_sdk").is_empty(), "the SDK logged the retries");
         for line in &lines {
             assert_eq!(occurrences(line, SENTINEL), 0, "{line}");
         }
