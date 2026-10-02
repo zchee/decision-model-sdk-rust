@@ -158,24 +158,31 @@ impl Error {
     /// The request failed without an HTTP response: an
     /// [`ErrorKind::Connection`] whose `Display` is `message`.
     ///
-    /// `cause` is the transport's own error, kept as the
-    /// [`source`](StdError::source) so a caller can downcast to it. Inside the
-    /// SDK's own transport, a cause that held a credential of the request is
-    /// replaced by a private redacted copy that cannot be downcast; a caller
-    /// building this error has no such step. The cause is printed by `Debug`
-    /// and returned by `source()`, so it must not carry a credential: an API
-    /// key, a token, or a URL with userinfo or a key in its query.
+    /// `message` is used exactly as given, neither escaped nor shortened:
+    /// text that a server or a transport chose should be made safe to print
+    /// first. `cause` is the transport's own error, kept as the
+    /// [`source`](StdError::source). Outside a [`Client`](crate::Client) the
+    /// error stays as it was built, nothing is redacted, and a caller can
+    /// downcast `source()` to the cause; under a `Client` it can too, unless
+    /// the client replaced the cause, as below. The cause is printed by
+    /// `Debug` and returned by `source()`, so it must not carry a credential:
+    /// an API key, a token, or a URL with userinfo or a key in its query.
     ///
-    /// A custom [`HttpService`](crate::HttpService) under the SDK's
-    /// [`Client`](crate::Client) can fail with this error, boxed as its own
-    /// error type: the SDK passes an error of its own type through unchanged
-    /// (`transport::connection`) instead of wrapping it in a new connection
-    /// error. Such a transport so chooses the retry class of its failures, a
-    /// connection failure retried while
+    /// A custom [`HttpService`](crate::HttpService) under the SDK's `Client`
+    /// can fail with this error, boxed as its own error type: the client
+    /// keeps an error of the SDK's own type, and so its kind, instead of
+    /// wrapping it in a new connection error. Such a transport so chooses the
+    /// retry class of its failures: a connection failure, retried while
     /// [`RetryPolicy::api_connection_error`](crate::RetryPolicy::api_connection_error)
-    /// is on, or a [`timeout`](Self::timeout). This adds a way to build an
-    /// error; it does not change how an existing transport's errors are
-    /// classified.
+    /// is on, or a [`timeout`](Self::timeout). The client then redacts the
+    /// error as it redacts its own transport's: when the error has a cause,
+    /// and that cause, or the message after a leading `Connection error: `,
+    /// holds a credential of the request or the cause chain is longer than
+    /// 32 links, the message is rewritten to start with `Connection error: `
+    /// and the cause can be replaced by a redacted copy that cannot be
+    /// downcast. The kind, and so the retry class, stays the same. This adds
+    /// a way to build an error; it does not change how an existing
+    /// transport's errors are classified.
     ///
     /// ```
     /// use std::error::Error as _;
@@ -211,12 +218,12 @@ impl Error {
     ///
     /// A custom [`HttpService`](crate::HttpService) under the SDK's
     /// [`Client`](crate::Client) can fail with this error, boxed as its own
-    /// error type: the SDK passes an error of its own type through unchanged
-    /// (`transport::connection`) instead of wrapping it in a connection
-    /// error. Such a transport so chooses the retry class of its failures, a
-    /// timeout or a [`connection`](Self::connection) failure. This adds a way
-    /// to build an error; it does not change how an existing transport's
-    /// errors are classified.
+    /// error type: the client keeps an error of the SDK's own type, and so
+    /// its kind, instead of wrapping it in a connection error. Such a
+    /// transport so chooses the retry class of its failures, a timeout or a
+    /// [`connection`](Self::connection) failure. This adds a way to build an
+    /// error; it does not change how an existing transport's errors are
+    /// classified.
     ///
     /// ```
     /// use std::time::Duration;
@@ -318,9 +325,10 @@ impl StdError for Error {
     /// it is already what `Display` prints. A response-validation failure
     /// leads to the decode error that names the offending field, which carries
     /// a position `Display` leaves out. A connection failure leads to the
-    /// transport's own error, which a caller can downcast to - unless it held
-    /// a credential of the request, when it is a private redacted copy that
-    /// cannot be downcast.
+    /// transport's own error, which a caller can downcast to - unless the
+    /// SDK's [`Client`](crate::Client) replaced it because it held a
+    /// credential of the request or its chain was longer than 32 links, when
+    /// it is a private redacted copy that cannot be downcast.
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match &self.0.kind {
             ErrorKind::Api(_) => None,
@@ -392,7 +400,9 @@ impl ApiError {
     /// its message out of `body` as [`message`](Self::message) describes.
     ///
     /// The error names no endpoint ([`endpoint`](Self::endpoint) is `None`),
-    /// so `Display` is the status and the message alone. `headers` are kept
+    /// so `Display` is the status and the message, as
+    /// `429 Rate limit reached`, followed by ` (request_id=...)` when
+    /// `headers` hold a [`request_id`](Self::request_id). `headers` are kept
     /// for [`retry_after`](Self::retry_after) and
     /// [`request_id`](Self::request_id); `Debug` shows only their count and
     /// the body's length.

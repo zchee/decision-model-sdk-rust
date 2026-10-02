@@ -263,12 +263,12 @@ A custom transport under the SDK's `Client` (see Custom transport) can fail with
 `Error::timeout` or `Error::connection`, boxed as its own error type: the SDK does not wrap an
 error of its own type in a new connection error, so such a transport chooses the kind of its
 failures and with it their retry class. The `Client` still checks a connection error that has a
-cause, as it checks every attempt error of a transport: when the message holds a credential of
-the request, the message is rewritten; when a link of the cause chain holds one, or the chain is
-longer than 32 links, the cause is replaced by a redacted copy that cannot be downcast, and the
-message is rebuilt from that copy. The kind and the retry class never change. Outside a `Client`
-nothing is rewritten. This adds a way to build an error; it does not change how an existing
-transport's errors are classified.
+cause, as it checks every attempt error of a transport: when the message, after a leading
+`Connection error: `, holds a credential of the request, the message is rewritten; when a link of
+the cause chain holds one, or the chain is longer than 32 links, the cause is replaced by a
+redacted copy that cannot be downcast, and the message is rebuilt from that copy. The kind and
+the retry class never change. Outside a `Client` nothing is rewritten. This adds a way to build an
+error; it does not change how an existing transport's errors are classified.
 
 ## Retries
 

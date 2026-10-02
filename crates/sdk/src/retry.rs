@@ -314,9 +314,12 @@ impl RetryPolicy {
     /// are not printed, but the path is, so `uri` must carry no credential.
     ///
     /// The returned future is `Send` when `F` and `Fut` are, so it can be
-    /// spawned. Nothing here spawns a task: the waits between attempts are
-    /// awaited inside the returned future, and dropping it cancels the
-    /// attempt in flight and every retry after it.
+    /// spawned. It borrows `self`, `method` and `uri` until it completes, so
+    /// a spawned task cannot borrow them from its caller's stack: the example
+    /// below moves the policy and the URI into it.
+    /// Nothing here spawns a task: the waits between attempts are awaited
+    /// inside the returned future, and dropping it cancels the attempt in
+    /// flight and every retry after it.
     ///
     /// ```
     /// use std::time::Duration;
@@ -352,7 +355,7 @@ impl RetryPolicy {
         Fut: Future<Output = Result<R, Error>>,
     {
         // The loop's own future, not an `async fn` awaiting it, for the
-        // reason `run` gives.
+        // reason the crate-private `retry::run` gives.
         run(self, method, uri, attempt)
     }
 
@@ -722,6 +725,19 @@ where
 {
     run_on(&Tokio, policy, method, uri, attempt)
 }
+
+// The future of `RetryPolicy::run` that ships, the one above, is `Send` for a
+// `Send` attempt: checked by every build of the library, every feature set
+// included. The unit tests see the `cfg(test)` twin below instead.
+#[cfg(not(test))]
+const _: () = {
+    fn assert_send<T: Send>(_: &T) {}
+    #[expect(dead_code, reason = "compiled for its Send check, never called")]
+    fn check(policy: &RetryPolicy, method: &Method, uri: &Uri) {
+        let future = policy.run(method, uri, |_| async { Ok::<(), Error>(()) });
+        assert_send(&future);
+    }
+};
 
 /// [`run`], on the fake clock of the crate's own tests when the policy
 /// carries one.
