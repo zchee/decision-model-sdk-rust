@@ -650,6 +650,29 @@ fn a_stop_reason_is_escaped_and_cut_before_it_is_printed() {
     assert_eq!(message.chars().count(), "Anthropic did not answer: ".len() + 200 + 1);
 }
 
+/// An array whose members fill the reply by position, and every other JSON
+/// value that is not an object, is not read as a reply.
+#[test]
+fn a_body_that_is_not_an_object_is_not_read_as_a_reply() {
+    for body in [
+        "[null,[]]",
+        " \n[null,[],null]",
+        r#"["end_turn",[{"type":"text","text":"SECRET-BODY-TEXT"}]]"#,
+        "[]",
+        "null",
+        "7",
+        r#""SECRET-BODY-TEXT""#,
+    ] {
+        let mut trace = AttemptTrace::default();
+
+        let message = read_reply(body, &mut trace).expect_err("not a reply").to_string();
+
+        assert_eq!(message, "Anthropic did not answer: a body that is not the vendor's reply");
+        assert_eq!(trace.response().map(str::trim), Some(body.trim()), "{body}");
+        assert_eq!(trace.finish_reason(), None, "{body}");
+    }
+}
+
 #[tokio::test]
 async fn a_success_body_that_is_not_a_messages_reply_is_not_an_answer() {
     for body in [

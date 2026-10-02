@@ -467,10 +467,16 @@ struct Usage {
 /// limit, or stopped for any reason but `end_turn`, `stop_sequence` or none,
 /// is a non-answer naming the stop reason; so is a body that is JSON but not
 /// a Messages reply. No non-answer quotes the body.
+///
+/// Only a JSON object is a reply: a derived `Deserialize` also reads an
+/// array as a struct, member by position, and so would take `[null,[]]` for
+/// a reply with no stop reason and no text.
 fn read_reply(json: &str, trace: &mut AttemptTrace) -> Result<ProviderResult, NonAnswer> {
+    let object = json.trim_start().starts_with('{');
     // serde's own message can quote the body, so it is dropped for a fixed
     // text.
-    let Ok(reply) = serde_json::from_str::<MessagesReply>(json) else {
+    let Some(reply) = object.then(|| serde_json::from_str::<MessagesReply>(json).ok()).flatten()
+    else {
         trace.record_response(json, None);
         return Err(non_answer(VENDOR, "a body that is not the vendor's reply"));
     };
