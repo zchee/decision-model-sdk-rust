@@ -657,13 +657,17 @@ SDK in `crates/sdk`, `crates/macros`, `crates/test-support` and the System One a
 --workspace` compiles it, but not a default member. **Its tests make real, billed calls** on the
 key's account when both `DECISION_MODEL_LIVE_TESTS=1` and `DECISION_MODEL_API_KEY` are set and a command
 reaches them: `cargo test --workspace`, `cargo nextest run --workspace`, or anything naming
-`-p decision-model-sdk-live-tests`. They call TypeSafe AI's API (`https://api.typesafe.ai`,
-model `jev-latest`, both named in the crate), so the key must be one it issued. Without either
-variable they fail, never skip, before any request is made, so a key exported for other work does not make `--workspace` bill anyone; it
-makes those tests fail instead. Run them only on purpose:
+`-p decision-model-sdk-live-tests`. They build their client from the environment, so they run
+against the vendor that `DECISION_MODEL_BASE_URL` and `DECISION_MODEL_DEFAULT_MODEL` name, with
+that vendor's key; without either of those two the SDK's own `Config` error fails them. Without
+the opt-in or the key they fail, never skip, before any request is made, so a key exported for
+other work does not make `--workspace` bill anyone; it makes those tests fail instead. Run them
+only on purpose:
 
 ```sh
-DECISION_MODEL_LIVE_TESTS=1 DECISION_MODEL_API_KEY=... cargo nextest run -p decision-model-sdk-live-tests
+DECISION_MODEL_LIVE_TESTS=1 DECISION_MODEL_API_KEY=... \
+  DECISION_MODEL_BASE_URL=https://api.typesafe.ai DECISION_MODEL_DEFAULT_MODEL=jev-latest \
+  cargo nextest run -p decision-model-sdk-live-tests
 ```
 
 `crates/adapter-live-tests` is the second billed member: the adapter's tests against the live

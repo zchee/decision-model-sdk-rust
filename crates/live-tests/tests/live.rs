@@ -1,9 +1,16 @@
 //! The Python SDK's `tests/test_integration.py`, against the live API, and
 //! the idle-connection check.
 //!
-//! Run them with
-//! `DECISION_MODEL_LIVE_TESTS=1 cargo nextest run -p decision-model-sdk-live-tests`;
-//! nothing else in the repository runs them.
+//! Run them with the vendor's API and model in the environment, for
+//! TypeSafe AI's:
+//!
+//! ```sh
+//! DECISION_MODEL_LIVE_TESTS=1 DECISION_MODEL_API_KEY=... \
+//!     DECISION_MODEL_BASE_URL=https://api.typesafe.ai DECISION_MODEL_DEFAULT_MODEL=jev-latest \
+//!     cargo nextest run -p decision-model-sdk-live-tests
+//! ```
+//!
+//! Nothing else in the repository runs them.
 
 use std::{
     collections::BTreeMap,
