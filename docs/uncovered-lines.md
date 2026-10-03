@@ -117,10 +117,9 @@ the merged report (14 lines); neither backend is represented only by the other.
 
 ## The System One adapter (`crates/adapter`)
 
-Measured at commit `6c00e6f` on 2026-10-03 (every line number below is a line
-of that commit; `main` at `0789254` has the same `crates/adapter/src`), on macOS
-arm64 with rustc 1.98.1 and cargo-llvm-cov 0.9.1, in CI's form (no target
-directory configuration):
+Measured at commit `be5c33d` on 2026-10-03 (every line number below is a line
+of that commit), on macOS arm64 with rustc 1.98.1 and cargo-llvm-cov 0.9.1, in
+CI's form (no target directory configuration):
 
 ```sh
 env -u RUSTFLAGS cargo llvm-cov clean --workspace
@@ -128,7 +127,7 @@ env -u RUSTFLAGS cargo llvm-cov nextest -p decision-model-adapter --all-features
 env -u RUSTFLAGS cargo llvm-cov report -p decision-model-adapter --fail-under-lines 85 --show-missing-lines
 ```
 
-The run passes 550 tests of the adapter package. It uses the default serde_json
+The run passes 559 tests of the adapter package. It uses the default serde_json
 backend; the test run under serde_json's `arbitrary_precision` feature is not
 part of this report. CI's `coverage` job holds the adapter to 85% line coverage.
 
@@ -136,25 +135,26 @@ part of this report. CI's `coverage` job holds the adapter to 85% line coverage.
 
 | Lines | Missed | Line coverage | Regions | Missed | Functions | Missed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 3,156 | 58 | **98.16%** | 5,233 | 175 | 486 | 11 |
+| 3,198 | 60 | **98.12%** | 5,311 | 179 | 495 | 11 |
 
-The summary reports 58 missed lines; `--show-missing-lines` lists 49 distinct
-source lines, below, that no instantiation reaches. The files under
+The summary reports 60 missed lines, 2 of them in `provider/gemini.rs`;
+`--show-missing-lines` lists 49 distinct source lines, below, that no
+instantiation reaches. No line of the files under
 `crates/adapter/src/__internals/`, `metrics.rs`, `retry.rs`, `run.rs`,
-`schema.rs`, `provider/factory.rs` and the three provider modules are fully
-covered.
+`schema.rs`, `provider/factory.rs` or the three provider modules is in that
+list.
 
 ### `crates/adapter/src/client.rs`
 
 | Lines | Why |
 | --- | --- |
-| 445-449, 473-475 | The answers of `Client::ask` that do not fit the question set's type. A derived question set always fits the answers of its own prepared questions; only a hand-written `AnswerSet` that disagrees with its own questions reaches these lines. |
+| 478-482, 506-508 | The answers of `Client::ask` that do not fit the question set's type. A derived question set always fits the answers of its own prepared questions; only a hand-written `AnswerSet` that disagrees with its own questions reaches these lines. |
 
 ### `crates/adapter/src/convert.rs`
 
 | Lines | Why |
 | --- | --- |
-| 149-150 | The SDK refusing a score criterion's JSON. The criterion was read as one JSON value when the questions were checked, so the SDK's `Content` accepts it; the error is defensive. |
+| 150-151 | The SDK refusing a score criterion's JSON. The criterion was read as one JSON value when the questions were checked, so the SDK's `Content` accepts it; the error is defensive. |
 
 ### `crates/adapter/src/decode.rs`
 
@@ -166,7 +166,7 @@ covered.
 
 | Lines | Why |
 | --- | --- |
-| 99-102 | The kind names `ResponseValidation`, `InvalidRequest`, `Config` and the catch-all for an SDK error a provider fails with. The built-in providers fail only with `Api`, `Connection`, `Timeout` and `ResponseTooLarge`; a provider of the caller's own could return the others. **Cheap to cover** with a scripted provider. |
+| 105-108 | The kind names `ResponseValidation`, `InvalidRequest`, `Config` and the catch-all for an SDK error a provider fails with. The built-in providers fail only with `Api`, `Connection`, `Timeout` and `ResponseTooLarge`; a provider of the caller's own could return the others. **Cheap to cover** with a scripted provider. |
 
 ### `crates/adapter/src/model.rs`
 
@@ -196,10 +196,10 @@ covered.
 
 | Lines | Why |
 | --- | --- |
-| 529-530, 532-533 | The message of an unknown provider name with no provider or with one provider compiled in. This run has all three providers; a unit test checks the text with none in the `--no-default-features` test run, which is not part of this report. |
+| 547-548, 550-551 | The arms of `compiled_in()`, the sentence of an unknown provider name, for fewer than three providers: 547-548 for no provider, 550 for one, 551 for two. This run has all three providers. A unit test checks the text with none in the `--no-default-features` test run, which is not part of this report; 550 and 551 are reached only in a run with exactly one or two provider features. |
 
 ### `crates/adapter/src/response.rs`
 
 | Lines | Why |
 | --- | --- |
-| 287 | The error path of serializing `original_probabilities`. Serializing into a `String` with `serde_json` does not fail; the `?` is what a generic serializer needs. |
+| 290 | The error path of serializing `original_probabilities`. Serializing into a `String` with `serde_json` does not fail; the `?` is what a generic serializer needs. |
