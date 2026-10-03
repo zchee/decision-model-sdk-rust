@@ -13,12 +13,12 @@
 
 use std::{fmt, fs, path::Path};
 
+use decision_model_adapter::__internals::metrics::{
+    choice_confidence, expected_score, score_confidence,
+};
 use serde::{
     Deserialize, Deserializer,
     de::{MapAccess, Visitor},
-};
-use system_one_adapter::__internals::metrics::{
-    choice_confidence, expected_score, score_confidence,
 };
 
 /// The file-name prefix of the expected responses the adapter produced from a

@@ -12,15 +12,15 @@ mod scripted;
 use std::{collections::HashMap, error::Error as _, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode};
-use serde::Serialize;
-use serde_json::{Value, json};
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, Answers, AttemptTrace, Choice, Client, ClientBuilder, Error, ErrorKind, Message,
     NonAnswer, Noul, PreparedQuestions, Provider, ProviderCall, ProviderResult, QuestionSet,
     Questions, Response, RetryCategory, RetryPolicy, Role, Schema, Score, StructuredOutputs,
-    typesafe_sdk::{self, ApiError, RawQuestion},
+    decision_model_sdk::{self, ApiError, RawQuestion},
 };
+use http::{HeaderMap, StatusCode};
+use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::{
     answer_set::{Review, review_questions},
@@ -116,7 +116,7 @@ fn error_categories(error: &Error) -> Vec<RetryCategory> {
 fn api_status(error: &Error) -> u16 {
     match error.kind() {
         ErrorKind::Provider(error) => match error.kind() {
-            typesafe_sdk::ErrorKind::Api(api) => api.status().as_u16(),
+            decision_model_sdk::ErrorKind::Api(api) => api.status().as_u16(),
             other => panic!("expected an API error, got {other:?}"),
         },
         other => panic!("expected a provider failure, got {other:?}"),
@@ -1145,9 +1145,9 @@ async fn the_retry_line_names_the_log_uri_of_the_provider() {
             .await
             .expect("the third attempt answers");
 
-        assert_eq!(events.of("typesafe_sdk", Level::INFO), expected, "{:?}", events.all());
+        assert_eq!(events.of("decision_model_sdk", Level::INFO), expected, "{:?}", events.all());
         for level in [Level::ERROR, Level::WARN, Level::DEBUG, Level::TRACE] {
-            assert!(events.of("typesafe_sdk", level).is_empty(), "{:?}", events.all());
+            assert!(events.of("decision_model_sdk", level).is_empty(), "{:?}", events.all());
         }
     }
 }

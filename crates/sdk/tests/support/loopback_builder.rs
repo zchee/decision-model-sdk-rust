@@ -1,8 +1,8 @@
 //! The start of a client of a loopback test server, for the targets that
 //! talk to one over each protocol.
 
+use decision_model_sdk::{Client, ClientBuilder, HttpVersion};
 use test_support::{Protocol, TestServer};
-use typesafe_sdk::{Client, ClientBuilder, HttpVersion};
 
 /// A builder for a client of `server`: trusting its certificate when it has
 /// one, and speaking prior-knowledge HTTP/2 to an h2c server.

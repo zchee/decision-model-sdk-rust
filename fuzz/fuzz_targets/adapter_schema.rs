@@ -17,9 +17,9 @@
 
 use std::hint::black_box;
 
+use decision_model_adapter::{__internals::schema::schema, AnswerMode};
 use libfuzzer_sys::fuzz_target;
 use serde_json::{Map, Value};
-use system_one_adapter::{__internals::schema::schema, AnswerMode};
 
 fuzz_target!(|data: &[u8]| {
     let Ok(questions) = str::from_utf8(data) else { return };

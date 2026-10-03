@@ -7,8 +7,10 @@
 
 use std::{fs, path::Path};
 
+use decision_model_adapter::{
+    __internals::schema::schema, AnswerMode, Choice, Noul, Questions, Score,
+};
 use serde_json::Value;
-use system_one_adapter::{__internals::schema::schema, AnswerMode, Choice, Noul, Questions, Score};
 
 /// The first line of upstream's schema instruction and the empty line after
 /// it; the schema text starts right behind them.

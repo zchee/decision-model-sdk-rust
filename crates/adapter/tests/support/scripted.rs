@@ -5,13 +5,13 @@
 
 use std::{fmt, sync::Mutex};
 
-use system_one_adapter::{
+use decision_model_adapter::{
     AttemptTrace, BoxFuture, Message, NonAnswer, Provider, ProviderCall, ProviderResult,
-    typesafe_sdk,
+    decision_model_sdk,
 };
 
 /// What one call of a provider ends with.
-pub(crate) type Exchange = Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>;
+pub(crate) type Exchange = Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>;
 
 /// One step of a script: called once per provider call it serves, with the
 /// record of that attempt, so a step can record a request and a response as a

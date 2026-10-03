@@ -49,13 +49,13 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri};
-use http_body_util::BodyExt as _;
-use tower_service::Service;
-use typesafe_sdk::{
+use decision_model_sdk::{
     __internals as sdk, Body, Choice, ClientBuilder, Noul, PreparedQuestions, Questions,
     RetryPolicy, Score, response::Answers,
 };
+use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, Uri};
+use http_body_util::BodyExt as _;
+use tower_service::Service;
 
 use crate::support::measure_min;
 

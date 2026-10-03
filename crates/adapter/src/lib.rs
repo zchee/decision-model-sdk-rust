@@ -19,18 +19,19 @@ mod schema;
 #[doc(hidden)]
 pub mod __internals;
 
-/// The TypeSafe SDK this crate is built on, re-exported whole.
+/// The decision model SDK this crate is built on, re-exported whole.
 ///
 /// The question and answer types below come from it. A caller that derives a
 /// question set with `#[derive(QuestionSet)]` either depends on
-/// `typesafe-sdk-rust` directly, with its `macros` feature, or enables this
+/// `decision-model-sdk` directly, with its `macros` feature, or enables this
 /// crate's `macros` feature and points the derive here with
-/// `#[question_set(crate = system_one_adapter::typesafe_sdk)]`, because the
-/// derive's expansion names `::typesafe_sdk` unless told otherwise.
-pub use typesafe_sdk;
+/// `#[question_set(crate = decision_model_adapter::decision_model_sdk)]`,
+/// because the derive's expansion names `::decision_model_sdk` unless told
+/// otherwise.
+pub use decision_model_sdk;
 
 // The questions, the answers and the retry policy, as the SDK defines them.
-pub use typesafe_sdk::{
+pub use decision_model_sdk::{
     Answer, AnswerSet, Answers, Choice, ChoiceAnswer, Noul, NoulAnswer, PreparedQuestions,
     QuestionSet, Questions, RetryPolicy, Score, ScoreAnswer,
 };

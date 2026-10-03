@@ -23,12 +23,12 @@
 use std::sync::LazyLock;
 
 use bytes::Bytes;
-use divan::{Bencher, black_box};
-use http::{HeaderMap, StatusCode};
-use typesafe_sdk::{
+use decision_model_sdk::{
     __internals as sdk, Answers, ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer,
     SystemOneResponse,
 };
+use divan::{Bencher, black_box};
+use http::{HeaderMap, StatusCode};
 
 use crate::support::RESULT;
 

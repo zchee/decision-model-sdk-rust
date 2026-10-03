@@ -92,14 +92,14 @@ type Predicate = Arc<dyn Fn(&Error) -> bool + Send + Sync>;
 /// ```
 /// use std::time::Duration;
 ///
-/// use typesafe_sdk::{RetryPolicy, StatusSet};
+/// use decision_model_sdk::{RetryPolicy, StatusSet};
 ///
 /// let policy = RetryPolicy::default()
 ///     .max_retries(3)
 ///     .backoff_max(Duration::from_secs(2))
 ///     .http_statuses([429, 502, 503, 504].into_iter().collect::<StatusSet>())
 ///     .timeout(Duration::from_secs(10))?;
-/// # Ok::<(), typesafe_sdk::Error>(())
+/// # Ok::<(), decision_model_sdk::Error>(())
 /// ```
 #[derive(Clone)]
 pub struct RetryPolicy {
@@ -307,7 +307,7 @@ impl RetryPolicy {
     ///
     /// `method` and `uri` only name the request. Before each retry the
     /// method and the scheme, host, port and path of `uri` are logged at
-    /// `INFO` to the `typesafe_sdk` target, as
+    /// `INFO` to the `decision_model_sdk` target, as
     /// `POST https://api.example.com/v1/answers retry 1`; the line exists only
     /// when the SDK is built with its `tracing` feature. The port is printed
     /// only when it is not the scheme's default. The query and the userinfo
@@ -325,7 +325,7 @@ impl RetryPolicy {
     /// use std::time::Duration;
     ///
     /// use http::{Method, Uri};
-    /// use typesafe_sdk::{Error, RetryPolicy};
+    /// use decision_model_sdk::{Error, RetryPolicy};
     ///
     /// # #[tokio::main(flavor = "current_thread")]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -498,7 +498,7 @@ const STATUS_LIMIT: u16 = 640;
 /// [`RetryPolicy::http_statuses`].
 ///
 /// ```
-/// use typesafe_sdk::StatusSet;
+/// use decision_model_sdk::StatusSet;
 ///
 /// let mut statuses = StatusSet::DEFAULT;
 /// assert!(statuses.contains(503));

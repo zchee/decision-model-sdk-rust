@@ -10,7 +10,9 @@
 //! legend description is the case that differs between the two, since the
 //! SDK keeps it as the JSON text it arrived as.
 
-use typesafe_sdk::{AnswerContext, AnswerSet, ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_sdk::{
+    AnswerContext, AnswerSet, ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer,
+};
 
 /// One question of each kind; the score's levels give the legend.
 #[derive(Debug, QuestionSet)]

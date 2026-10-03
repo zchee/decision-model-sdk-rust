@@ -29,8 +29,8 @@
 
 use std::hint::black_box;
 
+use decision_model_adapter::{__internals::decode::decode, AnswerMode};
 use libfuzzer_sys::fuzz_target;
-use system_one_adapter::{__internals::decode::decode, AnswerMode};
 
 /// The longest input decoded, in bytes: four times libFuzzer's own default
 /// of 4,096, which applies while no seed is longer than that.

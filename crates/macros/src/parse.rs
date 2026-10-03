@@ -239,7 +239,7 @@ pub(crate) fn parse(input: &DeriveInput) -> syn::Result<QuestionSetInput> {
 
     errors.finish()?;
     Ok(QuestionSetInput {
-        root: root.unwrap_or_else(|| quote!(::typesafe_sdk)),
+        root: root.unwrap_or_else(|| quote!(::decision_model_sdk)),
         ident: ident.clone(),
         fields: questions,
     })
@@ -368,7 +368,7 @@ fn question_name(attr: &Attribute) -> syn::Result<LitStr> {
 /// Checks that a field's type is the answer type of its question.
 ///
 /// The type is matched by its last path segment, so `NoulAnswer` and
-/// `typesafe_sdk::NoulAnswer` both match; a type alias does not, because a
+/// `decision_model_sdk::NoulAnswer` both match; a type alias does not, because a
 /// derive sees only the tokens of the type, not what they name.
 fn check_answer_type(ty: &Type, kind: Kind, member: &Ident) -> syn::Result<()> {
     let expected = kind.answer();
@@ -404,7 +404,7 @@ fn check_answer_type(ty: &Type, kind: Kind, member: &Ident) -> syn::Result<()> {
             ty,
             format!(
                 "field `{member}` has `#[{}]`, so its type must be `{expected}` (the type is \
-                 matched by name: `{expected}` and `typesafe_sdk::{expected}` work, a type alias \
+                 matched by name: `{expected}` and `decision_model_sdk::{expected}` work, a type alias \
                  does not)",
                 kind.attribute(),
             ),

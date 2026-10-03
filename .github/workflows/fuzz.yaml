@@ -265,7 +265,7 @@ jobs:
 
           cpu_flags() { { grep -oE 'target-(cpu|feature)=[^ ]+' || true; } | sort | paste -sd ' ' -; }
           expected="compiled with [$(cpu_flags <<< "${RUSTFLAGS}")]"
-          for crate in typesafe_sdk sonic_simd sonic_number sonic_rs; do
+          for crate in decision_model_sdk sonic_simd sonic_number sonic_rs; do
             line="$(grep -F -e "--crate-name ${crate} " "${log}" || true)"
             if [ -z "${line}" ]; then
               got="not compiled"
@@ -273,7 +273,7 @@ jobs:
               got="compiled with [$(cpu_flags <<< "${line}")]"
             fi
             want="${expected}"
-            if [ "${crate}" != typesafe_sdk ] && [ "${FUZZ_BACKEND}" != sonic ]; then want="not compiled"; fi
+            if [ "${crate}" != decision_model_sdk ] && [ "${FUZZ_BACKEND}" != sonic ]; then want="not compiled"; fi
             echo "${crate}: ${got}"
             if [ "${got}" != "${want}" ]; then
               echo "::error::${crate} should be ${want}"

@@ -12,7 +12,7 @@
 
 use std::process::ExitCode;
 
-use typesafe_sdk::{Choice, Client, Error, Noul, Questions, Score};
+use decision_model_sdk::{Choice, Client, Error, Noul, Questions, Score};
 
 #[tokio::main]
 async fn main() -> ExitCode {

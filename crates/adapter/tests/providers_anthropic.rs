@@ -23,17 +23,17 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{HeaderValue, Request, StatusCode, header::LOCATION};
-use http_body_util::Full;
-use serde_json::{Value, json};
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, Answers, AnthropicProvider, AnthropicProviderBuilder, AttemptTrace, Client,
     ClientBuilder, Error, ErrorKind, Message, Noul, PreparedQuestions, Provider, ProviderCall,
     Questions, Response, RetryPolicy, Role, Schema, StructuredOutputs, Trace,
 };
+use decision_model_sdk::{Body, BoxError, ErrorKind as SdkErrorKind};
+use http::{HeaderValue, Request, StatusCode, header::LOCATION};
+use http_body_util::Full;
+use serde_json::{Value, json};
 use test_support::{Protocol, RefusingPort, SilentServer, TestServer, json_response};
 use tower_service::Service;
-use typesafe_sdk::{Body, BoxError, ErrorKind as SdkErrorKind};
 
 use crate::cassette::Cassette;
 
@@ -1138,7 +1138,7 @@ async fn key_never_printed_in_the_retry_line_of_a_base_url_that_holds_it() {
 
     let port = server.addr().port();
     let lines = recorded.all();
-    let sdk = of_target(&lines, "typesafe_sdk");
+    let sdk = of_target(&lines, "decision_model_sdk");
     let retries: Vec<&str> = sdk.iter().copied().filter(|line| line.contains(" retry ")).collect();
     assert_eq!(retries.len(), 1, "exactly one retry line: {sdk:#?}");
     assert!(
@@ -1333,7 +1333,7 @@ async fn user_data_not_printed() {
     {
         let lines = recorded.all();
         assert!(!recorded.at(tracing::Level::DEBUG).is_empty(), "the adapter logged the exchanges");
-        assert!(!of_target(&lines, "typesafe_sdk").is_empty(), "the SDK logged the retries");
+        assert!(!of_target(&lines, "decision_model_sdk").is_empty(), "the SDK logged the retries");
         for line in &lines {
             assert_eq!(occurrences(line, SENTINEL), 0, "{line}");
         }

@@ -4,7 +4,7 @@
 
 use std::{error::Error as _, time::Instant};
 
-use typesafe_sdk::RetryPolicy;
+use decision_model_sdk::RetryPolicy;
 
 use super::{Evaluation, InvalidReply, add, evaluate};
 use crate::{
@@ -57,8 +57,8 @@ impl Provider for Silent {
     fn request<'a>(
         &'a self,
         _: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
-        Box::pin(async { Err(typesafe_sdk::Error::connection("never asked", None)) })
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
+        Box::pin(async { Err(decision_model_sdk::Error::connection("never asked", None)) })
     }
 }
 

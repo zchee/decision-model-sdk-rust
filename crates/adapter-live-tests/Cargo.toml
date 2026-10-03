@@ -2,9 +2,9 @@
 # Never a default member. `publish = false`: it is not a library anybody
 # depends on.
 [package]
-name = "typesafe-sdk-rust-adapter-live-tests"
+name = "decision-model-adapter-live-tests"
 version = "0.0.0"
-description = "Tests of typesafe-sdk-rust-adapter against the live OpenAI, Anthropic and Gemini APIs"
+description = "Tests of decision-model-adapter against the live OpenAI, Anthropic and Gemini APIs"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,7 @@ name = "adapter_live_tests"
 
 [dependencies]
 # Default features: every built-in provider.
-typesafe-sdk-rust-adapter = { path = "../adapter" }
+decision-model-adapter = { path = "../adapter" }
 
 [dev-dependencies]
 # An async runtime for the tests (`#[tokio::test]`).

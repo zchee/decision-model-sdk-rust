@@ -60,10 +60,10 @@ jobs:
       # No RUSTFLAGS and no target-cpu: the counts are meant to be those of
       # the build a consumer gets by default.
       - name: Build the benchmarks
-        run: cargo codspeed build -m simulation -p typesafe-sdk-rust --features internals --bench sdk
+        run: cargo codspeed build -m simulation -p decision-model-sdk --features internals --bench sdk
 
       - name: Run the benchmarks
         uses: CodSpeedHQ/action@v5
         with:
           mode: simulation
-          run: cargo codspeed run -p typesafe-sdk-rust --bench sdk
+          run: cargo codspeed run -p decision-model-sdk --bench sdk

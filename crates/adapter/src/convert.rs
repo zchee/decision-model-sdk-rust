@@ -2,11 +2,13 @@
 //!
 //! Ported from `_client.py` of system-one-adapter-python.
 
+use decision_model_sdk::{
+    Answer, Answers, ChoiceAnswer, Content as SdkContent, NoulAnswer, ScoreAnswer,
+};
 use serde::{
     Deserialize,
     de::value::{Error as ValueError, StrDeserializer},
 };
-use typesafe_sdk::{Answer, Answers, ChoiceAnswer, Content as SdkContent, NoulAnswer, ScoreAnswer};
 
 use crate::{
     error::Error,

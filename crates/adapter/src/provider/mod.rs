@@ -55,14 +55,14 @@ pub trait Provider: Send + Sync + fmt::Debug {
     ///
     /// The adapter prints what this returns as it is, in its error and in
     /// the trace: a [`NonAnswer`]'s message, and the `Display` of an error,
-    /// including the message an [`ApiError`](typesafe_sdk::ApiError) reads
+    /// including the message an [`ApiError`](decision_model_sdk::ApiError) reads
     /// out of a response body. The built-in providers search these texts for
     /// their key; a provider of your own searches them for its key or
     /// returns fixed texts.
     fn request<'a>(
         &'a self,
         call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>>;
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>>;
 
     /// The name recorded as an attempt's `debug_info.provider`.
     ///
@@ -70,7 +70,7 @@ pub trait Provider: Send + Sync + fmt::Debug {
     /// text the compiler does not promise to keep stable across versions; it
     /// is for diagnostics, not for matching. The built-in providers override
     /// it with their public path, such as
-    /// `system_one_adapter::OpenAiProvider`. A provider that wraps another
+    /// `decision_model_adapter::OpenAiProvider`. A provider that wraps another
     /// may return a name it builds at run time.
     fn type_name(&self) -> &str {
         std::any::type_name::<Self>()

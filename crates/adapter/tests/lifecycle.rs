@@ -19,14 +19,14 @@ use std::{
     time::Duration,
 };
 
-use http::StatusCode;
-use serde_json::{Value, json};
-use system_one_adapter::{
+use decision_model_adapter::{
     __internals::env::{self, Replaced},
     AnswerMode, Answers, AnthropicProvider, BoxFuture, Client, ClientBuilder, ErrorKind, NonAnswer,
     Noul, OpenAiProvider, PreparedQuestions, Provider, ProviderCall, ProviderName, ProviderResult,
     Questions, Response, StructuredOutputs,
 };
+use http::StatusCode;
+use serde_json::{Value, json};
 use test_support::{Protocol, RecordedRequest, TestResponse, TestServer, json_response};
 use tokio::sync::Barrier;
 
@@ -394,7 +394,10 @@ impl Provider for Counting {
         _: ProviderCall<'a>,
     ) -> BoxFuture<
         'a,
-        Result<Result<ProviderResult, NonAnswer>, system_one_adapter::typesafe_sdk::Error>,
+        Result<
+            Result<ProviderResult, NonAnswer>,
+            decision_model_adapter::decision_model_sdk::Error,
+        >,
     > {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(Ok(ProviderResult::new(ANSWER.to_owned(), Some(11), Some(7)))) })

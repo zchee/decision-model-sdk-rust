@@ -8,14 +8,14 @@ on macOS arm64 with rustc 1.98.1 and cargo-llvm-cov:
 export CARGO_TARGET_DIR="$HOME/.cache/rust/target-main"
 export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR/llvm-cov"
 env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov clean --workspace
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p typesafe-sdk-rust --all-features --no-report
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p typesafe-sdk-rust --features internals --no-report
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report -p typesafe-sdk-rust --fail-under-lines 85 --show-missing-lines
+env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --all-features --no-report
+env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --features internals --no-report
+env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report -p decision-model-sdk --fail-under-lines 85 --show-missing-lines
 ```
 
 The files are named by their present paths (at `873f431` they are `src/...` at
 the repository root), and the `report` command is shown with
-`-p typesafe-sdk-rust`, which the virtual root manifest needs and the run at
+`-p decision-model-sdk`, which the virtual root manifest needs and the run at
 `873f431` did not pass.
 
 `--all-features` selects sonic-rs; `--features internals` selects the default
@@ -23,7 +23,7 @@ serde_json backend and keeps the allocation-test seam. Each instrumented run
 passes 449 tests of the published SDK package. The separate arbitrary-precision
 test run is not part of this coverage report.
 
-The published crate `typesafe-sdk-rust` is held to 85% line coverage by CI's
+The published crate `decision-model-sdk` is held to 85% line coverage by CI's
 `coverage` job. CI uses the same clean/two-runs/report sequence without
 `--show-missing-lines` or the local target-directory configuration.
 
@@ -124,8 +124,8 @@ directory configuration):
 
 ```sh
 env -u RUSTFLAGS cargo llvm-cov clean --workspace
-env -u RUSTFLAGS cargo llvm-cov nextest -p typesafe-sdk-rust-adapter --all-features --no-report
-env -u RUSTFLAGS cargo llvm-cov report -p typesafe-sdk-rust-adapter --fail-under-lines 85 --show-missing-lines
+env -u RUSTFLAGS cargo llvm-cov nextest -p decision-model-adapter --all-features --no-report
+env -u RUSTFLAGS cargo llvm-cov report -p decision-model-adapter --fail-under-lines 85 --show-missing-lines
 ```
 
 The run passes 550 tests of the adapter package. It uses the default serde_json

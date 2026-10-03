@@ -117,7 +117,8 @@ fn raw_json_reads_back_through_from_reader_from_value_and_a_token_keyed_map() {
 
 #[test]
 fn a_padded_document_is_verbatim_inside_the_sdk_and_re_rendered_through_another_codec() {
-    let arbitrary = std::env::var("TYPESAFE_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
+    let arbitrary =
+        std::env::var("DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
     let probe = serde_json::to_string(
         &serde_json::from_str::<serde_json::Value>("1E2").expect("the feature probe parses"),
     )

@@ -730,7 +730,7 @@ fn debug_prints_neither_the_key_nor_any_default_header_value() {
 
 /// The SDK's own identifier, as `User-Agent` and `X-TypeSafe-SDK` spell it.
 fn sdk_identifier() -> String {
-    format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"))
+    format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"))
 }
 
 /// An explicit key and the given `User-Agent` product.

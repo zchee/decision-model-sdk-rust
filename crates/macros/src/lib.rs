@@ -1,6 +1,6 @@
-//! `#[derive(QuestionSet)]` for the `typesafe-sdk-rust` crate.
+//! `#[derive(QuestionSet)]` for the `decision-model-sdk` crate.
 //!
-//! Use it through the SDK, which re-exports it as `typesafe_sdk::QuestionSet`
+//! Use it through the SDK, which re-exports it as `decision_model_sdk::QuestionSet`
 //! behind its `macros` feature (on by default); its documentation there has a
 //! compiled example. This package is released with the SDK and depended on at
 //! exactly one version, so the two always agree on the code the derive
@@ -53,7 +53,7 @@ use syn::{DeriveInput, parse_macro_input};
 /// `#[question(name = "...")]` on the field. No two fields answer to one name.
 ///
 /// The field type is recognized by its last path segment, so `NoulAnswer` and
-/// `typesafe_sdk::NoulAnswer` both work; a type alias does not, because a
+/// `decision_model_sdk::NoulAnswer` both work; a type alias does not, because a
 /// derive sees the tokens of a type and not what they name. A field cannot be
 /// an `Option`: the API answers every question it is asked, and a response
 /// without one of the answers is refused as malformed.
@@ -65,11 +65,11 @@ use syn::{DeriveInput, parse_macro_input};
 ///
 /// # Crate path
 ///
-/// The generated code reaches the SDK as `::typesafe_sdk`. Where it is known
+/// The generated code reaches the SDK as `::decision_model_sdk`. Where it is known
 /// by another path, such as a re-export, the container attribute
 /// `#[question_set(crate = path::to::sdk)]` names that path. A dependency
-/// renamed in `Cargo.toml`, as `sdk = { package = "typesafe-sdk-rust", ... }`,
-/// is one such case: the generated code still names `::typesafe_sdk`, so the
+/// renamed in `Cargo.toml`, as `sdk = { package = "decision-model-sdk", ... }`,
+/// is one such case: the generated code still names `::decision_model_sdk`, so the
 /// struct needs `#[question_set(crate = ::sdk)]`.
 ///
 /// # Limits

@@ -14,17 +14,17 @@ use std::{
     task::{Context, Poll},
 };
 
-use http::{Request, Response};
-use tower_service::Service;
-use typesafe_sdk::{
+use decision_model_sdk::{
     ApiError, Body, Client, ClientBuilder, Error, ErrorKind, Noul, PreparedQuestions, QuestionSet,
     Questions, ResponseValidationError, RetryPolicy, StatusSet, SystemOneResponse,
     de::{AnswerContext, AnswerSet},
     response::{Answer, Answers, ChoiceAnswer, NoulAnswer},
 };
+use http::{Request, Response};
+use tower_service::Service;
 
 #[cfg(feature = "hyper")]
-use typesafe_sdk::{HttpService, HyperResponseFuture, HyperTransport, ResponseBody};
+use decision_model_sdk::{HttpService, HyperResponseFuture, HyperTransport, ResponseBody};
 
 // `Result<T, Error>` costs a pointer beside `T`.
 const _: () = assert!(size_of::<Error>() == size_of::<usize>());

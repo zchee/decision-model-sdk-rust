@@ -9,9 +9,9 @@ use std::{fmt, sync::Arc, time::Duration};
 
 use ::http::{HeaderMap, HeaderName, HeaderValue, Uri};
 use bytes::Bytes;
+use decision_model_sdk::HttpService;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize, Serializer};
-use typesafe_sdk::HttpService;
 
 use super::{
     AttemptTrace, BoxFuture, Message, NonAnswer, Provider, ProviderCall, ProviderResult, Role,
@@ -126,7 +126,7 @@ where
     fn request<'a>(
         &'a self,
         mut call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async move {
             let settings = &*self.settings;
             let body = request_body(
@@ -153,7 +153,7 @@ where
     }
 
     fn type_name(&self) -> &str {
-        "system_one_adapter::AnthropicProvider"
+        "decision_model_adapter::AnthropicProvider"
     }
 
     fn log_uri(&self) -> Option<&Uri> {

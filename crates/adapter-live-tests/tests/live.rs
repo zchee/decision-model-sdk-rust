@@ -2,8 +2,8 @@
 //! vendors' live APIs: two tests, each for three providers, two structured
 //! modes and two answer modes, so 24 cases of one request each.
 //!
-//! Run them with `TYPESAFE_ADAPTER_LIVE_TESTS=1` and the three vendors' keys,
-//! `cargo nextest run -p typesafe-sdk-rust-adapter-live-tests`; nothing else
+//! Run them with `DECISION_MODEL_ADAPTER_LIVE_TESTS=1` and the three vendors' keys,
+//! `cargo nextest run -p decision-model-adapter-live-tests`; nothing else
 //! in the repository runs them.
 //!
 //! Upstream compares each reference-shape response with a recorded file; that
@@ -18,7 +18,7 @@ use adapter_live_tests::{
     Structured::{Native, Prompted},
     anthropic, gemini, openai,
 };
-use system_one_adapter::{
+use decision_model_adapter::{
     Answer, Attempt, Choice, Noul, NoulAnswer, PreparedQuestions, Questions, Response, Score,
 };
 

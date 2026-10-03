@@ -24,11 +24,11 @@
 use std::pin::pin;
 
 use bytes::Bytes;
+use decision_model_sdk::{Body, Choice, Noul, PreparedQuestions, Questions, Score};
 use divan::{Bencher, black_box};
 use http::{Method, Request, StatusCode, Uri};
 use http_body_util::BodyExt as _;
 use tower_service::Service as _;
-use typesafe_sdk::{Body, Choice, Noul, PreparedQuestions, Questions, Score};
 
 use crate::{
     MODEL, QUESTIONS_JSON,

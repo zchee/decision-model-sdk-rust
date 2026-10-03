@@ -21,15 +21,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{HeaderValue, StatusCode, header::LOCATION};
-use http_body_util::Full;
-use serde_json::{Value, json};
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, Answers, AttemptTrace, Client, ClientBuilder, Error, ErrorKind, GeminiProvider,
     Message, Noul, PreparedQuestions, Provider, ProviderCall, Questions, Response, RetryPolicy,
     Role, Schema, StructuredOutputs,
-    typesafe_sdk::{self, ApiErrorKind},
+    decision_model_sdk::{self, ApiErrorKind},
 };
+use http::{HeaderValue, StatusCode, header::LOCATION};
+use http_body_util::Full;
+use serde_json::{Value, json};
 use test_support::{
     Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, json_response,
 };
@@ -132,7 +132,7 @@ fn parsed(json: Option<&str>) -> Value {
 }
 
 /// The SDK error a provider failure carries.
-fn provider_failure(error: &Error) -> &typesafe_sdk::Error {
+fn provider_failure(error: &Error) -> &decision_model_sdk::Error {
     match error.kind() {
         ErrorKind::Provider(error) => error,
         other => panic!("expected a provider failure, got {other:?}"),
@@ -260,7 +260,7 @@ async fn gemini_transport_errors_obey_the_budget() {
         let client = build(gemini(refusing.base_url()));
         let error = client.system_one(STATE, &positive()).send().await.expect_err("no server");
         let failure = provider_failure(&error);
-        assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Connection), "{failure:?}");
+        assert!(matches!(failure.kind(), decision_model_sdk::ErrorKind::Connection), "{failure:?}");
         let attempts = error.debug().expect("a trace").attempts();
         assert_eq!(attempts.len(), attempts_made);
         assert!(attempts.iter().all(|attempt| attempt.error_type() == Some("Connection")));
@@ -270,7 +270,10 @@ async fn gemini_transport_errors_obey_the_budget() {
         let client = build(gemini_model(MODEL, &silent_url, Duration::from_millis(100)));
         let error = client.system_one(STATE, &positive()).send().await.expect_err("no answer");
         let failure = provider_failure(&error);
-        assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Timeout { .. }), "{failure:?}");
+        assert!(
+            matches!(failure.kind(), decision_model_sdk::ErrorKind::Timeout { .. }),
+            "{failure:?}"
+        );
         let attempts = error.debug().expect("a trace").attempts();
         assert_eq!(attempts.len(), attempts_made);
         assert!(attempts.iter().all(|attempt| attempt.error_type() == Some("Timeout")));
@@ -291,7 +294,7 @@ async fn budget_controls_the_attempts(budget: u32) {
 
     let error = client.system_one(STATE, &positive()).send().await.expect_err("always 503");
 
-    let typesafe_sdk::ErrorKind::Api(api) = provider_failure(&error).kind() else {
+    let decision_model_sdk::ErrorKind::Api(api) = provider_failure(&error).kind() else {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -347,16 +350,19 @@ async fn failures() -> Vec<(&'static str, Error)> {
 
     let unavailable = answering(StatusCode::SERVICE_UNAVAILABLE, UNAVAILABLE).await;
     let status = ask(gemini(unavailable.base_url())).await;
-    assert!(matches!(provider_failure(&status).kind(), typesafe_sdk::ErrorKind::Api(_)));
+    assert!(matches!(provider_failure(&status).kind(), decision_model_sdk::ErrorKind::Api(_)));
 
     let refusing = RefusingPort::new().await.expect("a port nothing listens on");
     let connect = ask(gemini(refusing.base_url())).await;
-    assert!(matches!(provider_failure(&connect).kind(), typesafe_sdk::ErrorKind::Connection));
+    assert!(matches!(provider_failure(&connect).kind(), decision_model_sdk::ErrorKind::Connection));
 
     let silent = SilentServer::start().await.expect("a server that never answers");
     let silent_url = format!("http://{}", silent.addr());
     let timeout = ask(gemini_model(MODEL, &silent_url, Duration::from_millis(100))).await;
-    assert!(matches!(provider_failure(&timeout).kind(), typesafe_sdk::ErrorKind::Timeout { .. }));
+    assert!(matches!(
+        provider_failure(&timeout).kind(),
+        decision_model_sdk::ErrorKind::Timeout { .. }
+    ));
 
     let failed = answering(StatusCode::OK, interaction(POSITIVE, "failed")).await;
     let non_answer = ask(gemini(failed.base_url())).await;
@@ -512,7 +518,7 @@ async fn key_never_printed_in_the_events() {
     assert!(exchanges > failed - 2, "{all:#?}");
     assert!(adapter.iter().any(|line| line.contains("status=503")), "{adapter:#?}");
     // Other crates logged as well, so their lines were searched too.
-    assert!(all.iter().any(|line| !line.starts_with("system_one_adapter")), "{all:#?}");
+    assert!(all.iter().any(|line| !line.starts_with("decision_model_adapter")), "{all:#?}");
 }
 
 #[cfg(feature = "tracing")]
@@ -551,10 +557,13 @@ async fn key_never_printed_by_the_retry_line_when_the_key_is_in_the_path() {
         all.iter().map(String::as_str).filter(|line| line.contains(" retry ")).collect();
     assert_eq!(
         retry_lines,
-        [format!("typesafe_sdk message=POST {}/v1beta/interactions retry 1", server.base_url())]
+        [format!(
+            "decision_model_sdk message=POST {}/v1beta/interactions retry 1",
+            server.base_url()
+        )]
     );
     // Neither the adapter's events nor the SDK's name the caller's prefix.
-    for target in ["system_one_adapter", "typesafe_sdk"] {
+    for target in ["decision_model_adapter", "decision_model_sdk"] {
         let of_target = of_target(&all, target);
         assert!(!of_target.is_empty(), "{target} logged nothing");
         for line in of_target {
@@ -588,7 +597,7 @@ async fn a_failure_body_that_repeats_the_key_is_not_shown() {
     let error = client.system_one(STATE, &positive()).send().await.expect_err("a 400");
 
     let failure = provider_failure(&error);
-    let typesafe_sdk::ErrorKind::Api(api) = failure.kind() else {
+    let decision_model_sdk::ErrorKind::Api(api) = failure.kind() else {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::BAD_REQUEST);
@@ -621,7 +630,7 @@ async fn a_failure_body_over_the_limit_is_reported_without_it() {
     let error = client.system_one(STATE, &positive()).send().await.expect_err("a 400");
 
     let failure = provider_failure(&error);
-    let typesafe_sdk::ErrorKind::Api(api) = failure.kind() else {
+    let decision_model_sdk::ErrorKind::Api(api) = failure.kind() else {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::BAD_REQUEST);
@@ -658,7 +667,7 @@ impl fmt::Display for HeaderDump {
 
 impl StdError for HeaderDump {}
 
-impl Service<http::Request<typesafe_sdk::Body>> for Leaking {
+impl Service<http::Request<decision_model_sdk::Body>> for Leaking {
     type Response = http::Response<Full<Bytes>>;
     type Error = HeaderDump;
     type Future = Ready<Result<Self::Response, Self::Error>>;
@@ -667,7 +676,7 @@ impl Service<http::Request<typesafe_sdk::Body>> for Leaking {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, request: http::Request<typesafe_sdk::Body>) -> Self::Future {
+    fn call(&mut self, request: http::Request<decision_model_sdk::Body>) -> Self::Future {
         // `to_str` reads a header value whether or not it is marked
         // sensitive: what a careless service would log.
         let headers = request
@@ -705,7 +714,7 @@ async fn foreign_service_error_holding_the_headers_never_shows_the_key() {
     }
 
     let failure = provider_failure(&error);
-    assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Connection), "{failure:?}");
+    assert!(matches!(failure.kind(), decision_model_sdk::ErrorKind::Connection), "{failure:?}");
     // `source()` starts below the SDK's error, which `kind()` gives: the
     // service's error is not kept as the SDK error's cause either.
     let links = chain(&error);
@@ -890,7 +899,7 @@ async fn user_data_not_printed_by_debug_display_or_an_event() {
     #[cfg(feature = "tracing")]
     {
         let all = events.all();
-        for target in ["system_one_adapter", "typesafe_sdk"] {
+        for target in ["decision_model_adapter", "decision_model_sdk"] {
             assert!(!of_target(&all, target).is_empty(), "{target} logged nothing");
         }
         for line in &all {
@@ -921,7 +930,7 @@ async fn redirect_not_followed_to_another_host() {
 
     let error = client.system_one(STATE, &positive()).send().await.expect_err("a 302");
 
-    let typesafe_sdk::ErrorKind::Api(api) = provider_failure(&error).kind() else {
+    let decision_model_sdk::ErrorKind::Api(api) = provider_failure(&error).kind() else {
         panic!("expected an API error, got {error:?}");
     };
     assert_eq!(api.status(), StatusCode::FOUND);
@@ -1044,7 +1053,7 @@ async fn replay_against_the_reference(name: &str) {
         .unwrap_or_else(|difference| panic!("`{name}`: {difference}"));
     assert_eq!(
         replayed.response.debug().attempts()[0].provider(),
-        "system_one_adapter::GeminiProvider"
+        "decision_model_adapter::GeminiProvider"
     );
 }
 

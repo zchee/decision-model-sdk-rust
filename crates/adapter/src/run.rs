@@ -10,8 +10,8 @@ use std::{
     time::Instant,
 };
 
+use decision_model_sdk::{Answers, Error as SdkError, RetryPolicy};
 use http::Uri;
-use typesafe_sdk::{Answers, Error as SdkError, RetryPolicy};
 
 use crate::{
     convert::{Converted, convert},
@@ -28,7 +28,7 @@ use crate::{
 
 /// The target of the adapter's own events.
 #[cfg(feature = "tracing")]
-const TARGET: &str = "system_one_adapter";
+const TARGET: &str = "decision_model_adapter";
 
 /// What one provider call ends with: a reply, a reply that is not an answer,
 /// or a failure of the exchange.

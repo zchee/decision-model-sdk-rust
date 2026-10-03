@@ -4,8 +4,8 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use decision_model_sdk::{Error as SdkError, RetryPolicy};
 use http::{Method, Uri};
-use typesafe_sdk::{Error as SdkError, RetryPolicy};
 
 use crate::response::{RetryCategory, RetryReason};
 

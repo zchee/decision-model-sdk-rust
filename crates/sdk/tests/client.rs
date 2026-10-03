@@ -17,6 +17,10 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{
+    ApiError, ApiErrorKind, Body, Choice, Client, ClientBuilder, Content, Error, ErrorKind, Noul,
+    PreparedQuestions, Questions, RawQuestion, RetryPolicy, Score,
+};
 use http::{Request, Response, StatusCode, Uri, header::HOST};
 use hyper::body::Incoming;
 use hyper_util::{
@@ -29,10 +33,6 @@ use test_support::{
 };
 use tokio::sync::Notify;
 use tower_service::Service;
-use typesafe_sdk::{
-    ApiError, ApiErrorKind, Body, Choice, Client, ClientBuilder, Content, Error, ErrorKind, Noul,
-    PreparedQuestions, Questions, RawQuestion, RetryPolicy, Score,
-};
 
 #[cfg(feature = "tracing")]
 #[path = "support/recorder.rs"]
@@ -1361,7 +1361,7 @@ fn upstream_builder(builder: ClientBuilder) -> ClientBuilder {
 }
 
 /// Sets every call header upstream's case sets and sends one request.
-async fn send_upstream_headers<S: typesafe_sdk::HttpService>(client: &Client<S>) {
+async fn send_upstream_headers<S: decision_model_sdk::HttpService>(client: &Client<S>) {
     let questions = one_raw_question();
     let mut request = client.system_one("hello", &questions).timeout(Duration::from_secs(2));
     for (name, value) in PROTECTED {
@@ -1378,7 +1378,7 @@ async fn send_upstream_headers<S: typesafe_sdk::HttpService>(client: &Client<S>)
 
 /// What the server must have recorded for [`send_upstream_headers`].
 fn assert_upstream_headers(request: &RecordedRequest, context: &str) {
-    let sdk = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let runtime = format!("rust ({}; {})", std::env::consts::OS, std::env::consts::ARCH);
     assert_eq!(request.header_values("authorization"), ["Bearer test-key"], "{context}");
     assert_eq!(request.header_values("accept"), ["application/json"], "{context}");
@@ -1480,7 +1480,7 @@ async fn list_and_ask(
 /// protocol, on a request with a body and one without.
 #[tokio::test]
 async fn an_application_product_is_received_in_front_of_the_sdk_identifier() {
-    let sdk = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let runtime = format!("rust ({}; {})", std::env::consts::OS, std::env::consts::ARCH);
     let user_agent = format!("ganja-code/0.1.0 {sdk}");
     for protocol in Protocol::ALL {
@@ -1509,7 +1509,7 @@ async fn an_application_product_is_received_in_front_of_the_sdk_identifier() {
 /// request.
 #[tokio::test]
 async fn with_the_runtime_header_off_the_server_receives_none() {
-    let sdk = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     for protocol in Protocol::ALL {
         let server = listing_and_answering(protocol).await;
         let client = builder_for(&server, protocol)
@@ -1533,7 +1533,7 @@ async fn with_the_runtime_header_off_the_server_receives_none() {
 /// server receives the product's `User-Agent` once and no runtime header.
 #[tokio::test]
 async fn a_caller_header_cannot_stand_in_for_either_setting() {
-    let sdk = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let user_agent = format!("ganja-code/0.1.0 {sdk}");
     let caller = [("user-agent", "wrong"), ("x-typesafe-runtime", "x")];
     for protocol in Protocol::ALL {

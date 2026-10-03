@@ -427,8 +427,8 @@ async fn a_failed_http2_handshake_fails_every_waiting_request() {
 fn a_call(uri: &str) -> Request<Body> {
     let mut call = Request::post(uri)
         .header("authorization", "Bearer test-key")
-        .header("user-agent", "typesafe-sdk-rust/0.0.0")
-        .header("x-typesafe-sdk", "typesafe-sdk-rust/0.0.0")
+        .header("user-agent", "decision-model-sdk/0.0.0")
+        .header("x-typesafe-sdk", "decision-model-sdk/0.0.0")
         .header("content-type", "application/json")
         .header("content-length", "2")
         .body(Body::from(Bytes::from_static(b"{}")))

@@ -4,11 +4,11 @@
 
 use std::sync::LazyLock;
 
-use serde::{Deserializer, de::Error as _};
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerSet, Answers, Choice, ChoiceAnswer, Noul, NoulAnswer, PreparedQuestions, QuestionSet,
-    Questions, Score, ScoreAnswer, typesafe_sdk::AnswerContext,
+    Questions, Score, ScoreAnswer, decision_model_sdk::AnswerContext,
 };
+use serde::{Deserializer, de::Error as _};
 
 /// The answers to [`review_questions`], one field per question.
 #[derive(Debug, Clone, PartialEq)]

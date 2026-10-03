@@ -417,7 +417,7 @@ fn sends_runtime<S>(client: &Client<S>) -> bool {
 #[cfg(feature = "hyper")]
 #[test]
 fn a_later_user_agent_product_or_runtime_switch_replaces_an_earlier_one() {
-    let sdk = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let client = ClientBuilder::new()
         .api_key("test-key")
         .user_agent_product("not a token")

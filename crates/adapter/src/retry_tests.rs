@@ -7,8 +7,8 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{ApiError, Error as SdkError, ErrorKind as SdkErrorKind, RetryPolicy};
 use http::{HeaderMap, StatusCode, Uri};
-use typesafe_sdk::{ApiError, Error as SdkError, ErrorKind as SdkErrorKind, RetryPolicy};
 
 use super::run_with_retries;
 use crate::{

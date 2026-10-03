@@ -29,12 +29,12 @@ mod support;
 use std::sync::Arc;
 
 use bytes::Bytes;
+use decision_model_sdk::{Client, PreparedQuestions};
 use divan::{Bencher, black_box};
 use http::{Response, header::CONTENT_TYPE};
 use http_body_util::Full;
 use test_support::{Protocol, TestServer};
 use tokio::{runtime::Runtime, task::JoinSet};
-use typesafe_sdk::{Client, PreparedQuestions};
 
 use crate::support::{RESULT, questions, text};
 

@@ -81,7 +81,7 @@ allow = []
 # enters a graph only through the fuzz crate. In the root graph, which has no
 # libfuzzer-sys, cargo-deny warns `unused-wrapper`; that warning is expected.
 deny = [
-    { crate = "libfuzzer-sys", wrappers = ["typesafe-sdk-rust-fuzz"] },
+    { crate = "libfuzzer-sys", wrappers = ["decision-model-sdk-fuzz"] },
 ]
 skip = []
 skip-tree = []

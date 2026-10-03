@@ -23,11 +23,11 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::Body;
 use divan::{Bencher, black_box};
 use http::{HeaderMap, HeaderValue, Method, Request, Response, Uri};
 use http_body_util::BodyExt as _;
 use tower_service::Service;
-use typesafe_sdk::Body;
 
 use crate::{
     service::{body, client, runtime},
@@ -73,8 +73,8 @@ fn header_map() -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(6);
     headers.insert("authorization", HeaderValue::from_static("Bearer bench-key"));
     headers.insert("accept", HeaderValue::from_static("application/json"));
-    headers.insert("user-agent", HeaderValue::from_static("typesafe-sdk-rust/0.2.1"));
-    headers.insert("x-typesafe-sdk", HeaderValue::from_static("typesafe-sdk-rust/0.2.1"));
+    headers.insert("user-agent", HeaderValue::from_static("decision-model-sdk/0.1.0"));
+    headers.insert("x-typesafe-sdk", HeaderValue::from_static("decision-model-sdk/0.1.0"));
     headers.insert("x-typesafe-runtime", HeaderValue::from_static("rust"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     // The first clone of a map moves its names into shared storage, once; a

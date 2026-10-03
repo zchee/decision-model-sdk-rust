@@ -836,10 +836,10 @@ fn from_static_refuses_a_layout_that_does_not_hold() {
 // ------------------------------------------------------------- asking a set
 
 /// The derive used from inside the crate, where the SDK is `crate` rather
-/// than `::typesafe_sdk`: the crate-path override at work.
+/// than `::decision_model_sdk`: the crate-path override at work.
 #[cfg(feature = "macros")]
 #[expect(dead_code, reason = "no response is decoded into it here")]
-#[derive(typesafe_sdk_rust_macros::QuestionSet)]
+#[derive(decision_model_sdk_macros::QuestionSet)]
 #[question_set(crate = crate)]
 struct Spam {
     #[noul(instructions = "Spam?")]

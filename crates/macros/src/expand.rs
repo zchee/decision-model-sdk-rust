@@ -13,7 +13,7 @@
 //!   `IgnoredAny`, and a missing answer is `missing_field(<name>)`.
 //!
 //! Every path starts at the SDK's `__private` module, imported once at the top
-//! of the block from the crate root (`::typesafe_sdk`, or what
+//! of the block from the crate root (`::decision_model_sdk`, or what
 //! `#[question_set(crate = ...)]` names); the import shadows anything of that
 //! name around the block. The helper items carry names no caller is expected
 //! to use, and a struct named like one of them is refused (see [`RESERVED`]).

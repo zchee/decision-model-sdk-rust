@@ -1,6 +1,6 @@
 // The questions are serialized once for the whole program, so they cannot
 // depend on a type, lifetime or const parameter.
-use typesafe_sdk::{NoulAnswer, QuestionSet};
+use decision_model_sdk::{NoulAnswer, QuestionSet};
 
 #[derive(QuestionSet)]
 struct Typed<T> {

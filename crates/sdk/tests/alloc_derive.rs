@@ -33,11 +33,11 @@ mod support;
 use std::hint::black_box;
 
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode};
-use typesafe_sdk::{
+use decision_model_sdk::{
     __internals as sdk, Answers, Choice, ChoiceAnswer, Noul, NoulAnswer, QuestionSet, Questions,
     Score, ScoreAnswer, SystemOneResponse,
 };
+use http::{HeaderMap, StatusCode};
 
 use crate::support::{Measured, measure, measure_min};
 
@@ -82,7 +82,7 @@ where
     measured
 }
 
-fn decode<A: typesafe_sdk::AnswerSet>() -> SystemOneResponse<A> {
+fn decode<A: decision_model_sdk::AnswerSet>() -> SystemOneResponse<A> {
     sdk::decode_system_one(Bytes::from_static(RESULT), StatusCode::OK, HeaderMap::new(), 3)
         .expect("the fixture decodes")
 }

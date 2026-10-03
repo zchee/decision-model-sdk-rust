@@ -7,7 +7,7 @@ error[E0277]: `Answers` is not a question set
   |                           required by a bound introduced by this call
   |
   = help: the trait `QuestionSet` is not implemented for `Answers`
-  = note: derive it: `#[derive(typesafe_sdk::QuestionSet)]` on a struct with one `NoulAnswer`, `ChoiceAnswer` or `ScoreAnswer` field per question
+  = note: derive it: `#[derive(decision_model_sdk::QuestionSet)]` on a struct with one `NoulAnswer`, `ChoiceAnswer` or `ScoreAnswer` field per question
 note: required by a bound in `question::<impl Client<S>>::ask`
  --> src/question.rs
   |

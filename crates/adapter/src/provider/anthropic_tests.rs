@@ -9,11 +9,11 @@ use std::{
 };
 
 use ::http::{Request, Response, StatusCode};
+use decision_model_sdk::{Body, BoxError, ErrorKind as SdkErrorKind};
 use http_body_util::Full;
 use serde_json::{Value, json};
 use test_support::{Protocol, TestServer, json_response};
 use tower_service::Service;
-use typesafe_sdk::{Body, BoxError, ErrorKind as SdkErrorKind};
 
 use super::*;
 use crate::error::ErrorKind;
@@ -73,7 +73,7 @@ fn reply(stop_reason: Value) -> String {
 }
 
 /// What one call of the provider gave.
-type Outcome = Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>;
+type Outcome = Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>;
 
 /// One call of `provider` with [`messages`], and the trace it wrote.
 async fn ask<S: HttpService>(
@@ -305,7 +305,7 @@ async fn a_cloned_builder_builds_a_provider_with_the_same_settings() {
 fn the_names_are_the_model_and_the_public_type_path() {
     let provider = builder("http://127.0.0.1:9").build().expect("it builds");
     assert_eq!(provider.model_name(), "claude-haiku-4-5");
-    assert_eq!(provider.type_name(), "system_one_adapter::AnthropicProvider");
+    assert_eq!(provider.type_name(), "decision_model_adapter::AnthropicProvider");
 }
 
 #[test]

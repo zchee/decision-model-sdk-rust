@@ -64,7 +64,7 @@ compiles. Declaring it is what puts sonic-rs and its dependencies into
 `cargo deny` judges each crate of that tree that a supported target compiles
 (`deny.toml` turns on every feature of the crate it checks and limits the
 graph to the supported targets). Without the feature,
-`--features typesafe-sdk-rust/sonic` builds as well, but cargo resolves that
+`--features decision-model-sdk/sonic` builds as well, but cargo resolves that
 tree outside the lock file, at the newest versions the index has, even under
 `--locked` (seen with cargo 1.98.1), and the dependency policy does not see
 it. With the feature declared, both spellings build the locked versions. CI

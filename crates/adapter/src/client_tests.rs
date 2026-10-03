@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use typesafe_sdk::{Answers, RetryPolicy};
+use decision_model_sdk::{Answers, RetryPolicy};
 
 use super::{Client, MODEL_REQUIRED, PROVIDER_REQUIRED, Target, typed};
 #[cfg(any(feature = "openai", feature = "anthropic", feature = "gemini"))]
@@ -41,7 +41,7 @@ impl Provider for Fixed {
     fn request<'a>(
         &'a self,
         _: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async {
             Ok(Ok(ProviderResult::new(r#"{"answers":{"answer":0.75}}"#.to_owned(), None, None)))
         })
@@ -202,8 +202,8 @@ fn debug_of_a_client_names_the_type_of_its_instance_and_none_of_its_fields() {
 #[test]
 fn debug_of_a_request_prints_the_overrides_and_never_the_state() {
     let client = builder().build().expect("builds");
-    let questions = typesafe_sdk::Questions::new()
-        .noul("answer", typesafe_sdk::Noul::new().instructions("question-text"))
+    let questions = decision_model_sdk::Questions::new()
+        .noul("answer", decision_model_sdk::Noul::new().instructions("question-text"))
         .prepare()
         .expect("one noul prepares");
 
@@ -239,8 +239,8 @@ impl serde::Serialize for SlowState {
 async fn the_latency_starts_after_the_state_is_written() {
     let delay = Duration::from_millis(500);
     let client = builder().provider_instance(Fixed::named("an-instance")).build().expect("builds");
-    let questions = typesafe_sdk::Questions::new()
-        .noul("answer", typesafe_sdk::Noul::new())
+    let questions = decision_model_sdk::Questions::new()
+        .noul("answer", decision_model_sdk::Noul::new())
         .prepare()
         .expect("one noul prepares");
 
@@ -311,8 +311,8 @@ fn a_failed_build_takes_out_only_its_own_empty_cell() {
 fn the_future_of_send_is_send() {
     fn assert_send<T: Send>(_: &T) {}
     let client = builder().provider_instance(Fixed::named("an-instance")).build().expect("builds");
-    let questions = typesafe_sdk::Questions::new()
-        .noul("answer", typesafe_sdk::Noul::new())
+    let questions = decision_model_sdk::Questions::new()
+        .noul("answer", decision_model_sdk::Noul::new())
         .prepare()
         .expect("one noul prepares");
 

@@ -139,7 +139,8 @@ fn spacing_outside_the_value_is_dropped_when_the_raw_value_is_built() {
 fn a_raw_value_number_keeps_its_spelling_with_either_number_mode() {
     // The arbitrary-precision run sets the variable; the probe proves the
     // feature is on in that run, so the spelling below is checked in both.
-    let arbitrary = std::env::var("TYPESAFE_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
+    let arbitrary =
+        std::env::var("DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
     let probe = serde_json::to_string(
         &serde_json::from_str::<serde_json::Value>("1E2").expect("the feature probe parses"),
     )
@@ -193,7 +194,7 @@ fn a_struct_that_only_resembles_the_raw_value_protocol_is_an_ordinary_object() {
 
 /// sonic-rs's own raw type is spliced only by sonic-rs. The default engine
 /// writes it as the one-field object its protocol looks like to serde_json;
-/// this pins that, since 0.2.1 changes nothing under the default engine.
+/// this pins that the splice changes nothing under the default engine.
 #[test]
 fn a_sonic_lazy_value_is_raw_with_sonic_and_an_object_by_default() {
     let lazy: sonic_rs::LazyValue<'_> =

@@ -14,9 +14,9 @@ use std::{borrow::Cow, fmt, time::Duration};
 
 use ::http::{HeaderMap, Uri, header::AUTHORIZATION};
 use bytes::Bytes;
+use decision_model_sdk::HttpService;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
-use typesafe_sdk::HttpService;
 
 use super::{
     AttemptTrace, BoxFuture, Message, NonAnswer, Provider, ProviderCall, ProviderResult, Role,
@@ -180,7 +180,7 @@ where
     fn request<'a>(
         &'a self,
         mut call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async move {
             let body = self.body(call.messages(), call.schema(), call.structured());
             call.trace().record_request(&body, self.api.name());
@@ -197,7 +197,7 @@ where
     }
 
     fn type_name(&self) -> &str {
-        "system_one_adapter::OpenAiProvider"
+        "decision_model_adapter::OpenAiProvider"
     }
 
     fn log_uri(&self) -> Option<&Uri> {

@@ -9,7 +9,7 @@
 //! most verbose one, and the headers that carry secrets are redacted wherever
 //! they are printed.
 //!
-//! Every event has the target `typesafe_sdk`, so one filter directive selects
+//! Every event has the target `decision_model_sdk`, so one filter directive selects
 //! all of them. At `INFO` each attempt gets one line, as the Python SDK
 //! writes it: `GET <url> <- 200 in 12ms (request <id>)` for a response of any
 //! status, or `GET <url> <- timeout` - a fixed word per kind of failure, never
@@ -50,7 +50,7 @@ use crate::{
 /// The target every event of this crate is emitted under, those raised
 /// outside this module included.
 #[cfg(feature = "tracing")]
-pub(crate) const TARGET: &str = "typesafe_sdk";
+pub(crate) const TARGET: &str = "decision_model_sdk";
 
 /// One request, as the events about it name it.
 #[derive(Clone, Copy)]

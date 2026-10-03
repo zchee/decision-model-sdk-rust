@@ -8,11 +8,11 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{__internals as sdk, Body, Client, ClientBuilder};
 use http::{HeaderValue, Request, Response, StatusCode};
 use serde::Serialize;
 use tokio::runtime::Runtime;
 use tower_service::Service;
-use typesafe_sdk::{__internals as sdk, Body, Client, ClientBuilder};
 
 use crate::{MODEL, QUESTIONS_JSON};
 
@@ -67,7 +67,7 @@ pub(crate) fn runtime() -> Runtime {
 }
 
 /// A client over `service` with the settings every bench here shares.
-pub(crate) fn client<S: typesafe_sdk::HttpService>(service: S) -> Client<S> {
+pub(crate) fn client<S: decision_model_sdk::HttpService>(service: S) -> Client<S> {
     ClientBuilder::new()
         .api_key("bench-key")
         .base_url("http://127.0.0.1:9")

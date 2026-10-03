@@ -2,7 +2,7 @@
 //! the idle-connection check.
 //!
 //! Run them with
-//! `TYPESAFE_LIVE_TESTS=1 cargo nextest run -p typesafe-sdk-rust-live-tests`;
+//! `DECISION_MODEL_LIVE_TESTS=1 cargo nextest run -p decision-model-sdk-live-tests`;
 //! nothing else in the repository runs them.
 
 use std::{
@@ -10,13 +10,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use live_tests::live_client;
-use serde::Serialize;
-use typesafe_sdk::{
+use decision_model_sdk::{
     ChoiceAnswer, Client, Content, ErrorKind, NoulAnswer, QuestionSet, Questions, RetryPolicy,
     ScoreAnswer,
     question::{Choice, Noul, Score},
 };
+use live_tests::live_client;
+use serde::Serialize;
 
 /// The tone options both System One tests offer.
 const TONES: [&str; 3] = ["calm", "frustrated", "angry"];

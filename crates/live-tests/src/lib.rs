@@ -1,9 +1,9 @@
 //! What the tests against the live TypeSafe API share.
 //!
 //! **These tests make real, billed calls.** They run only when BOTH
-//! `TYPESAFE_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are in the environment; then
+//! `DECISION_MODEL_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are in the environment; then
 //! `cargo test --workspace`, `cargo nextest run --workspace` or any command
-//! naming `-p typesafe-sdk-rust-live-tests` sends requests to the live API on
+//! naming `-p decision-model-sdk-live-tests` sends requests to the live API on
 //! that key's account. A key alone is not enough, so a contributor who has one
 //! exported for other work is not billed by a stray `--workspace`. This crate
 //! is a workspace member (so its code is linted and compiled) but not a
@@ -18,14 +18,14 @@
 
 use std::{env, time::Duration};
 
-use typesafe_sdk::{Client, constants::API_KEY_ENV};
+use decision_model_sdk::{Client, constants::API_KEY_ENV};
 
 /// The deadline of one live request: the Python SDK's live tests give their
 /// clients 120 seconds, far more than a System One answer takes.
 pub const LIVE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The variable that opts in to the live tests; it must be exactly `1`.
-pub const LIVE_TESTS_ENV: &str = "TYPESAFE_LIVE_TESTS";
+pub const LIVE_TESTS_ENV: &str = "DECISION_MODEL_LIVE_TESTS";
 
 /// A client for the live API, configured from the environment as
 /// [`Client::from_env`] configures one, with [`LIVE_TIMEOUT`] as its
@@ -33,7 +33,7 @@ pub const LIVE_TESTS_ENV: &str = "TYPESAFE_LIVE_TESTS";
 ///
 /// # Panics
 ///
-/// When `TYPESAFE_LIVE_TESTS` is not `1` or `TYPESAFE_API_KEY` is unset or
+/// When `DECISION_MODEL_LIVE_TESTS` is not `1` or `TYPESAFE_API_KEY` is unset or
 /// empty - checked before the client is built, with a message naming both
 /// variables and never the key's value - and when the client cannot be built
 /// for another reason, with the SDK's own configuration error.

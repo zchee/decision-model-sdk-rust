@@ -3,8 +3,8 @@
 use std::{mem, time::Duration};
 
 use bytes::Bytes;
+use decision_model_sdk::ApiError;
 use http::{HeaderMap, StatusCode};
-use typesafe_sdk::ApiError;
 
 use super::*;
 use crate::response::{RetryCategory, RetryReason};
@@ -35,7 +35,7 @@ fn display_is_the_sentence_of_each_kind() {
     let cases = [
         (
             "provider",
-            Error::provider(typesafe_sdk::Error::timeout(Duration::from_secs(600))),
+            Error::provider(decision_model_sdk::Error::timeout(Duration::from_secs(600))),
             "Request timed out (timeout=600s).",
         ),
         (
@@ -56,9 +56,9 @@ fn display_is_the_sentence_of_each_kind() {
 #[test]
 fn the_kind_and_its_name_match_the_constructor() {
     let cases = [
-        (Error::provider(typesafe_sdk::Error::timeout(Duration::from_secs(1))), "Timeout"),
-        (Error::provider(typesafe_sdk::Error::response_too_large(16)), "ResponseTooLarge"),
-        (Error::provider(typesafe_sdk::Error::connection("refused", None)), "Connection"),
+        (Error::provider(decision_model_sdk::Error::timeout(Duration::from_secs(1))), "Timeout"),
+        (Error::provider(decision_model_sdk::Error::response_too_large(16)), "ResponseTooLarge"),
+        (Error::provider(decision_model_sdk::Error::connection("refused", None)), "Connection"),
         (Error::non_answer(NonAnswer::new("refusal")), "NonAnswer"),
         (Error::malformed_structure("bad"), "MalformedStructure"),
         (Error::invalid_request("bad"), "InvalidRequest"),
@@ -82,12 +82,12 @@ fn the_kind_and_its_name_match_the_constructor() {
 #[test]
 fn source_is_the_sdk_errors_cause_or_the_recorded_cause() {
     let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
-    let provider = Error::provider(typesafe_sdk::Error::connection(
+    let provider = Error::provider(decision_model_sdk::Error::connection(
         "could not reach the vendor",
         Some(Box::new(refused)),
     ));
     let without_cause =
-        Error::provider(typesafe_sdk::Error::connection("could not reach the vendor", None));
+        Error::provider(decision_model_sdk::Error::connection("could not reach the vendor", None));
     let decode = serde_json::from_str::<u8>("\"seven\"").expect_err("a string is not a u8");
     let decode_text = decode.to_string();
     let malformed = Error::malformed_structure(VALIDATION).with_source(Box::new(decode));
@@ -120,10 +120,10 @@ fn a_chain_printer_prints_the_sdk_message_once() {
         Bytes::from_static(br#"{"error":{"message":"Rate limit reached"}}"#),
         HeaderMap::new(),
     );
-    let sdk_api = typesafe_sdk::Error::from(api);
+    let sdk_api = decision_model_sdk::Error::from(api);
     let api_text = sdk_api.to_string();
 
-    let connection = Error::provider(typesafe_sdk::Error::connection(
+    let connection = Error::provider(decision_model_sdk::Error::connection(
         "could not reach the vendor",
         Some(Box::new(refused)),
     ));
@@ -221,9 +221,9 @@ fn a_long_vendor_message_is_cut_at_200_characters() {
 #[test]
 fn the_kind_name_of_a_provider_failure_needs_only_a_reference() {
     let cases = [
-        (typesafe_sdk::Error::timeout(Duration::from_secs(1)), "Timeout"),
-        (typesafe_sdk::Error::response_too_large(16), "ResponseTooLarge"),
-        (typesafe_sdk::Error::connection("refused", None), "Connection"),
+        (decision_model_sdk::Error::timeout(Duration::from_secs(1)), "Timeout"),
+        (decision_model_sdk::Error::response_too_large(16), "ResponseTooLarge"),
+        (decision_model_sdk::Error::connection("refused", None), "Connection"),
         (
             ApiError::from_response(StatusCode::TOO_MANY_REQUESTS, Bytes::new(), HeaderMap::new())
                 .into(),

@@ -19,13 +19,13 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{Response, StatusCode, Version};
-use http_body_util::Full;
-use test_support::{Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, Tls};
-use typesafe_sdk::{
+use decision_model_sdk::{
     Client, ClientBuilder, Error, ErrorKind, HttpVersion, Noul, PreparedQuestions, Questions,
     RetryPolicy,
 };
+use http::{Response, StatusCode, Version};
+use http_body_util::Full;
+use test_support::{Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, Tls};
 
 #[cfg(feature = "tracing")]
 #[expect(
@@ -137,7 +137,7 @@ async fn failing_burst(client: &Client, count: usize, within: Duration) -> Vec<(
 /// closed its connection, and the client has seen the close.
 #[cfg(feature = "internals")]
 async fn until_no_stream_is_open(client: &Client, server: &TestServer) {
-    use typesafe_sdk::__internals::open_streams;
+    use decision_model_sdk::__internals::open_streams;
 
     let closed = async {
         while open_streams(client) > 0 {
@@ -301,7 +301,7 @@ async fn after_warm_up_a_fan_out_opens_no_new_connection() {
 #[cfg(feature = "internals")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_burst_after_the_server_closed_the_connection_opens_one_more() {
-    use typesafe_sdk::__internals::open_streams;
+    use decision_model_sdk::__internals::open_streams;
 
     let server = tls_server().await;
     let client = client_for(&server);
@@ -354,7 +354,7 @@ async fn a_burst_at_a_refusing_port_fails_every_call_and_ends() {
         assert_eq!(*message, format!("{WAITED}{refusal}"), "call {index}");
     }
     #[cfg(feature = "internals")]
-    assert_eq!(typesafe_sdk::__internals::open_streams(&client), 0);
+    assert_eq!(decision_model_sdk::__internals::open_streams(&client), 0);
 }
 
 /// A call waiting for a connect outlives the call that started it. The first
@@ -560,7 +560,7 @@ async fn a_burst_after_the_server_closed_the_connection_enters_the_pool_once() {
 #[cfg(feature = "internals")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_pool_is_warm_after_a_call_and_not_once_its_stream_is_gone() {
-    use typesafe_sdk::__internals::pool_is_warm;
+    use decision_model_sdk::__internals::pool_is_warm;
 
     let server = tls_server().await;
     let client = client_for(&server);

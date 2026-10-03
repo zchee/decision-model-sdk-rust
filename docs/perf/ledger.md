@@ -7,6 +7,10 @@ answer. Results that contradict the plan are marked **Contradicts the plan** and
 The plan is the port's plan, which is not part of this repository; identifiers such as AC-P1, R17, T0.1 and v3.5 name
 its acceptance criteria, risks, tasks and revisions.
 
+The crates were renamed on 2026-10-03 and their versions restarted at 0.1.0. The commands below name the packages by
+their current names; a version named in an entry written before that date is a release made under the earlier names,
+and the tags such an entry names are tags of that time.
+
 ## Environment
 
 | Item | Value |
@@ -1242,12 +1246,12 @@ for that pinned scenario. The plan's own assumptions inside AC-P6 - "`HeaderMap`
 ### 2026-09-19 - libtest's own allocations in a measured section
 
 **What flaked.** CI run 35416188952 on `6658076`, job `coverage`, step "Line coverage"
-(`cargo llvm-cov nextest -p typesafe-sdk-rust --all-features --fail-under-lines 85`): exit 100, a failed test, after
+(`cargo llvm-cov nextest -p decision-model-sdk --all-features --fail-under-lines 85`): exit 100, a failed test, after
 63 s. The same step passed on `383e2fb`, and the uninstrumented `check` job passed on the same commit.
 
 **Reproduced** on a Linux x86_64 host (Debian 13, 44 CPUs) at `6658076`, built as cargo-llvm-cov builds
 (`-C instrument-coverage --cfg=coverage`, `--target-dir <repo>/target/llvm-cov-target`). Every test of
-`-p typesafe-sdk-rust` ran in its own process, as nextest runs it, 4 at a time, each under `taskset -c 0-3`: 4
+`-p decision-model-sdk` ran in its own process, as nextest runs it, 4 at a time, each under `taskset -c 0-3`: 4
 failures in 31 rounds x 390 tests. All four were allocation budgets, and all four had the same extra charge:
 
 | Round | Test | Measured | Normally |
@@ -1340,10 +1344,10 @@ each benchmark switches it on and off around its own measured call through `cods
 counts under its own name:
 
 ```sh
-cargo codspeed build -m simulation -p typesafe-sdk-rust --features internals --bench sdk
+cargo codspeed build -m simulation -p decision-model-sdk --features internals --bench sdk
 CODSPEED_ENV=local CODSPEED_CARGO_WORKSPACE_ROOT=$PWD taskset -c 2 \
   valgrind --tool=callgrind --instr-atstart=no --compress-strings=no \
-  --callgrind-out-file=out.%p target/codspeed/analysis/typesafe-sdk-rust/sdk
+  --callgrind-out-file=out.%p target/codspeed/analysis/decision-model-sdk/sdk
 callgrind_annotate out.<pid>.<n>          # PROGRAM TOTALS, one dump per benchmark
 ```
 
@@ -1731,7 +1735,7 @@ under Method, not code this change runs. The encode, assembly and retry benchmar
 
 Commands: the alloc tests as under "Final AC-P1 / AC-P2 / AC-P3 / AC-P6 check", at `521736d` and at `821d970`, dev
 and release. On the Linux host there were two scratch clones, one at `521736d` and one with `821d970`'s diff applied.
-Each was built with `cargo codspeed build -m simulation -p typesafe-sdk-rust --features internals --bench sdk`, and
+Each was built with `cargo codspeed build -m simulation -p decision-model-sdk --features internals --bench sdk`, and
 the callgrind command under Method was run on each tree five times, pinned to one core, one run at a time. Both
 clones were removed afterwards.
 
@@ -1932,7 +1936,7 @@ The differential suite compares against serde_json under `sonic` and sonic-rs ot
 ### Unified arbitrary_precision
 
 A separate full test run enables `internals,serde_json/arbitrary_precision` and sets
-`TYPESAFE_SDK_TEST_ARBITRARY_PRECISION=1` in that command's environment only. The tests compare
+`DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION=1` in that command's environment only. The tests compare
 this switch with a real `1E2` parse/serialize probe: `100.0` normally, `1e+2` under the feature;
 an accidental feature unification therefore fails rather than silently changing expectations.
 
@@ -1999,7 +2003,7 @@ Benchmarks workflow run 36705075195) lists 35 benchmarks, every identifier of th
 `assembly.rs` 2, `call.rs` 5, `decode.rs` 7, `encode.rs` 15, `retry.rs` 6. The run of the commit before, `306d467` (run
 `6abca528f13b3eb4dd420ffd`), lists the same 35 names, every identifier of the form `benches/sdk/<module>.rs::...` (for
 example `benches/sdk/decode.rs::decode::answers[20]`). CodSpeed's comparison of the two runs ([`306d467` against
-`8062d8c`](https://app.codspeed.io/zchee/typesafe-sdk-rust/runs/compare/6abca528f13b3eb4dd420ffd..6abcea9e8d1242d046c5f23a))
+`8062d8c`](https://app.codspeed.io/zchee/decision-model-sdk-rust/runs/compare/6abca528f13b3eb4dd420ffd..6abcea9e8d1242d046c5f23a))
 reports 35 benchmarks as New and 35 as Skipped, compares none (no row has a base value) and gives no overall impact: the
 history of each benchmark starts again at `8062d8c`, as expected. The values can still be compared by name across the
 two runs, for example `answers[20]` 156.3 µs at `306d467` and 155.9 µs at `8062d8c`, `sdk` (call) 103.3 µs and 102.5 µs,

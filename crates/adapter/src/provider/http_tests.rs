@@ -8,12 +8,12 @@ use std::{
     io,
 };
 
+use decision_model_sdk::{ApiErrorKind, ErrorKind as SdkErrorKind};
 use http::{
     Version,
     header::{AUTHORIZATION, LOCATION},
 };
 use test_support::{Protocol, RefusingPort, SilentServer, TestServer, json_response};
-use typesafe_sdk::{ApiErrorKind, ErrorKind as SdkErrorKind};
 
 use super::*;
 use crate::error::ErrorKind;
@@ -264,10 +264,7 @@ fn the_request_headers_are_json_the_user_agent_and_the_key() {
     assert_eq!(headers.len(), 4);
     assert_eq!(headers[CONTENT_TYPE], "application/json");
     assert_eq!(headers[ACCEPT], "application/json");
-    assert_eq!(
-        headers[USER_AGENT],
-        concat!("typesafe-sdk-rust-adapter/", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(headers[USER_AGENT], concat!("decision-model-adapter/", env!("CARGO_PKG_VERSION")));
     assert_eq!(headers["x-goog-api-key"], KEY);
     assert!(headers["x-goog-api-key"].is_sensitive());
 }
@@ -861,7 +858,7 @@ async fn a_request_carries_the_key_the_headers_and_the_body() {
     assert_eq!(request.header_values("accept"), ["application/json"]);
     assert_eq!(
         request.header_values("user-agent"),
-        [concat!("typesafe-sdk-rust-adapter/", env!("CARGO_PKG_VERSION"))]
+        [concat!("decision-model-adapter/", env!("CARGO_PKG_VERSION"))]
     );
     assert_eq!(request.body, Bytes::from_static(br#"{"input":"hello"}"#));
 }
@@ -1375,7 +1372,7 @@ async fn no_event_of_any_target_holds_the_key_or_the_base_urls_path() {
     // The events are not the adapter's alone: the HTTP/2 codec's and the
     // connection pool's are among them.
     let lines = recorder.all();
-    for target in ["system_one_adapter ", "h2::", "hyper_util::"] {
+    for target in ["decision_model_adapter ", "h2::", "hyper_util::"] {
         assert!(
             lines.iter().any(|line| line.starts_with(target)),
             "no event of {target:?} among {} events",
@@ -1410,10 +1407,10 @@ fn the_recorder_keeps_the_fields_of_every_span_and_at_returns_events_only() {
     // A span of the adapter's own target: `at` leaves it out for being a
     // span, not for its target.
     let own =
-        tracing::trace_span!(target: "system_one_adapter", "attempt", note = "marker-own-77aa");
+        tracing::trace_span!(target: "decision_model_adapter", "attempt", note = "marker-own-77aa");
     foreign.record("flushed", "marker-recorded-later-8e2a");
     own.record("note", "marker-own-later-3b90");
-    tracing::trace!(target: "system_one_adapter", note = "marker-event-c4f1");
+    tracing::trace!(target: "decision_model_adapter", note = "marker-event-c4f1");
     drop(installed);
 
     assert_ne!(foreign.id(), own.id(), "each span has its own id");
@@ -1421,10 +1418,10 @@ fn the_recorder_keeps_the_fields_of_every_span_and_at_returns_events_only() {
         recorder.all(),
         [
             r#"another_crate::codec write_frame frame="marker-at-open-5d1c""#,
-            r#"system_one_adapter attempt note="marker-own-77aa""#,
+            r#"decision_model_adapter attempt note="marker-own-77aa""#,
             r#"another_crate::codec write_frame flushed="marker-recorded-later-8e2a""#,
-            r#"system_one_adapter attempt note="marker-own-later-3b90""#,
-            r#"system_one_adapter note="marker-event-c4f1""#,
+            r#"decision_model_adapter attempt note="marker-own-later-3b90""#,
+            r#"decision_model_adapter note="marker-event-c4f1""#,
         ]
     );
     assert_eq!(recorder.at(Level::TRACE), [r#" note="marker-event-c4f1""#]);

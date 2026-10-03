@@ -9,11 +9,11 @@ use std::{
     time::Instant,
 };
 
-use serde::Serialize;
-use tokio::sync::OnceCell;
-use typesafe_sdk::{
+use decision_model_sdk::{
     AnswerContext, AnswerSet, Answers, PreparedQuestions, QuestionSet, RetryPolicy,
 };
+use serde::Serialize;
+use tokio::sync::OnceCell;
 
 use crate::{
     error::Error,
@@ -31,7 +31,7 @@ const MODEL_REQUIRED: &str = "An LLM model is required on the client or call.";
 /// Upstream's sentence for a model name without a provider to ask it of.
 const PROVIDER_REQUIRED: &str = "A provider is required: set provider='openai', 'anthropic', or 'gemini', or pass a provider instance as the model.";
 
-/// Asks a model TypeSafe System One questions about a state.
+/// Asks a model System One questions about a state.
 ///
 /// A client holds the options of every call it makes and, optionally, the
 /// model the calls go to. It is cheap to clone: the clones share one set of

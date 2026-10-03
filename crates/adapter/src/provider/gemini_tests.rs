@@ -9,11 +9,11 @@ use std::{
 };
 
 use ::http::{Request, Response, StatusCode};
+use decision_model_sdk::{ApiErrorKind, Body, BoxError, ErrorKind as SdkErrorKind};
 use http_body_util::Full;
 use serde_json::json;
 use test_support::{Protocol, TestServer, json_response};
 use tower_service::Service;
-use typesafe_sdk::{ApiErrorKind, Body, BoxError, ErrorKind as SdkErrorKind};
 
 use super::*;
 use crate::{
@@ -32,7 +32,7 @@ const MODEL: &str = "gemini-3.8-flash";
 const SCHEMA: &str = r#"{"type":"object","properties":{"answers":{"type":"object"}}}"#;
 
 /// What one call of the provider returns.
-type Outcome = Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>;
+type Outcome = Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>;
 
 /// Upstream's two messages of `tests/test_provider_requests.py`.
 fn messages() -> Vec<Message> {
@@ -237,7 +237,7 @@ async fn the_request_is_one_post_to_the_interactions_path_with_the_key() {
         assert_eq!(request.header_values("content-type"), ["application/json"]);
         assert_eq!(
             request.header_values("user-agent"),
-            [concat!("typesafe-sdk-rust-adapter/", env!("CARGO_PKG_VERSION"))]
+            [concat!("decision-model-adapter/", env!("CARGO_PKG_VERSION"))]
         );
     }
     assert_eq!(server.request_count(), 2);
@@ -569,7 +569,7 @@ fn the_provider_names_its_model_and_its_public_path() {
     let provider = provider("http://127.0.0.1:1");
 
     assert_eq!(provider.model_name(), MODEL);
-    assert_eq!(provider.type_name(), "system_one_adapter::GeminiProvider");
+    assert_eq!(provider.type_name(), "decision_model_adapter::GeminiProvider");
 }
 
 #[test]

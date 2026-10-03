@@ -21,6 +21,7 @@
 use std::{error::Error, future::poll_fn, time::Duration};
 
 use bytes::Bytes;
+use decision_model_sdk::Body;
 use http::{
     HeaderMap, HeaderValue, Method, Request, Response, Uri,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
@@ -31,7 +32,6 @@ use serde_json as codec;
 #[cfg(feature = "sonic")]
 use sonic_rs as codec;
 use tower_service::Service;
-use typesafe_sdk::Body;
 
 use crate::naive_response::NaiveResponse;
 
@@ -90,8 +90,8 @@ impl NaiveClient {
         headers.insert(AUTHORIZATION, HeaderValue::from_str(&format!("Bearer {}", self.api_key))?);
         headers.insert(ACCEPT, HeaderValue::from_str("application/json")?);
         headers.insert(CONTENT_TYPE, HeaderValue::from_str("application/json")?);
-        headers.insert(USER_AGENT, HeaderValue::from_str("typesafe-naive/0.1.0")?);
-        headers.insert("x-typesafe-sdk", HeaderValue::from_str("typesafe-naive/0.1.0")?);
+        headers.insert(USER_AGENT, HeaderValue::from_str("decision-model-naive/0.1.0")?);
+        headers.insert("x-typesafe-sdk", HeaderValue::from_str("decision-model-naive/0.1.0")?);
         headers.insert("x-typesafe-runtime", HeaderValue::from_str("rust")?);
         let mut request = Request::new(Body::from(Bytes::from(body)));
         *request.method_mut() = Method::POST;

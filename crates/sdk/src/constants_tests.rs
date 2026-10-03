@@ -41,7 +41,7 @@ fn header_names_are_the_python_sdk_names_lower_cased() {
 
 #[test]
 fn sdk_identifier_names_this_port_and_its_version() {
-    let expected = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let expected = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     assert_eq!(SDK_IDENTIFIER, expected.as_str());
 }
 

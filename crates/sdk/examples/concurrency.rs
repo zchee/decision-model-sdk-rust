@@ -15,8 +15,8 @@
 
 use std::{process::ExitCode, sync::Arc};
 
+use decision_model_sdk::{Client, Error, Noul, PreparedQuestions, Questions};
 use tokio::{sync::Semaphore, task::JoinSet};
-use typesafe_sdk::{Client, Error, Noul, PreparedQuestions, Questions};
 
 /// The most calls in flight at once.
 const MAX_IN_FLIGHT: usize = 4;

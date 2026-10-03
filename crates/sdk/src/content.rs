@@ -51,14 +51,14 @@ pub enum ContentError {
 /// read back there.
 ///
 /// ```
-/// use typesafe_sdk::Content;
+/// use decision_model_sdk::Content;
 ///
 /// let borrowed = Content::text("payments or invoices");
 /// assert_eq!(borrowed.as_text(), Some("payments or invoices"));
 ///
 /// let structured = Content::json(&[1, 2, 3])?;
 /// assert_eq!(structured.as_json().map(|raw| raw.as_str()), Some("[1,2,3]"));
-/// # Ok::<(), typesafe_sdk::ContentError>(())
+/// # Ok::<(), decision_model_sdk::ContentError>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Content<'a> {

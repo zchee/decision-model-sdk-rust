@@ -9,11 +9,11 @@ use std::{
 };
 
 use ::http::{Method, Request, Response, StatusCode};
+use decision_model_sdk::{ApiErrorKind, Body, BoxError, ErrorKind as SdkErrorKind};
 use http_body_util::Full;
 use serde_json::{Value, json};
 use test_support::{Protocol, TestServer, json_response};
 use tower_service::Service;
-use typesafe_sdk::{ApiErrorKind, Body, BoxError, ErrorKind as SdkErrorKind};
 
 use super::*;
 use crate::error::ErrorKind;
@@ -68,7 +68,7 @@ fn provider(server: &TestServer, api: OpenAiApi) -> OpenAiProvider {
 async fn ask(
     provider: &dyn Provider,
     structured: bool,
-) -> (Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>, AttemptTrace) {
+) -> (Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>, AttemptTrace) {
     ask_with(provider, &messages(), structured).await
 }
 
@@ -76,7 +76,7 @@ async fn ask_with(
     provider: &dyn Provider,
     messages: &[Message],
     structured: bool,
-) -> (Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>, AttemptTrace) {
+) -> (Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>, AttemptTrace) {
     let schema = schema();
     let mut trace = AttemptTrace::default();
     let result =
@@ -199,7 +199,7 @@ async fn a_provider_reports_its_model_and_its_public_type_path() {
     let provider = provider(&server, OpenAiApi::Responses);
 
     assert_eq!(provider.model_name(), "test-model");
-    assert_eq!(provider.type_name(), "system_one_adapter::OpenAiProvider");
+    assert_eq!(provider.type_name(), "decision_model_adapter::OpenAiProvider");
 }
 
 #[test]

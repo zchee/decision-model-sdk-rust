@@ -25,15 +25,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use http::{HeaderValue, Request, StatusCode, header::LOCATION};
-use http_body_util::Full;
-use serde_json::{Value, json};
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, Answers, AttemptTrace, Client, ClientBuilder, Error, ErrorKind, Noul, OpenAiApi,
     OpenAiProvider, OpenAiProviderBuilder, PreparedQuestions, Provider, ProviderCall, Questions,
     Response, RetryPolicy, StructuredOutputs, Trace,
-    typesafe_sdk::{self, ApiErrorKind, Body, BoxError},
+    decision_model_sdk::{self, ApiErrorKind, Body, BoxError},
 };
+use http::{HeaderValue, Request, StatusCode, header::LOCATION};
+use http_body_util::Full;
+use serde_json::{Value, json};
 use test_support::{
     Protocol, RecordedRequest, RefusingPort, SilentServer, TestServer, json_response,
 };
@@ -161,10 +161,10 @@ fn non_answer_message(error: &Error) -> String {
 }
 
 /// The API error inside the adapter's error for a failed exchange.
-fn api_error(error: &Error) -> &typesafe_sdk::ApiError {
+fn api_error(error: &Error) -> &decision_model_sdk::ApiError {
     match error.kind() {
         ErrorKind::Provider(error) => match error.kind() {
-            typesafe_sdk::ErrorKind::Api(api) => api,
+            decision_model_sdk::ErrorKind::Api(api) => api,
             other => panic!("expected an API error, got {other:?}"),
         },
         other => panic!("expected a provider failure, got {other:?}"),
@@ -1001,7 +1001,7 @@ async fn every_error_path() -> Vec<(&'static str, Error)> {
         .await
         .expect_err("the connect is refused");
     assert!(
-        matches!(error.kind(), ErrorKind::Provider(error) if matches!(error.kind(), typesafe_sdk::ErrorKind::Connection)),
+        matches!(error.kind(), ErrorKind::Provider(error) if matches!(error.kind(), decision_model_sdk::ErrorKind::Connection)),
         "{error:?}"
     );
     errors.push(("connect", error));
@@ -1013,7 +1013,7 @@ async fn every_error_path() -> Vec<(&'static str, Error)> {
         .expect("the provider builds");
     let error = evaluate(question(), Arc::new(slow)).await.expect_err("the server never answers");
     assert!(
-        matches!(error.kind(), ErrorKind::Provider(error) if matches!(error.kind(), typesafe_sdk::ErrorKind::Timeout { .. })),
+        matches!(error.kind(), ErrorKind::Provider(error) if matches!(error.kind(), decision_model_sdk::ErrorKind::Timeout { .. })),
         "{error:?}"
     );
     errors.push(("timeout", error));
@@ -1174,11 +1174,11 @@ fn lines_of(lines: &[String], target: &str) -> Vec<String> {
 
 /// The target of the SDK's events, the retry line among them.
 #[cfg(feature = "tracing")]
-const SDK_TARGET: &str = "typesafe_sdk";
+const SDK_TARGET: &str = "decision_model_sdk";
 
 /// The target of the adapter's own events.
 #[cfg(feature = "tracing")]
-const ADAPTER_TARGET: &str = "system_one_adapter";
+const ADAPTER_TARGET: &str = "decision_model_adapter";
 
 /// A retried failure, a non-answer, a corrected reply and an answer, a
 /// refused connect and a deadline: the calls whose events are read.
@@ -1753,7 +1753,7 @@ async fn foreign_service_error_holding_the_headers_shows_no_key() {
     let ErrorKind::Provider(failure) = error.kind() else {
         panic!("expected a provider failure, got {error:?}");
     };
-    assert!(matches!(failure.kind(), typesafe_sdk::ErrorKind::Connection), "{failure:?}");
+    assert!(matches!(failure.kind(), decision_model_sdk::ErrorKind::Connection), "{failure:?}");
     // `source()` starts below the SDK's error, which `kind()` gives: the
     // service's error is not kept as the SDK error's cause either.
     let links = chain(&error);

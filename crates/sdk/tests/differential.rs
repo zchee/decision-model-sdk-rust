@@ -21,6 +21,11 @@ use std::{
     time::Instant,
 };
 
+use decision_model_sdk::{
+    __internals as sdk, Content, DecodeError, DecodeErrorKind,
+    models::ModelMetadata,
+    response::{Answer, Answers, Usage},
+};
 use proptest::{
     collection::vec,
     prelude::*,
@@ -31,11 +36,6 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, MapAccess, SeqAccess, Visitor},
     ser::{SerializeMap, SerializeSeq},
-};
-use typesafe_sdk::{
-    __internals as sdk, Content, DecodeError, DecodeErrorKind,
-    models::ModelMetadata,
-    response::{Answer, Answers, Usage},
 };
 
 #[cfg(feature = "sonic")]
@@ -725,7 +725,8 @@ fn only_negative_zero_and_nesting_depth_divergences_occur() {
 /// document carried was taken as the cause without looking at the error.
 #[test]
 fn a_one_sided_refusal_is_accepted_only_for_the_cause_its_error_names() {
-    let arbitrary = std::env::var("TYPESAFE_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
+    let arbitrary =
+        std::env::var("DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
     let probe = serde_json::to_string(
         &serde_json::from_str::<serde_json::Value>("1E2").expect("the feature probe parses"),
     )

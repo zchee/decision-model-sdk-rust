@@ -1,6 +1,6 @@
 // A field's type is the answer type of its question, recognized by name;
 // an optional answer is refused with the reason.
-use typesafe_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
 
 type Spam = NoulAnswer;
 
@@ -9,7 +9,7 @@ struct Types {
     #[noul]
     kind_mismatch: ChoiceAnswer,
     #[score(levels("low", "high"))]
-    another_mismatch: typesafe_sdk::NoulAnswer,
+    another_mismatch: decision_model_sdk::NoulAnswer,
     #[noul]
     number: f64,
     #[noul]

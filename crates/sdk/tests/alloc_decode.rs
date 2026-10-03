@@ -33,15 +33,15 @@ mod support;
 use std::fmt;
 
 use bytes::Bytes;
+use decision_model_sdk::{
+    __internals as sdk,
+    de::{AnswerContext, AnswerSet},
+    response::{Answers, ChoiceAnswer, NoulAnswer, ScoreAnswer, SystemOneResponse},
+};
 use http::{HeaderMap, StatusCode};
 use serde::{
     Deserialize,
     de::{self, Deserializer, IgnoredAny, MapAccess, Visitor},
-};
-use typesafe_sdk::{
-    __internals as sdk,
-    de::{AnswerContext, AnswerSet},
-    response::{Answers, ChoiceAnswer, NoulAnswer, ScoreAnswer, SystemOneResponse},
 };
 
 use crate::support::{Measured, measure_min};
@@ -107,7 +107,8 @@ use ticket::Ticket;
 
 #[test]
 fn decoding_the_three_answer_fixture_stays_within_its_budget() {
-    let arbitrary = std::env::var("TYPESAFE_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
+    let arbitrary =
+        std::env::var("DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION").as_deref() == Ok("1");
     let probe = serde_json::to_string(
         &serde_json::from_str::<serde_json::Value>("1E2").expect("the feature probe parses"),
     )

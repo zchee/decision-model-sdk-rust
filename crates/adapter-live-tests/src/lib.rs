@@ -1,10 +1,10 @@
 //! What the adapter's tests against the live vendor APIs share.
 //!
 //! **These tests make real, billed calls** to OpenAI, Anthropic and Gemini.
-//! A test runs only when BOTH `TYPESAFE_ADAPTER_LIVE_TESTS=1` and its
+//! A test runs only when BOTH `DECISION_MODEL_ADAPTER_LIVE_TESTS=1` and its
 //! provider's key are in the environment: `OPENAI_API_KEY`,
 //! `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY` (else `GEMINI_API_KEY`) for
-//! Gemini. Then any command naming `-p typesafe-sdk-rust-adapter-live-tests`,
+//! Gemini. Then any command naming `-p decision-model-adapter-live-tests`,
 //! or a `--workspace` run, sends requests to that vendor on that key's
 //! account. A key alone is not enough, so a contributor who has one exported
 //! for other work is not billed by a stray `--workspace`. This crate is a
@@ -28,7 +28,7 @@
 
 use std::{env, sync::Arc, time::Duration};
 
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, AnthropicProvider, Client, Error, GeminiProvider, OpenAiProvider,
     PreparedQuestions, Provider, ProviderName, Response, RetryPolicy, StructuredOutputs,
 };
@@ -38,7 +38,7 @@ use system_one_adapter::{
 pub const LIVE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// The variable that opts in to the live tests; it must be exactly `1`.
-pub const LIVE_TESTS_ENV: &str = "TYPESAFE_ADAPTER_LIVE_TESTS";
+pub const LIVE_TESTS_ENV: &str = "DECISION_MODEL_ADAPTER_LIVE_TESTS";
 
 /// The OpenAI model upstream's live tests ask.
 pub const OPENAI_MODEL: &str = "gpt-4o-mini";
@@ -174,7 +174,7 @@ impl Live {
 ///
 /// # Panics
 ///
-/// When `TYPESAFE_ADAPTER_LIVE_TESTS` is not `1` or `OPENAI_API_KEY` is unset
+/// When `DECISION_MODEL_ADAPTER_LIVE_TESTS` is not `1` or `OPENAI_API_KEY` is unset
 /// or empty, checked before anything is built, with a message naming both
 /// variables and never the key's value; and when the provider cannot be
 /// built, with the adapter's configuration error.

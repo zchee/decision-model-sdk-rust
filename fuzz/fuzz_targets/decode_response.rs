@@ -16,11 +16,11 @@
 use std::hint::black_box;
 
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode};
-use libfuzzer_sys::fuzz_target;
-use typesafe_sdk::{
+use decision_model_sdk::{
     __internals, Answer, Answers, ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer,
 };
+use http::{HeaderMap, StatusCode};
+use libfuzzer_sys::fuzz_target;
 
 /// The typed answer set the upstream `RESULT` fixture answers, so a body
 /// close to a real one reaches the derived decoder's field-by-field path.
@@ -57,7 +57,7 @@ fn touch(answer: &Answer) {
 }
 
 /// Renders an error the ways a caller would print it.
-fn render(error: &typesafe_sdk::Error) {
+fn render(error: &decision_model_sdk::Error) {
     black_box(error.to_string());
     black_box(format!("{error:?}"));
 }

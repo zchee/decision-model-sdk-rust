@@ -28,9 +28,9 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{Body, ClientBuilder, Noul, PreparedQuestions, Questions, Score};
 use http::{Request, Response};
 use tower_service::Service;
-use typesafe_sdk::{Body, ClientBuilder, Noul, PreparedQuestions, Questions, Score};
 
 // A plain wrapper type, so declaring it as the global allocator stays safe
 // code even though the crate under test forbids `unsafe`.

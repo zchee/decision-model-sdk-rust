@@ -16,9 +16,9 @@
 //! into a retained buffer, so neither pays for growing it: this isolates the
 //! escaper, which is the part of the encode the codec choice decides.
 
+use decision_model_sdk::__internals as sdk;
 use divan::{Bencher, black_box};
 use serde::Serialize;
-use typesafe_sdk::__internals as sdk;
 
 use crate::{
     service::body,

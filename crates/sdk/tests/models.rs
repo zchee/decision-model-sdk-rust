@@ -2,9 +2,9 @@
 //! cases of the upstream `tests/test_clients.py` (upstream has no
 //! `test_models.py`), and `warm_up`, which is a models call.
 
+use decision_model_sdk::{ApiErrorKind, Client, ErrorKind};
 use http::StatusCode;
 use test_support::{Protocol, TestServer};
-use typesafe_sdk::{ApiErrorKind, Client, ErrorKind};
 
 const MODELS: &[u8] = include_bytes!("fixtures/models.json");
 const MODELS_EXTRA_FIELDS: &[u8] = include_bytes!("fixtures/models-extra-fields.json");

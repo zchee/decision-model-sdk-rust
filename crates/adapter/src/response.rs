@@ -13,12 +13,12 @@ use std::{
     time::Duration,
 };
 
+use decision_model_sdk::Answers;
 use serde::{
     Serialize, Serializer,
     ser::{SerializeMap, SerializeStruct, SerializeTuple},
 };
 use serde_json::value::RawValue;
-use typesafe_sdk::Answers;
 
 use crate::provider::{AttemptTrace, ByteLen, Message, ProviderResult, Schema, raw_json};
 

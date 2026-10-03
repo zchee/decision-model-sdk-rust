@@ -19,11 +19,11 @@ fn every_compiled_in_name_builds_its_own_provider() {
 
         let expected = match name {
             #[cfg(feature = "openai")]
-            ProviderName::OpenAi => "system_one_adapter::OpenAiProvider",
+            ProviderName::OpenAi => "decision_model_adapter::OpenAiProvider",
             #[cfg(feature = "anthropic")]
-            ProviderName::Anthropic => "system_one_adapter::AnthropicProvider",
+            ProviderName::Anthropic => "decision_model_adapter::AnthropicProvider",
             #[cfg(feature = "gemini")]
-            ProviderName::Gemini => "system_one_adapter::GeminiProvider",
+            ProviderName::Gemini => "decision_model_adapter::GeminiProvider",
         };
         assert_eq!(provider.type_name(), expected, "{name}");
         assert_eq!(provider.model_name(), "a-model", "{name}");
@@ -39,7 +39,7 @@ fn a_gemini_name_builds_a_gemini_provider() {
 
     let provider = build(ProviderName::Gemini, "gemini-3.8-flash").expect("a key is set");
 
-    assert_eq!(provider.type_name(), "system_one_adapter::GeminiProvider");
+    assert_eq!(provider.type_name(), "decision_model_adapter::GeminiProvider");
     assert_eq!(provider.model_name(), "gemini-3.8-flash");
 }
 

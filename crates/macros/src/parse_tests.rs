@@ -37,7 +37,7 @@ fn the_documented_example_reads_as_three_questions() {
         }
     });
     assert_eq!(set.ident, "Ticket");
-    assert_eq!(set.root.to_string(), ":: typesafe_sdk");
+    assert_eq!(set.root.to_string(), ":: decision_model_sdk");
     assert_eq!(
         set.fields,
         [
@@ -157,8 +157,8 @@ fn names_come_from_the_field_or_the_question_attribute() {
 fn answer_types_are_matched_by_their_last_segment() {
     let set = parsed(&parse_quote! {
         struct Paths {
-            #[noul] a: typesafe_sdk::NoulAnswer,
-            #[choice(options("x"))] b: ::typesafe_sdk::response::ChoiceAnswer,
+            #[noul] a: decision_model_sdk::NoulAnswer,
+            #[choice(options("x"))] b: ::decision_model_sdk::response::ChoiceAnswer,
             #[score(levels("x"))] c: (ScoreAnswer),
         }
     });
@@ -443,7 +443,7 @@ fn the_field_type_is_the_answer_type_of_its_question() {
             parse_quote!(
                 struct A {
                     #[score(levels("x"))]
-                    spam: typesafe_sdk::NoulAnswer,
+                    spam: decision_model_sdk::NoulAnswer,
                 }
             ),
             "field `spam` has `#[score]`, whose answer is a `ScoreAnswer`, but its type is \
@@ -458,7 +458,7 @@ fn the_field_type_is_the_answer_type_of_its_question() {
                 }
             ),
             "field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by \
-             name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)",
+             name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)",
         ),
         (
             parse_quote!(
@@ -468,7 +468,7 @@ fn the_field_type_is_the_answer_type_of_its_question() {
                 }
             ),
             "field `tone` has `#[choice]`, so its type must be `ChoiceAnswer` (the type is matched \
-             by name: `ChoiceAnswer` and `typesafe_sdk::ChoiceAnswer` work, a type alias does not)",
+             by name: `ChoiceAnswer` and `decision_model_sdk::ChoiceAnswer` work, a type alias does not)",
         ),
         (
             parse_quote!(
@@ -478,7 +478,7 @@ fn the_field_type_is_the_answer_type_of_its_question() {
                 }
             ),
             "field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by \
-             name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)",
+             name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)",
         ),
         (
             parse_quote!(
@@ -488,7 +488,7 @@ fn the_field_type_is_the_answer_type_of_its_question() {
                 }
             ),
             "field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by \
-             name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)",
+             name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)",
         ),
     ];
     for (input, message) in cases {
@@ -518,7 +518,7 @@ fn an_optional_field_is_refused_with_the_reason() {
     );
     assert_eq!(
         refused(&parse_quote! {
-            struct A { #[choice(options("x"))] tone: core::option::Option<typesafe_sdk::ScoreAnswer> }
+            struct A { #[choice(options("x"))] tone: core::option::Option<decision_model_sdk::ScoreAnswer> }
         }),
         [optional("tone", "ChoiceAnswer")]
     );
@@ -530,7 +530,7 @@ fn an_optional_field_is_refused_with_the_reason() {
             }
         )),
         ["field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by \
-             name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)"]
+             name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)"]
     );
 }
 
@@ -965,7 +965,7 @@ fn the_question_attribute_gives_one_name() {
 fn the_crate_path_is_a_path() {
     assert_eq!(
         refused(&parse_quote! {
-            #[question_set(crate = "typesafe_sdk")]
+            #[question_set(crate = "decision_model_sdk")]
             struct A { #[noul] a: NoulAnswer }
         }),
         ["expected identifier"]

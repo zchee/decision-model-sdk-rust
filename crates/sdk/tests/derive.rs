@@ -11,12 +11,12 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use http::{HeaderValue, StatusCode};
-use test_support::{Protocol, RecordedRequest, TestServer, json_response};
-use typesafe_sdk::{
+use decision_model_sdk::{
     Answers, ApiErrorKind, Choice, ChoiceAnswer, Client, Error, ErrorKind, Noul, NoulAnswer,
     PreparedQuestions, QuestionSet, Questions, RetryPolicy, Score, ScoreAnswer, SystemOneResponse,
 };
+use http::{HeaderValue, StatusCode};
+use test_support::{Protocol, RecordedRequest, TestServer, json_response};
 
 // ------------------------------------------------------------- sets
 
@@ -439,7 +439,7 @@ async fn a_missing_or_wrong_answer_fails_at_its_field() {
 mod bare {
     #![no_implicit_prelude]
 
-    use ::typesafe_sdk::{NoulAnswer, QuestionSet};
+    use ::decision_model_sdk::{NoulAnswer, QuestionSet};
 
     #[derive(QuestionSet)]
     pub(crate) struct Bare {
@@ -455,7 +455,7 @@ mod shadowed {
     #![expect(non_camel_case_types, reason = "the primitive names are shadowed on purpose")]
     #![expect(non_snake_case, reason = "a field is named like the expansion's static")]
 
-    use typesafe_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
+    use decision_model_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
 
     pub(crate) struct Result;
     pub(crate) struct Option;
@@ -502,13 +502,13 @@ mod shadowed {
 /// The crate path reached through a re-export, and through `extern crate`
 /// under another name.
 mod reexport {
-    pub(crate) use typesafe_sdk as sdk;
+    pub(crate) use decision_model_sdk as sdk;
 }
 
-extern crate typesafe_sdk as renamed_sdk;
+extern crate decision_model_sdk as renamed_sdk;
 
 mod through_other_paths {
-    use typesafe_sdk::NoulAnswer;
+    use decision_model_sdk::NoulAnswer;
 
     #[derive(renamed_sdk::QuestionSet)]
     #[question_set(crate = crate::reexport::sdk)]
@@ -539,7 +539,7 @@ mod strict {
         clippy::nursery
     )]
 
-    use typesafe_sdk::{NoulAnswer, QuestionSet};
+    use decision_model_sdk::{NoulAnswer, QuestionSet};
 
     use super::{SPAM, ask, body};
 
@@ -628,7 +628,7 @@ async fn the_expansion_works_wherever_it_lands() {
 
 /// Set in the environment of the re-run [`misuse_is_refused_at_compile_time`]
 /// starts, so that the re-run never starts another.
-const RERUN_MARKER: &str = "TYPESAFE_SDK_TRYBUILD_RERUN";
+const RERUN_MARKER: &str = "DECISION_MODEL_SDK_TRYBUILD_RERUN";
 
 /// The target directory this test binary was built in, as cargo wrote it.
 /// Cargo gives every integration test `CARGO_TARGET_TMPDIR`, `<target>/tmp`,

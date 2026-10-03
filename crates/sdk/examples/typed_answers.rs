@@ -13,7 +13,7 @@
 
 use std::process::ExitCode;
 
-use typesafe_sdk::{ChoiceAnswer, Client, Error, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_sdk::{ChoiceAnswer, Client, Error, NoulAnswer, QuestionSet, ScoreAnswer};
 
 /// One question per field; the field's type says the question's kind.
 #[derive(QuestionSet)]

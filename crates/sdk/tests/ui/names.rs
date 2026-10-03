@@ -1,6 +1,6 @@
 // Answers are matched by name, so no two fields answer to one; and
 // `#[question(...)]` takes `name = "..."` only.
-use typesafe_sdk::{NoulAnswer, QuestionSet};
+use decision_model_sdk::{NoulAnswer, QuestionSet};
 
 #[derive(QuestionSet)]
 struct Duplicate {

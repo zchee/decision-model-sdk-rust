@@ -120,7 +120,7 @@ fn the_sdk_headers_win_over_every_client_default() {
         assert_eq!(values(&headers, "authorization"), ["Bearer test-key"], "body {with_body}");
         assert!(headers[AUTHORIZATION].is_sensitive());
         assert_eq!(values(&headers, "accept"), ["application/json"]);
-        let identifier = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+        let identifier = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
         assert_eq!(values(&headers, "user-agent"), [identifier.as_str()]);
         assert_eq!(values(&headers, "x-typesafe-sdk"), [identifier.as_str()]);
         let runtime = format!("rust ({}; {})", std::env::consts::OS, std::env::consts::ARCH);
@@ -146,7 +146,7 @@ const SHAPED_DEFAULTS: [(&str, &str); 3] =
 #[test]
 fn a_user_agent_product_goes_in_front_of_the_sdk_identifier_and_leaves_x_typesafe_sdk_alone() {
     let config = config_with("https://example.test", &SHAPED_DEFAULTS, Some("my-app/1.2.0"), true);
-    let identifier = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let identifier = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let runtime = format!("rust ({}; {})", std::env::consts::OS, std::env::consts::ARCH);
     for with_body in [false, true] {
         let headers = base_headers(&config, with_body);
@@ -160,7 +160,7 @@ fn a_user_agent_product_goes_in_front_of_the_sdk_identifier_and_leaves_x_typesaf
 
 #[test]
 fn with_the_runtime_header_off_none_is_built_and_the_other_sdk_headers_are() {
-    let identifier = format!("typesafe-sdk-rust/{}", env!("CARGO_PKG_VERSION"));
+    let identifier = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     for product in [None, Some("my-app/1.2.0")] {
         let config = config_with("https://example.test", &SHAPED_DEFAULTS, product, false);
         let user_agent =

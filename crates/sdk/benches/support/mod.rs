@@ -3,7 +3,7 @@
 //!
 //! Everything here is built outside any measured section.
 
-use typesafe_sdk::{Choice, Noul, PreparedQuestions, Questions, Score};
+use decision_model_sdk::{Choice, Noul, PreparedQuestions, Questions, Score};
 
 /// `RESULT` of the upstream `tests/test_clients.py:42-56`: a noul, a choice
 /// and a score. The same bytes the allocation budgets are stated on.

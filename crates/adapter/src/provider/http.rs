@@ -46,6 +46,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{ApiError, Body, BoxError, Error as SdkError, HttpService};
 use http::{
     HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Uri,
     header::{ACCEPT, CONTENT_TYPE, USER_AGENT},
@@ -64,7 +65,6 @@ use rustls_platform_verifier::{BuilderVerifierExt as _, Verifier};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::de::IgnoredAny;
 use tower_service::Service;
-use typesafe_sdk::{ApiError, Body, BoxError, Error as SdkError, HttpService};
 
 use crate::{
     error::Error,
@@ -88,7 +88,7 @@ const JSON_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/jso
 
 /// The value of `user-agent` on every request.
 const USER_AGENT_VALUE: HeaderValue =
-    HeaderValue::from_static(concat!("typesafe-sdk-rust-adapter/", env!("CARGO_PKG_VERSION")));
+    HeaderValue::from_static(concat!("decision-model-adapter/", env!("CARGO_PKG_VERSION")));
 
 // ------------------------------------------------------------ the key header
 
@@ -537,9 +537,9 @@ impl Exchange<'_> {
 ///
 /// # Errors
 ///
-/// - [`ErrorKind::Timeout`](typesafe_sdk::ErrorKind::Timeout) when the
+/// - [`ErrorKind::Timeout`](decision_model_sdk::ErrorKind::Timeout) when the
 ///   deadline passes first.
-/// - [`ErrorKind::Api`](typesafe_sdk::ErrorKind::Api) for any status outside
+/// - [`ErrorKind::Api`](decision_model_sdk::ErrorKind::Api) for any status outside
 ///   2xx, with the status, the headers and the body. A failure response
 ///   whose body is over the limit keeps its status, and its headers unless
 ///   a search below has a hit; the body is not read past the limit and is
@@ -563,14 +563,14 @@ impl Exchange<'_> {
 ///   is kept as it arrived: one that spells the key in a way neither
 ///   search finds, in a member the SDK reads no message from say, is
 ///   returned by `ApiError::body()` as the server sent it.
-/// - [`ErrorKind::Connection`](typesafe_sdk::ErrorKind::Connection) when the
+/// - [`ErrorKind::Connection`](decision_model_sdk::ErrorKind::Connection) when the
 ///   service fails or the body cannot be read. The service's own error is
 ///   the [`source`](StdError::source), unless the search described at
 ///   [`KeyHeader::holds_key`] has a hit in it or in the message built from
 ///   it: then the error has a fixed text and no source. That search finds
 ///   the key in the spellings listed there, not a key transformed in
 ///   another way.
-/// - [`ErrorKind::ResponseTooLarge`](typesafe_sdk::ErrorKind::ResponseTooLarge)
+/// - [`ErrorKind::ResponseTooLarge`](decision_model_sdk::ErrorKind::ResponseTooLarge)
 ///   when a success response's body is larger than the limit. A body over
 ///   the limit is not read past it.
 pub(crate) async fn post<S>(
@@ -941,7 +941,7 @@ fn hides_text(character: char) -> bool {
 
 /// The target of this crate's events.
 #[cfg(feature = "tracing")]
-const TARGET: &str = "system_one_adapter";
+const TARGET: &str = "decision_model_adapter";
 
 /// When an exchange began. The clock is read only with the `tracing`
 /// feature, where an event prints the elapsed time; without it this holds

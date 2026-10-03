@@ -1559,7 +1559,7 @@ mod warning {
         assert_eq!(events.len(), 1, "{events:?}");
         let (level, target, fields) = &events[0];
         assert_eq!(*level, Level::WARN);
-        assert_eq!(target, "typesafe_sdk", "the one target every event of the crate has");
+        assert_eq!(target, "decision_model_sdk", "the one target every event of the crate has");
         assert_eq!(
             fields,
             &[
@@ -1599,7 +1599,7 @@ mod warning {
         // reverse what follows, a backslash spelling an escape, and far more
         // than 128 characters.
         let question = format!(
-            "q\n2026-09-19T00:00:00Z ERROR typesafe_sdk: FORGED\u{1b}[2J\u{202e}\\u{{1b}}{}",
+            "q\n2026-09-19T00:00:00Z ERROR decision_model_sdk: FORGED\u{1b}[2J\u{202e}\\u{{1b}}{}",
             "Q".repeat(5_000)
         );
         let kind = format!("zz\n\u{1b}[31m\u{202e}{}", "A".repeat(5_000));
@@ -1618,12 +1618,12 @@ mod warning {
         assert_eq!(events.len(), 1, "{events:?}");
         let (level, target, fields) = &events[0];
         assert_eq!(*level, Level::WARN);
-        assert_eq!(target, "typesafe_sdk");
+        assert_eq!(target, "decision_model_sdk");
 
         // The escaped start of each name, then as many of its filler
         // characters as fit in 128, then the ellipsis that marks the cut.
         let question_start =
-            r"q\n2026-09-19T00:00:00Z ERROR typesafe_sdk: FORGED\u{1b}[2J\u{202e}\\u{1b}";
+            r"q\n2026-09-19T00:00:00Z ERROR decision_model_sdk: FORGED\u{1b}[2J\u{202e}\\u{1b}";
         let kind_start = r"zz\n\u{1b}[31m\u{202e}";
         let question_shown =
             format!("{question_start}{}\u{2026}", "Q".repeat(128 - question_start.chars().count()));

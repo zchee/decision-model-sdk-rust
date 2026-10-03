@@ -11,8 +11,8 @@
 //! This file uses `first_difference` of `cassette.rs`: the including test
 //! binary declares both, as `mod cassette` and `mod expected`.
 
+use decision_model_sdk::question::{Choice, Noul, PreparedQuestions, Questions, Score};
 use serde_json::Value;
-use typesafe_sdk::question::{Choice, Noul, PreparedQuestions, Questions, Score};
 
 use crate::cassette::{Difference, first_difference};
 
@@ -67,7 +67,7 @@ pub(crate) fn read(name: &str) -> Value {
 /// (`system_one_adapter.providers.<vendor>.<Class>`, the synchronous one in
 /// prompted mode) where this crate names what `Provider::type_name()`
 /// returns: the public path of a built-in provider
-/// (`system_one_adapter::OpenAiProvider`, `::AnthropicProvider`,
+/// (`decision_model_adapter::OpenAiProvider`, `::AnthropicProvider`,
 /// `::GeminiProvider`), or the type path of a provider that does not override
 /// it, which holds the vendor when the type lives under
 /// `..::provider::<vendor>::..`. A provider text of any other shape compares
@@ -139,16 +139,16 @@ fn drop_nulls(value: &mut Value) {
 }
 
 /// The vendor of a provider text of one of three forms: exactly the public
-/// path of a built-in provider (`system_one_adapter::OpenAiProvider`,
+/// path of a built-in provider (`decision_model_adapter::OpenAiProvider`,
 /// `::AnthropicProvider`, `::GeminiProvider`); upstream's Python class path,
 /// the segment after `system_one_adapter.providers.`; a Rust type path, the
 /// segment after the first `::provider::`. The segment must be followed by `.`
 /// or `:` and must not be empty. `None` for any other text.
 fn vendor(provider: &str) -> Option<&str> {
     match provider {
-        "system_one_adapter::OpenAiProvider" => return Some("openai"),
-        "system_one_adapter::AnthropicProvider" => return Some("anthropic"),
-        "system_one_adapter::GeminiProvider" => return Some("gemini"),
+        "decision_model_adapter::OpenAiProvider" => return Some("openai"),
+        "decision_model_adapter::AnthropicProvider" => return Some("anthropic"),
+        "decision_model_adapter::GeminiProvider" => return Some("gemini"),
         _ => {}
     }
     let (_, rest) = provider

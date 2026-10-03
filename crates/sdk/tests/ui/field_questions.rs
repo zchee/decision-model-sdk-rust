@@ -1,5 +1,5 @@
 // Every field asks exactly one question and has at most one name.
-use typesafe_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet};
+use decision_model_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet};
 
 #[derive(QuestionSet)]
 struct Unasked {

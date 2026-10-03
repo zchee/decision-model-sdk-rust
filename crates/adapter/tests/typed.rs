@@ -3,7 +3,7 @@
 //!
 //! This crate's tests do not depend on the SDK directly, so both structs
 //! reach it through the adapter's re-export: one by the path the README
-//! documents, `system_one_adapter::typesafe_sdk`, and one by a local name for
+//! documents, `decision_model_adapter::decision_model_sdk`, and one by a local name for
 //! that re-export, as a crate with its own facade module would.
 
 #[path = "support/scripted.rs"]
@@ -11,9 +11,9 @@ mod scripted;
 
 use std::sync::Arc;
 
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, Answers, ChoiceAnswer, Client, NoulAnswer, QuestionSet, Response, ScoreAnswer,
-    StructuredOutputs, typesafe_sdk as sdk,
+    StructuredOutputs, decision_model_sdk as sdk,
 };
 
 use crate::scripted::{Scripted, reply};
@@ -23,7 +23,7 @@ const STATE: &str = "This is a delightful fiction novel.";
 /// The derive pointed at the SDK through the adapter, for a caller that
 /// depends on the adapter alone.
 #[derive(Debug, QuestionSet)]
-#[question_set(crate = system_one_adapter::typesafe_sdk)]
+#[question_set(crate = decision_model_adapter::decision_model_sdk)]
 struct Review {
     #[noul(instructions = "The review is positive.")]
     positive: NoulAnswer,

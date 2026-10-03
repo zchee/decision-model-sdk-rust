@@ -25,7 +25,7 @@ impl Recorder {
         events
             .iter()
             .filter(|(at, _)| *at == level)
-            .filter_map(|(_, line)| line.strip_prefix("typesafe_sdk "))
+            .filter_map(|(_, line)| line.strip_prefix("decision_model_sdk "))
             .map(str::to_owned)
             .collect()
     }

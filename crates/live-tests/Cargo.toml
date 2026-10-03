@@ -1,9 +1,9 @@
 # Billed tests against the live API; see src/lib.rs. Never a default member.
 # `publish = false`: it is not a library anybody depends on.
 [package]
-name = "typesafe-sdk-rust-live-tests"
+name = "decision-model-sdk-live-tests"
 version = "0.0.0"
-description = "Tests of typesafe-sdk-rust against the live TypeSafe API"
+description = "Tests of decision-model-sdk against the live TypeSafe AI System One API"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +15,7 @@ name = "live_tests"
 
 [dependencies]
 # Default features: the typed test uses the derive.
-typesafe-sdk-rust = { path = "../sdk" }
+decision-model-sdk = { path = "../sdk" }
 
 [dev-dependencies]
 # A criteria object for the raw-shaped question, as the Python test spells it.

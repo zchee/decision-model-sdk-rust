@@ -11,7 +11,7 @@
 //! that has not changed since the last call.
 //!
 //! ```
-//! use typesafe_sdk::question::{Choice, Noul, Questions, Score};
+//! use decision_model_sdk::question::{Choice, Noul, Questions, Score};
 //!
 //! let prepared = Questions::new()
 //!     .noul("billing", Noul::new().instructions("Is this about billing?"))
@@ -26,7 +26,7 @@
 //!
 //! assert_eq!(prepared.len(), 3);
 //! assert_eq!(prepared.names().collect::<Vec<_>>(), ["billing", "tone", "urgency"]);
-//! # Ok::<(), typesafe_sdk::Error>(())
+//! # Ok::<(), decision_model_sdk::Error>(())
 //! ```
 
 use std::{borrow::Cow, fmt, sync::Arc};
@@ -51,7 +51,7 @@ use crate::{
 /// members, and that object is left off entirely when neither is set.
 ///
 /// ```
-/// use typesafe_sdk::question::Noul;
+/// use decision_model_sdk::question::Noul;
 ///
 /// let spam = Noul::new()
 ///     .instructions("Is this message spam?")
@@ -104,7 +104,7 @@ impl<'a> Noul<'a> {
 /// what the upstream SDK's dictionary does.
 ///
 /// ```
-/// use typesafe_sdk::question::Choice;
+/// use decision_model_sdk::question::Choice;
 ///
 /// let tone = Choice::new(["calm", "angry"])
 ///     .option("calm", "neutral or polite")
@@ -165,7 +165,7 @@ impl<'a> Choice<'a> {
 /// by [`Questions::prepare`].
 ///
 /// ```
-/// use typesafe_sdk::question::Score;
+/// use decision_model_sdk::question::Score;
 ///
 /// let urgency = Score::new(["can wait", "this week", "today"]).instructions("How urgent is it?");
 /// # let _ = urgency;
@@ -209,7 +209,7 @@ impl<'a> Score<'a> {
 /// Everything else is left to the server.
 ///
 /// ```
-/// use typesafe_sdk::question::RawQuestion;
+/// use decision_model_sdk::question::RawQuestion;
 ///
 /// let spam = RawQuestion::new("noul").field("instructions", "Spam?").field("weight", 3);
 /// # let _ = spam;
@@ -577,7 +577,7 @@ impl PreparedQuestions {
     /// instructions and criteria of any set, however it was made.
     ///
     /// ```
-    /// use typesafe_sdk::question::{Noul, Questions};
+    /// use decision_model_sdk::question::{Noul, Questions};
     ///
     /// let prepared = Questions::new()
     ///     .noul("billing", Noul::new().instructions("Is this about billing?"))
@@ -586,7 +586,7 @@ impl PreparedQuestions {
     ///     prepared.as_json(),
     ///     r#"{"billing":{"type":"noul","instructions":"Is this about billing?"}}"#,
     /// );
-    /// # Ok::<(), typesafe_sdk::Error>(())
+    /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
     #[must_use]
     pub fn as_json(&self) -> &str {
@@ -611,8 +611,8 @@ impl fmt::Debug for PreparedQuestions {
 ///
 /// ```
 /// # #[cfg(feature = "macros")]
-/// # fn main() -> Result<(), typesafe_sdk::Error> {
-/// use typesafe_sdk::{ChoiceAnswer, Choice, NoulAnswer, Noul, Questions, QuestionSet};
+/// # fn main() -> Result<(), decision_model_sdk::Error> {
+/// use decision_model_sdk::{ChoiceAnswer, Choice, NoulAnswer, Noul, Questions, QuestionSet};
 ///
 /// #[derive(QuestionSet)]
 /// struct Ticket {
@@ -639,7 +639,7 @@ impl fmt::Debug for PreparedQuestions {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a question set",
     label = "no questions are declared for this type",
-    note = "derive it: `#[derive(typesafe_sdk::QuestionSet)]` on a struct with one \
+    note = "derive it: `#[derive(decision_model_sdk::QuestionSet)]` on a struct with one \
             `NoulAnswer`, `ChoiceAnswer` or `ScoreAnswer` field per question"
 )]
 pub trait QuestionSet: AnswerSet {
@@ -669,10 +669,10 @@ where
     ///
     /// ```
     /// # #[cfg(feature = "macros")]
-    /// # fn main() -> Result<(), typesafe_sdk::Error> {
+    /// # fn main() -> Result<(), decision_model_sdk::Error> {
     /// use std::time::Duration;
     ///
-    /// use typesafe_sdk::{Client, NoulAnswer, QuestionSet};
+    /// use decision_model_sdk::{Client, NoulAnswer, QuestionSet};
     ///
     /// #[derive(QuestionSet)]
     /// struct Spam {

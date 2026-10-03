@@ -125,13 +125,13 @@ pub(crate) const SECRET_HEADERS: [&str; 6] =
 // ------------------------------------------------------ SDK identification
 
 /// What the SDK calls itself in `User-Agent` and [`SDK_HEADER`], as
-/// `typesafe-sdk-rust/<version>`.
+/// `decision-model-sdk/<version>`.
 ///
 /// Deliberately not the official Python SDK's `typesafe-sdk/<version>`: the
 /// server may count or treat SDKs by this value, and a port must not be
 /// mistaken for the SDK it is a port of.
 pub(crate) const SDK_IDENTIFIER: HeaderValue =
-    HeaderValue::from_static(concat!("typesafe-sdk-rust/", env!("CARGO_PKG_VERSION")));
+    HeaderValue::from_static(concat!("decision-model-sdk/", env!("CARGO_PKG_VERSION")));
 
 /// What the SDK sends in [`RUNTIME_HEADER`], as `rust (<os>; <arch>)`.
 ///

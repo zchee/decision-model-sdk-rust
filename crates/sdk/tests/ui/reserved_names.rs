@@ -2,7 +2,7 @@
 // the struct's own name: inside the expansion the name would mean that item.
 // The one refusal is at the struct's name; rustc's own errors about the clash
 // never appear.
-use typesafe_sdk::{NoulAnswer, QuestionSet};
+use decision_model_sdk::{NoulAnswer, QuestionSet};
 
 #[derive(QuestionSet)]
 struct __QuestionSetField {

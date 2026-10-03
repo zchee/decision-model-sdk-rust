@@ -186,7 +186,7 @@ fn saturate(count: usize) -> u32 {
 /// is asked for:
 ///
 /// ```compile_fail,E0277
-/// use typesafe_sdk::de::AnswerSet;
+/// use decision_model_sdk::de::AnswerSet;
 ///
 /// fn decode_into<A: AnswerSet>() {}
 ///
@@ -201,7 +201,7 @@ fn saturate(count: usize) -> u32 {
 /// use std::fmt;
 ///
 /// use serde::de::{self, Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
-/// use typesafe_sdk::{
+/// use decision_model_sdk::{
 ///     de::{AnswerContext, AnswerSet},
 ///     response::{ChoiceAnswer, NoulAnswer, ScoreAnswer},
 /// };

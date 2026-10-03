@@ -381,6 +381,110 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
+name = "decision-model-adapter"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "decision-model-sdk",
+ "decision-model-sdk-test-support",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "proptest",
+ "rustls",
+ "rustls-platform-verifier",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "decision-model-adapter-live-tests"
+version = "0.0.0"
+dependencies = [
+ "decision-model-adapter",
+ "tokio",
+]
+
+[[package]]
+name = "decision-model-sdk"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "codspeed-divan-compat",
+ "compact_str",
+ "decision-model-sdk-macros",
+ "decision-model-sdk-test-support",
+ "dhat",
+ "fastrand",
+ "http",
+ "http-body",
+ "http-body-util",
+ "httpdate",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "proptest",
+ "rustls",
+ "rustls-platform-verifier",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "sonic-rs",
+ "thiserror",
+ "tokio",
+ "tower-service",
+ "tracing",
+ "trybuild",
+]
+
+[[package]]
+name = "decision-model-sdk-live-tests"
+version = "0.0.0"
+dependencies = [
+ "decision-model-sdk",
+ "serde",
+ "tokio",
+]
+
+[[package]]
+name = "decision-model-sdk-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "proptest",
+ "quote",
+ "serde_json",
+ "sonic-rs",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "decision-model-sdk-test-support"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "rcgen",
+ "rustls",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "der-parser"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1949,110 +2053,6 @@ dependencies = [
  "target-tuple",
  "termcolor",
  "toml",
-]
-
-[[package]]
-name = "typesafe-sdk-rust"
-version = "0.2.1"
-dependencies = [
- "bytes",
- "codspeed-divan-compat",
- "compact_str",
- "dhat",
- "fastrand",
- "http",
- "http-body",
- "http-body-util",
- "httpdate",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "proptest",
- "rustls",
- "rustls-platform-verifier",
- "secrecy",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "sonic-rs",
- "thiserror",
- "tokio",
- "tower-service",
- "tracing",
- "trybuild",
- "typesafe-sdk-rust-macros",
- "typesafe-sdk-rust-test-support",
-]
-
-[[package]]
-name = "typesafe-sdk-rust-adapter"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "proptest",
- "rustls",
- "rustls-platform-verifier",
- "secrecy",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tower-service",
- "tracing",
- "typesafe-sdk-rust",
- "typesafe-sdk-rust-test-support",
-]
-
-[[package]]
-name = "typesafe-sdk-rust-adapter-live-tests"
-version = "0.0.0"
-dependencies = [
- "tokio",
- "typesafe-sdk-rust-adapter",
-]
-
-[[package]]
-name = "typesafe-sdk-rust-live-tests"
-version = "0.0.0"
-dependencies = [
- "serde",
- "tokio",
- "typesafe-sdk-rust",
-]
-
-[[package]]
-name = "typesafe-sdk-rust-macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "proptest",
- "quote",
- "serde_json",
- "sonic-rs",
- "syn 3.0.6",
-]
-
-[[package]]
-name = "typesafe-sdk-rust-test-support"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "http",
- "http-body-util",
- "hyper",
- "hyper-rustls",
- "hyper-util",
- "rcgen",
- "rustls",
- "thiserror",
- "tokio",
- "tokio-rustls",
 ]
 
 [[package]]

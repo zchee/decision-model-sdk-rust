@@ -3,7 +3,7 @@
 // token for token with what the derive generates; it is not compiled.
 
 const _: () = {
-    use ::typesafe_sdk::__private;
+    use ::decision_model_sdk::__private;
     #[automatically_derived]
     impl __private::QuestionSet for Ticket {
         fn prepared() -> &'static __private::PreparedQuestions {

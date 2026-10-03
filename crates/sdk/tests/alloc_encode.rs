@@ -16,8 +16,8 @@
 mod support;
 
 use bytes::Bytes;
+use decision_model_sdk::__internals as codec;
 use serde::Serialize;
-use typesafe_sdk::__internals as codec;
 
 use crate::support::{Measured, RUNS, measure, measure_min, stable_min};
 

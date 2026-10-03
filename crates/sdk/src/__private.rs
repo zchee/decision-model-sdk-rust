@@ -4,7 +4,7 @@
 //! or even the name `Option` may be missing or mean something else: a module
 //! can declare `#![no_implicit_prelude]`, or define a type named `Result`.
 //! Every path in the generated code therefore starts at this module, through
-//! the crate root the caller names (`::typesafe_sdk` unless
+//! the crate root the caller names (`::decision_model_sdk` unless
 //! `#[question_set(crate = ...)]` says otherwise), and this module re-exports
 //! each item under the name the expansion uses.
 //!

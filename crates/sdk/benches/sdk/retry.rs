@@ -23,9 +23,9 @@
 
 use std::pin::pin;
 
+use decision_model_sdk::{__internals as sdk, ApiError, ErrorKind, RetryPolicy};
 use divan::{Bencher, black_box};
 use http::StatusCode;
-use typesafe_sdk::{__internals as sdk, ApiError, ErrorKind, RetryPolicy};
 
 use crate::{
     service::{InMemory, client, runtime},

@@ -81,7 +81,7 @@ fn the_ticket_expansion_is_the_reviewed_one() {
 
 /// With `#[question_set(crate = ...)]`, the one import of the SDK starts at
 /// the given path, every other path starts at that import, and nothing names
-/// `typesafe_sdk`.
+/// `decision_model_sdk`.
 #[test]
 fn the_crate_path_is_named_once_and_everything_goes_through_it() {
     let input: DeriveInput = parse_quote! {
@@ -94,7 +94,7 @@ fn the_crate_path_is_named_once_and_everything_goes_through_it() {
     let expanded = expand(&input).expect("the input expands").to_string();
     assert!(expanded.starts_with("const _ : () = { use crate :: reexported :: sdk :: __private ;"));
     assert_eq!(expanded.matches("reexported").count(), 1, "{expanded}");
-    assert!(!expanded.contains("typesafe_sdk"), "{expanded}");
+    assert!(!expanded.contains("decision_model_sdk"), "{expanded}");
     let tokens = flatten(expand(&input).expect("the input expands"));
     for (index, token) in tokens.iter().enumerate() {
         if token == "__private" {

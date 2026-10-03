@@ -1,8 +1,9 @@
-//! Async Rust SDK for the [TypeSafe AI](https://typesafe.ai) API.
+//! Async Rust SDK for decision models served through the System One API,
+//! first offered by [TypeSafe AI](https://typesafe.ai) (Jev) and served by
+//! other vendors too.
 //!
-//! The crate is published as `typesafe-sdk-rust` because `typesafe-sdk` is
-//! already taken on crates.io; the library it builds is `typesafe_sdk`, so
-//! callers write `use typesafe_sdk::...`.
+//! The package `decision-model-sdk` builds the library `decision_model_sdk`,
+//! so callers write `use decision_model_sdk::...`.
 //!
 //! # Asking questions
 //!
@@ -16,7 +17,7 @@
 //! ```
 //! use std::time::Duration;
 //!
-//! use typesafe_sdk::{Choice, Client, Noul, Questions, Score};
+//! use decision_model_sdk::{Choice, Client, Noul, Questions, Score};
 //!
 //! let questions = Questions::new()
 //!     .noul("billing", Noul::new().instructions("Is this about billing?"))
@@ -37,13 +38,13 @@
 //!     .header("x-team", "billing");
 //!
 //! // Sending needs a Tokio runtime; this example stops before it.
-//! async fn ask<S: typesafe_sdk::HttpService>(request: typesafe_sdk::SystemOne<'_, S, str>)
-//! -> Result<f64, typesafe_sdk::Error> {
+//! async fn ask<S: decision_model_sdk::HttpService>(request: decision_model_sdk::SystemOne<'_, S, str>)
+//! -> Result<f64, decision_model_sdk::Error> {
 //!     let response = request.send().await?;
 //!     Ok(response.answers().noul("billing").map_or(0.0, |answer| answer.noul()))
 //! }
 //! drop(ask(request));
-//! # Ok::<(), typesafe_sdk::Error>(())
+//! # Ok::<(), decision_model_sdk::Error>(())
 //! ```
 //!
 //! # Runtime requirements
@@ -118,7 +119,7 @@ pub use crate::question::QuestionSet;
 /// Available with the `macros` feature, which is on by default.
 ///
 /// ```
-/// use typesafe_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
+/// use decision_model_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
 ///
 /// #[derive(QuestionSet)]
 /// struct Ticket {
@@ -134,7 +135,7 @@ pub use crate::question::QuestionSet;
 /// ```
 #[cfg(feature = "macros")]
 #[doc(inline)]
-pub use typesafe_sdk_rust_macros::QuestionSet;
+pub use decision_model_sdk_macros::QuestionSet;
 
 #[doc(hidden)]
 pub mod __private;

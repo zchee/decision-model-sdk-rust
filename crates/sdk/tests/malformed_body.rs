@@ -10,11 +10,11 @@
 
 use std::time::Duration;
 
-use http::{StatusCode, header::RETRY_AFTER};
-use test_support::{Protocol, TestServer, json_response};
-use typesafe_sdk::{
+use decision_model_sdk::{
     ApiErrorKind, Client, DecodeErrorKind, ErrorKind, Questions, RetryPolicy, Score,
 };
+use http::{StatusCode, header::RETRY_AFTER};
+use test_support::{Protocol, TestServer, json_response};
 
 /// An error body whose one member holds a byte that is not UTF-8: the error
 /// reader keeps each member as raw text, so the codec must check that the
@@ -60,7 +60,7 @@ fn client_for(server: &TestServer, protocol: Protocol) -> Client {
         .expect("the client builds")
 }
 
-fn questions() -> typesafe_sdk::PreparedQuestions {
+fn questions() -> decision_model_sdk::PreparedQuestions {
     Questions::new()
         .score("urgency", Score::new(["can wait"]))
         .prepare()

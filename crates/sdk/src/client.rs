@@ -34,7 +34,7 @@ use crate::{
     transport::{self, HttpService},
 };
 
-/// A client of the TypeSafe API.
+/// A client of the System One API.
 ///
 /// Build one with [`ClientBuilder::new`] and [`ClientBuilder::build_with_service`],
 /// or use `Client::builder()` / `Client::from_env()` with the `hyper` feature.
@@ -400,7 +400,7 @@ impl ClientBuilder {
 
     /// A product that names the application, sent in `User-Agent` in front
     /// of the SDK's own: `user_agent_product("my-app/1.2.0")` sends
-    /// `User-Agent: my-app/1.2.0 typesafe-sdk-rust/<version>`, the more
+    /// `User-Agent: my-app/1.2.0 decision-model-sdk/<version>`, the more
     /// significant product first as RFC 9110 (section 10.1.5) orders them.
     /// Unset, `User-Agent` is the SDK's identifier alone. `X-TypeSafe-SDK`
     /// always names the SDK alone. A later call replaces an earlier one.
@@ -420,7 +420,7 @@ impl ClientBuilder {
     /// the rule, before anything is sent.
     ///
     /// ```
-    /// use typesafe_sdk::{Client, ErrorKind};
+    /// use decision_model_sdk::{Client, ErrorKind};
     ///
     /// // Building connects to nothing.
     /// let client = Client::builder()
@@ -435,7 +435,7 @@ impl ClientBuilder {
     ///     .build()
     ///     .expect_err("a product with a space is refused");
     /// assert!(matches!(error.kind(), ErrorKind::Config));
-    /// # Ok::<(), typesafe_sdk::Error>(())
+    /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
     #[must_use]
     pub fn user_agent_product(mut self, product: impl Into<String>) -> Self {
@@ -451,12 +451,12 @@ impl ClientBuilder {
     /// one.
     ///
     /// ```
-    /// use typesafe_sdk::Client;
+    /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
     /// let client = Client::builder().api_key("your-api-key").send_runtime_header(false).build()?;
     /// # drop(client);
-    /// # Ok::<(), typesafe_sdk::Error>(())
+    /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
     #[must_use]
     pub fn send_runtime_header(mut self, send: bool) -> Self {
@@ -474,17 +474,17 @@ impl ClientBuilder {
     /// [`ResponseValidationError`](crate::ResponseValidationError)) still name
     /// the scheme and host, so a caller logging `%error` puts the host back.
     /// Request and response bodies still print at `TRACE` under the target
-    /// `typesafe_sdk` whatever this flag; cap that target to keep them out.
+    /// `decision_model_sdk` whatever this flag; cap that target to keep them out.
     /// No credential from userinfo, query or fragment can reach the default
     /// endpoint line, because those URL components are refused at build.
     ///
     /// ```
-    /// use typesafe_sdk::Client;
+    /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
     /// let client = Client::builder().api_key("your-api-key").log_endpoint_host(false).build()?;
     /// # drop(client);
-    /// # Ok::<(), typesafe_sdk::Error>(())
+    /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
     #[must_use]
     pub fn log_endpoint_host(mut self, log: bool) -> Self {

@@ -15,7 +15,7 @@ use tracing::{
 };
 
 /// The target of the adapter's own events.
-const TARGET: &str = "system_one_adapter";
+const TARGET: &str = "decision_model_adapter";
 
 /// Everything recorded while it is the default subscriber, as lines of
 /// text. An event is one line: the target, then each field as ` name=value`.

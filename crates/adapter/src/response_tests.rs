@@ -18,7 +18,7 @@ fn attempt() -> Attempt {
         schema(),
         true,
         "gpt-4o-mini".to_owned(),
-        "system_one_adapter::OpenAiProvider".to_owned(),
+        "decision_model_adapter::OpenAiProvider".to_owned(),
     )
 }
 
@@ -52,7 +52,7 @@ fn an_attempt_that_recorded_nothing_and_failed_has_a_null_response() {
             r#"{"messages":[{"role":"system","content":"rules"},{"role":"user","content":"the caller's private document"}],"#,
             r#""model_request_parameters":{"schema":{"type":"object","properties":{}},"structured":true},"#,
             r#""llm_response":null,"#,
-            r#""debug_info":{"model_name":"gpt-4o-mini","provider":"system_one_adapter::OpenAiProvider","#,
+            r#""debug_info":{"model_name":"gpt-4o-mini","provider":"decision_model_adapter::OpenAiProvider","#,
             r#""error":"Request timed out (timeout=600s).","error_type":"Timeout"}}"#,
         )
     );
@@ -78,7 +78,7 @@ fn an_attempt_with_a_recorded_exchange_carries_api_finish_reason_and_request() {
     assert!(
         written.ends_with(concat!(
             r#""llm_response":{"id":"resp_1","status":"completed"},"#,
-            r#""debug_info":{"model_name":"gpt-4o-mini","provider":"system_one_adapter::OpenAiProvider","#,
+            r#""debug_info":{"model_name":"gpt-4o-mini","provider":"decision_model_adapter::OpenAiProvider","#,
             r#""api":"responses","finish_reason":"completed"},"#,
             r#""request":{"model":"gpt-4o-mini","input":[]}}"#,
         )),
@@ -102,8 +102,9 @@ fn a_recorded_response_without_a_stop_reason_serializes_a_null_finish_reason() {
 
     let written = json(&done);
     assert!(
-        written
-            .contains(r#""provider":"system_one_adapter::OpenAiProvider","finish_reason":null}"#),
+        written.contains(
+            r#""provider":"decision_model_adapter::OpenAiProvider","finish_reason":null}"#
+        ),
         "{written}"
     );
     assert_eq!(done.finish_reason(), None);

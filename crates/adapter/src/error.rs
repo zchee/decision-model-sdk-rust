@@ -58,7 +58,7 @@ struct Inner {
 pub enum ErrorKind {
     /// The model request failed, and the retry policy gave up: the SDK's
     /// error of kind `Api`, `Connection`, `Timeout` or `ResponseTooLarge`.
-    Provider(typesafe_sdk::Error),
+    Provider(decision_model_sdk::Error),
     /// The vendor answered with a success status, but declared the reply
     /// unfinished or refused, or sent a body that is not its JSON.
     NonAnswer(NonAnswer),
@@ -96,15 +96,15 @@ impl ErrorKind {
 /// It takes the SDK's error by reference, so the run can name a failed
 /// attempt and still hand the error back to the retry policy, and the HTTP
 /// module names its event with the same word the trace records.
-pub(crate) fn provider_kind_name(error: &typesafe_sdk::Error) -> &'static str {
+pub(crate) fn provider_kind_name(error: &decision_model_sdk::Error) -> &'static str {
     match error.kind() {
-        typesafe_sdk::ErrorKind::Api(_) => "Api",
-        typesafe_sdk::ErrorKind::Connection => "Connection",
-        typesafe_sdk::ErrorKind::Timeout { .. } => "Timeout",
-        typesafe_sdk::ErrorKind::ResponseTooLarge { .. } => "ResponseTooLarge",
-        typesafe_sdk::ErrorKind::ResponseValidation(_) => "ResponseValidation",
-        typesafe_sdk::ErrorKind::InvalidRequest => "InvalidRequest",
-        typesafe_sdk::ErrorKind::Config => "Config",
+        decision_model_sdk::ErrorKind::Api(_) => "Api",
+        decision_model_sdk::ErrorKind::Connection => "Connection",
+        decision_model_sdk::ErrorKind::Timeout { .. } => "Timeout",
+        decision_model_sdk::ErrorKind::ResponseTooLarge { .. } => "ResponseTooLarge",
+        decision_model_sdk::ErrorKind::ResponseValidation(_) => "ResponseValidation",
+        decision_model_sdk::ErrorKind::InvalidRequest => "InvalidRequest",
+        decision_model_sdk::ErrorKind::Config => "Config",
         _ => "Provider",
     }
 }
@@ -128,7 +128,7 @@ impl Error {
 
     /// The model request failed with the SDK's `error`, which becomes the
     /// `source()`.
-    pub(crate) fn provider(error: typesafe_sdk::Error) -> Self {
+    pub(crate) fn provider(error: decision_model_sdk::Error) -> Self {
         Self::new(ErrorKind::Provider(error), "")
     }
 

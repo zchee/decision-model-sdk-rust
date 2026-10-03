@@ -7,16 +7,16 @@ error: field `kind_mismatch` has `#[noul]`, whose answer is a `NoulAnswer`, but 
 error: field `another_mismatch` has `#[score]`, whose answer is a `ScoreAnswer`, but its type is `NoulAnswer`: write `#[noul(...)]` for a `NoulAnswer` field, or make the field a `ScoreAnswer`
   --> tests/ui/field_types.rs:12:23
    |
-12 |     another_mismatch: typesafe_sdk::NoulAnswer,
-   |                       ^^^^^^^^^^^^^^^^^^^^^^^^
+12 |     another_mismatch: decision_model_sdk::NoulAnswer,
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: field `number` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)
+error: field `number` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)
   --> tests/ui/field_types.rs:14:13
    |
 14 |     number: f64,
    |             ^^^
 
-error: field `alias` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)
+error: field `alias` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)
   --> tests/ui/field_types.rs:16:12
    |
 16 |     alias: Spam,

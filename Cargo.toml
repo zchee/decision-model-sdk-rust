@@ -15,7 +15,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/zchee/typesafe-sdk-rust"
+repository = "https://github.com/zchee/decision-model-sdk-rust"
 rust-version = "1.98"
 
 # Lints are declared once here and inherited by every member with

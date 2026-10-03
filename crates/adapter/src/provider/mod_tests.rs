@@ -21,7 +21,7 @@ impl Provider for EchoProvider {
     fn request<'a>(
         &'a self,
         mut call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async move {
             let last = call
                 .messages()
@@ -281,7 +281,8 @@ fn a_trait_object_reports_the_concrete_type_name_unless_overridden() {
         fn request<'a>(
             &'a self,
             _call: ProviderCall<'a>,
-        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>>
+        {
             Box::pin(async { Ok(Err(NonAnswer::new("never asked"))) })
         }
 
@@ -323,7 +324,8 @@ fn log_uri_of_a_provider_that_overrides_it_is_its_own_uri() {
         fn request<'a>(
             &'a self,
             _call: ProviderCall<'a>,
-        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+        ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>>
+        {
             Box::pin(async { Ok(Err(NonAnswer::new("never asked"))) })
         }
 

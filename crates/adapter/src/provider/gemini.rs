@@ -9,10 +9,10 @@ use std::{fmt, time::Duration};
 
 use ::http::{HeaderMap, HeaderName, Uri};
 use bytes::Bytes;
+use decision_model_sdk::HttpService;
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
-use typesafe_sdk::HttpService;
 
 use super::{
     BoxFuture, NonAnswer, Provider, ProviderCall, ProviderResult, Role, Schema,
@@ -281,7 +281,7 @@ where
     fn request<'a>(
         &'a self,
         mut call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async move {
             let body = request_body(&self.model, &call);
             call.trace().record_request(&body, API);
@@ -307,7 +307,7 @@ where
     }
 
     fn type_name(&self) -> &str {
-        "system_one_adapter::GeminiProvider"
+        "decision_model_adapter::GeminiProvider"
     }
 
     fn log_uri(&self) -> Option<&Uri> {

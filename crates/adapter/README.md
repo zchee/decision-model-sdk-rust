@@ -1,28 +1,27 @@
 # System One adapter for Rust
 
-Ask TypeSafe System One questions of an OpenAI, Anthropic or Gemini model instead of the TypeSafe
-API: the same prepared questions go to the model, and its reply comes back as the answers the
-`typesafe-sdk-rust` crate returns, with probabilities, usage and a trace of every attempt. It is a
-port of the Python package
+Ask System One questions of an OpenAI, Anthropic or Gemini model instead of a decision model
+served through the System One API: the same prepared questions go to the model, and its reply
+comes back as the answers the `decision-model-sdk` crate returns, with probabilities, usage and a
+trace of every attempt. It is a port of TypeSafe AI's Python package
 [system-one-adapter-python](https://github.com/typesafe-ai/system-one-adapter-python) 0.2.1
-(commit `e1d4cc9`), useful for comparing System One against a general-purpose model on cost, speed
-and quality. The places where it behaves differently on purpose are listed under
+(commit `e1d4cc9`), useful for comparing a decision model against a general-purpose model on
+cost, speed and quality. The places where it behaves differently on purpose are listed under
 [Deviations from the Python adapter](#deviations-from-the-python-adapter).
 
-The package is published as **`typesafe-sdk-rust-adapter`**, next to the SDK it builds on. The
-library it builds is **`system_one_adapter`**, the Python package's name, so code writes
-`use system_one_adapter::...`.
+The package is **`decision-model-adapter`**, next to the SDK it builds on, and the library it
+builds is **`decision_model_adapter`**, so code writes `use decision_model_adapter::...`.
 
 ## Install
 
 ```toml
 [dependencies]
-typesafe-sdk-rust-adapter = "0.1.0"
+decision-model-adapter = "0.1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 The minimum supported Rust version is **1.98**, and the crate uses edition 2024. It depends on
-`typesafe-sdk-rust` 0.2.1 or a later 0.2 release, without that crate's default features: the
+`decision-model-sdk` 0.1.0 or a later 0.1 release, without that crate's default features: the
 adapter needs neither the SDK's transport nor its derive.
 
 | Feature | Default | What it does |
@@ -32,7 +31,7 @@ adapter needs neither the SDK's transport nor its derive.
 | `gemini` | on | `GeminiProvider`, `ProviderName::Gemini` and the default transport. |
 | `tracing` | on | The adapter's own events, and the SDK's retry line: the feature also turns on the SDK's `tracing` feature (see [Logging](#logging)). Without it, every event is compiled out. |
 | `macros` | off | Turns on the SDK's `macros` feature, so the re-exported `QuestionSet` is also the derive (see [Typed answers](#typed-answers)). It re-exports nothing by itself. |
-| `internals` | off | Exposes a hidden `system_one_adapter::__internals` module used by this repository's tests and fuzz targets. It carries **no semver promise**; do not depend on it. With it, a provider reads no process environment, so its key and base URL must be given to its builder. |
+| `internals` | off | Exposes a hidden `decision_model_adapter::__internals` module used by this repository's tests and fuzz targets. It carries **no semver promise**; do not depend on it. With it, a provider reads no process environment, so its key and base URL must be given to its builder. |
 
 Without any provider feature hyper and rustls are not compiled, `ProviderName` has no variant, and
 a client still takes a provider the caller implements (see [Providers](#providers)).
@@ -68,7 +67,7 @@ The first call for a provider name and model builds that provider and reads its 
 environment (see [Providers](#providers)); later calls reuse it.
 
 ```rust,no_run
-use system_one_adapter::{AnswerMode, Client, Noul, ProviderName, Questions, StructuredOutputs};
+use decision_model_adapter::{AnswerMode, Client, Noul, ProviderName, Questions, StructuredOutputs};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,21 +99,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 and returns `Response<Q>`: the answers are decoded into the fields of `Q`. Answers that do not fit
 the fields fail the call with `ErrorKind::MalformedStructure`.
 
-A caller that derives question sets depends on `typesafe-sdk-rust` directly, with its `macros`
+A caller that derives question sets depends on `decision-model-sdk` directly, with its `macros`
 feature, and writes a plain `#[derive(QuestionSet)]` (recommended); or it enables this crate's
 `macros` feature and points the derive at the re-exported SDK with
-`#[question_set(crate = system_one_adapter::typesafe_sdk)]`, a path and not a string.
-The attribute is needed in the second form because the derive's expansion names `::typesafe_sdk`
+`#[question_set(crate = decision_model_adapter::decision_model_sdk)]`, a path and not a string.
+The attribute is needed in the second form because the derive's expansion names `::decision_model_sdk`
 unless told otherwise, and a crate that depends on the adapter alone has no crate of that name.
 The example below is the second form, with this crate's `macros` feature on:
 
 ```rust,no_run
 # #[cfg(feature = "macros")]
 # mod example {
-use system_one_adapter::{ChoiceAnswer, Client, Error, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_adapter::{ChoiceAnswer, Client, Error, NoulAnswer, QuestionSet, ScoreAnswer};
 
 #[derive(Debug, QuestionSet)]
-#[question_set(crate = system_one_adapter::typesafe_sdk)]
+#[question_set(crate = decision_model_adapter::decision_model_sdk)]
 struct Review {
     #[noul(instructions = "The review is positive.")]
     positive: NoulAnswer,
@@ -216,7 +215,7 @@ The key is sent as `authorization: Bearer` (OpenAI), `x-api-key` with
 `anthropic-version: 2023-06-01` (Anthropic) or `x-goog-api-key` (Gemini). The header value is
 built once, when the provider is built, and marked sensitive; `Debug` of a provider prints the
 model, the base URL's host and the API, never the key. Every request carries
-`user-agent: typesafe-sdk-rust-adapter/` followed by the crate's version.
+`user-agent: decision-model-adapter/` followed by the crate's version.
 
 **Base URL.** The rules are the SDK's: an absolute `http` or `https` URL with a host; userinfo, a
 query or a fragment is refused, and no error text repeats the URL. `http://` is accepted, and then
@@ -295,7 +294,7 @@ Real bodies are longer, so a short placeholder key against a local server hides 
 `log_uri()`. `request` receives a `ProviderCall` (the messages, the answer schema, whether
 structured output is asked for, and the attempt's `AttemptTrace`) and returns the model's text and
 token counts as a `ProviderResult`, a `NonAnswer` when the model declined or did not finish, or a
-`typesafe_sdk::Error` for a failure the retry policy may retry. `record_request` and
+`decision_model_sdk::Error` for a failure the retry policy may retry. `record_request` and
 `record_response` on the `AttemptTrace` put the wire JSON into the trace, and its getters
 `request()`, `api()`, `response()` and `finish_reason()` read it back. `ProviderCall::new`,
 `AttemptTrace::default()`, `Schema::from_json` and `Deserialize` for `Message` exist so that such a
@@ -314,9 +313,9 @@ of that URI, never its query or userinfo: put no credential into a path segment.
 ```rust,no_run
 use std::sync::Arc;
 
-use system_one_adapter::{
+use decision_model_adapter::{
     AnswerMode, BoxFuture, Client, NonAnswer, Provider, ProviderCall, ProviderResult,
-    StructuredOutputs, typesafe_sdk,
+    StructuredOutputs, decision_model_sdk,
 };
 
 /// A model that runs in this process.
@@ -331,7 +330,7 @@ impl Provider for LocalModel {
     fn request<'a>(
         &'a self,
         call: ProviderCall<'a>,
-    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, typesafe_sdk::Error>> {
+    ) -> BoxFuture<'a, Result<Result<ProviderResult, NonAnswer>, decision_model_sdk::Error>> {
         Box::pin(async move {
             let prompt: Vec<&str> = call.messages().iter().map(|message| message.content()).collect();
             match generate(&prompt, call.schema().as_str()).await {
@@ -344,7 +343,7 @@ impl Provider for LocalModel {
 }
 
 # async fn generate(_prompt: &[&str], _schema: &str) -> Option<String> { None }
-fn client() -> Result<Client, system_one_adapter::Error> {
+fn client() -> Result<Client, decision_model_adapter::Error> {
     Client::builder(StructuredOutputs::Prompted, AnswerMode::Discrete)
         .provider_instance(Arc::new(LocalModel))
         .build()
@@ -425,7 +424,7 @@ raised before the first attempt.
 
 | `ErrorKind` | When |
 | --- | --- |
-| `Provider(typesafe_sdk::Error)` | The request failed and the retry policy gave up: the SDK's `Api`, `Connection`, `Timeout` or `ResponseTooLarge` kind. |
+| `Provider(decision_model_sdk::Error)` | The request failed and the retry policy gave up: the SDK's `Api`, `Connection`, `Timeout` or `ResponseTooLarge` kind. |
 | `NonAnswer(NonAnswer)` | A 2xx answer the provider declared unfinished or refused, or a 2xx body that is not the vendor's JSON. Never retried. |
 | `MalformedStructure` | The model's output still does not fit the answer schema after the last corrective turn, or, after `ask`, the answers do not fit the question set's type. |
 | `InvalidRequest` | No model, no provider, no question, an unknown question type, fewer than two criteria, or a state that serializes to `null` or does not serialize to JSON. Nothing was sent. |
@@ -445,7 +444,7 @@ found, never a string the model chose; it lists at most 8 problems and counts th
 Two loops run inside one call.
 
 **Provider failures** are retried by the SDK's `RetryPolicy`, the same type and the same rules as
-in `typesafe-sdk-rust`: which errors are retried, the backoff, `Retry-After`, and a caller's
+in `decision-model-sdk`: which errors are retried, the backoff, `Retry-After`, and a caller's
 predicate. The default is `RetryPolicy::none()`, as upstream's default is no retry; pass
 `RetryPolicy::default()` or a policy of your own to the builder or to one call. Each retry adds a
 `RetryCategory::ProviderError` reason to the trace, whose message is the failed attempt's error
@@ -466,7 +465,7 @@ own run of the retry policy.
 ## Logging
 
 With the `tracing` feature (on by default) the adapter emits two kinds of events, both at `DEBUG`
-on the target `system_one_adapter`:
+on the target `decision_model_adapter`:
 
 - one per HTTP exchange of a built-in provider: the method, the log URI, the status when a
   response arrived, the name of the error's kind when the exchange failed (`Api`, `Connection`,
@@ -483,7 +482,7 @@ through the `log` crate, not `tracing`.
 
 The retry log line is the SDK's, not the adapter's: before each retry the SDK writes the method,
 the log URI that `Provider::log_uri()` returns (`POST /` for `None`) and the retry number at
-`INFO` on the target `typesafe_sdk`. That line exists only when the SDK is built with its
+`INFO` on the target `decision_model_sdk`. That line exists only when the SDK is built with its
 `tracing` feature, which this crate's `tracing` feature turns on; a build with
 `default-features = false` and no `tracing` has neither the events nor the retry line.
 
@@ -500,7 +499,7 @@ server and need neither a key nor the network. Several test binaries need a feat
 `providers_openai`, `providers_anthropic`, `providers_gemini`, `cassettes`, `lifecycle`,
 `parity_schema` and `parity_metrics` need `internals` (with the default providers), under which
 the library reads no process environment, so no test can pick up a key of the machine it runs on;
-`typed` needs `macros`. `cargo nextest run -p typesafe-sdk-rust-adapter --all-features` runs them
+`typed` needs `macros`. `cargo nextest run -p decision-model-adapter --all-features` runs them
 all, and `--features internals` all but `typed`. `docs/adapter-port-test-matrix.md` maps every
 test of the Python adapter to the Rust tests that cover it, the deviation that explains why none
 does, or the reason it was left out, and `docs/uncovered-lines.md` records this crate's measured
@@ -513,12 +512,12 @@ or re-recorded fixture must pass `python3 .github/scripts/no-placeholders.py` an
 
 `crates/adapter-live-tests` holds the tests against the live vendor APIs. It is a workspace member
 but not a default member. **Its tests make real, billed calls** to OpenAI, Anthropic and Gemini
-when `TYPESAFE_ADAPTER_LIVE_TESTS=1` and the provider's key are both set and a command reaches
+when `DECISION_MODEL_ADAPTER_LIVE_TESTS=1` and the provider's key are both set and a command reaches
 them. Without the variable or without the key a test fails, never skips, before any request is
 made, so a key exported for other work bills nobody. Run them only on purpose:
 
 ```sh
-TYPESAFE_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p typesafe-sdk-rust-adapter-live-tests --no-fail-fast --retries 0
+DECISION_MODEL_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p decision-model-adapter-live-tests --no-fail-fast --retries 0
 ```
 
 `--no-fail-fast` because nextest otherwise stops at the first failure and the remaining cases are
@@ -548,7 +547,7 @@ repository.
 | Closing the client | `close()`, `aclose()`, both context managers, and the error `The adapter client is closed.` after closing (`_client.py:412-413,505,541,600,642`). | Dropping the last clone of the client drops the providers it owns; there is no closed state. Upstream's six close tests have no counterpart (`test_async_cleanup_propagates_cancellation_after_remaining_cleanup`, `test_cancelling_close_waiter_does_not_interrupt_cleanup`, `test_cleanup_continues_after_failure`, `test_close_before_first_use_does_not_construct_providers`, `test_concurrent_close_waits_for_same_cleanup`, `test_exceptional_exit_closes_owned_sdks`), nor has the close half of `test_reuses_owned_provider_and_closes_sdk_on_context_exit`. |
 | Provider names | A string, with a pip-extra error for a provider that is not installed and an `Unknown provider` error (`providers/__init__.py:32-39,83`). | `ProviderName`, an enum whose variants are feature-gated: a disabled provider is absent at compile time, so there is no pip-extra error; an unknown name is the `FromStr` error of `ProviderName`; the client never receives a name outside the enum. |
 | Response type | `SystemOneResponse` subclasses the SDK's response (`_response.py:25`). | `Response<A = Answers>` is the adapter's own type, without the SDK response's API-call members; typed answers come through `AnswerSet`. |
-| Errors | The SDK's exceptions, and a pydantic `ValidationError` for an invalid question (`tests/test_schema.py:36-41`); the trace is an attribute set on the exception. | The adapter's `Error` wraps `typesafe_sdk::Error` and adds the kinds `InvalidRequest`, `Config`, `NonAnswer` and `MalformedStructure`; an invalid question is `InvalidRequest`; the trace is the typed accessor `Error::debug()`. |
+| Errors | The SDK's exceptions, and a pydantic `ValidationError` for an invalid question (`tests/test_schema.py:36-41`); the trace is an attribute set on the exception. | The adapter's `Error` wraps `decision_model_sdk::Error` and adds the kinds `InvalidRequest`, `Config`, `NonAnswer` and `MalformedStructure`; an invalid question is `InvalidRequest`; the trace is the typed accessor `Error::debug()`. |
 | Correction-prompt and validation wording | The correction prompt quotes pydantic's validation text, which quotes model output, in a user message outside `<document>` (`_client.py:110-115`). | The adapter's own wording: it names the expected ids, the expected labels and the JSON type found, never a string the model chose; it lists at most 8 problems and counts the rest, each item escaped and cut at 200 characters plus U+2026. |
 | Latency type | `Usage.latency` is a float of seconds (`_response.py:22`). | A `Duration`, serialized as seconds. |
 | Provider builder options | `base_url` on OpenAI only (`providers/openai.py:100`), and no other transport option. | `base_url` on all three providers; `timeout`, `max_response_bytes`, `add_root_certificate` and `build_with_service` on every provider; no HTTP-version setting. Under `build_with_service` the adapter checks every rendering of the service's error chain for the key and replaces the chain with a fixed text on a hit. |
@@ -564,7 +563,7 @@ repository.
 | Redirects | The OpenAI and Anthropic SDK clients follow redirects (`openai/_base_client.py:876,1471`, `anthropic/_base_client.py:906,1584`). | A 3xx answer is an API error after exactly one request. |
 | Connect timeout | OpenAI and Anthropic have a separate 5 s connect timeout (`openai/_constants.py:7`, `anthropic/_constants.py:7`). | No separate connect timeout; connecting counts against the attempt deadline of the row `Timeouts`. |
 | `GOOGLE_GEMINI_BASE_URL` | `google-genai` reads it (`google/genai/_base_url.py:50`). | Not read; Gemini's base URL is set only through the builder. |
-| User agent | Each vendor SDK sends its own `User-Agent` (`openai/_base_client.py:711`); upstream's recorded exchanges all carry one. | `typesafe-sdk-rust-adapter/` followed by the crate's version; no vendor SDK's value. |
+| User agent | Each vendor SDK sends its own `User-Agent` (`openai/_base_client.py:711`); upstream's recorded exchanges all carry one. | `decision-model-adapter/` followed by the crate's version; no vendor SDK's value. |
 | `Response` is `Serialize` only | A response round-trips through `model_dump_json` and `model_validate_json` (`tests/test_client_with_fake_model.py:146-150`). | `Response` serializes to upstream's shape but does not deserialize. The round-trip half of `test_sdk_questions_and_response_serialization` has no counterpart. |
 | Non-answer wording | The messages name Python classes (`Increase max_tokens on AnthropicProvider or AsyncAnthropicProvider`, `providers/anthropic.py:57-61`) and print a Python list of Gemini errors (`providers/gemini.py:79-81`); a refusal text and an error message from the body are printed (`providers/openai.py:85`, `providers/gemini.py:81`). | The adapter's own wording, with no Python class or list syntax: the vendor and the status, the stop reason or the word `refusal`. The refusal text and the body's error message stay in the attempt's `llm_response`. |
 | Number text of non-string content | Instructions and criteria that are not strings are written with pydantic's `to_json` (`_schema.py:250-255`). | Their compact JSON text as the SDK prepared it, kept unparsed in member order; a number keeps the text the SDK's serializer wrote, which is not always pydantic's text for the same number. The number text of a `serde_json::Value` state differs from Python too, for `-0`, an integer beyond u64 and `1e400`: see the row `Non-finite numbers in the state`. |

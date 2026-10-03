@@ -191,7 +191,7 @@ impl Error {
     /// ```
     /// use std::error::Error as _;
     ///
-    /// use typesafe_sdk::{Error, ErrorKind};
+    /// use decision_model_sdk::{Error, ErrorKind};
     ///
     /// let refused = std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused");
     /// let error = Error::connection("could not reach the vendor", Some(Box::new(refused)));
@@ -232,7 +232,7 @@ impl Error {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use typesafe_sdk::{Error, ErrorKind};
+    /// use decision_model_sdk::{Error, ErrorKind};
     ///
     /// let error = Error::timeout(Duration::from_secs(30));
     ///
@@ -256,7 +256,7 @@ impl Error {
     /// body is an [`ApiError`] instead.
     ///
     /// ```
-    /// use typesafe_sdk::{Error, ErrorKind};
+    /// use decision_model_sdk::{Error, ErrorKind};
     ///
     /// let error = Error::response_too_large(16 * 1024 * 1024);
     ///
@@ -416,7 +416,7 @@ impl ApiError {
     /// ```
     /// use bytes::Bytes;
     /// use http::{HeaderMap, StatusCode};
-    /// use typesafe_sdk::{ApiError, ApiErrorKind, Error, ErrorKind};
+    /// use decision_model_sdk::{ApiError, ApiErrorKind, Error, ErrorKind};
     ///
     /// let body = Bytes::from_static(br#"{"error":{"message":"Rate limit reached"}}"#);
     /// let error = ApiError::from_response(StatusCode::TOO_MANY_REQUESTS, body, HeaderMap::new());

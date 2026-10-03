@@ -1,6 +1,6 @@
 // The attribute grammar: required lists, keys given once, known keys, and
 // string literals only.
-use typesafe_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_sdk::{ChoiceAnswer, NoulAnswer, QuestionSet, ScoreAnswer};
 
 const INSTRUCTIONS: &str = "Spam?";
 

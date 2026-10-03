@@ -23,9 +23,9 @@
 
 use std::time::{Duration, SystemTime};
 
+use decision_model_sdk::__internals;
 use http::{HeaderMap, HeaderValue, header::RETRY_AFTER};
 use libfuzzer_sys::fuzz_target;
-use typesafe_sdk::__internals;
 
 /// A fixed instant to measure an HTTP date against, so a run is repeatable:
 /// 2026-01-01T00:00:00Z.

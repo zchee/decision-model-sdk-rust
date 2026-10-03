@@ -1,9 +1,9 @@
 [package]
-name = "typesafe-sdk-rust-macros"
+name = "decision-model-sdk-macros"
 version = "0.1.0"
-description = "#[derive(QuestionSet)] for typesafe-sdk-rust: TypeSafe AI questions serialized at compile time"
+description = "#[derive(QuestionSet)] for decision-model-sdk: decision model questions serialized at compile time"
 readme = "README.md"
-keywords = ["typesafe", "ai", "derive", "sdk"]
+keywords = ["decision-model", "ai", "derive", "sdk"]
 categories = ["api-bindings", "development-tools::procedural-macro-helpers"]
 edition.workspace = true
 rust-version.workspace = true

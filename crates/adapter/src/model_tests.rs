@@ -1,7 +1,9 @@
 //! Tests for the question model.
 
+use decision_model_sdk::{
+    Choice, Content as SdkContent, Noul, Questions, Score, question::RawQuestion,
+};
 use serde_json::json;
-use typesafe_sdk::{Choice, Content as SdkContent, Noul, Questions, Score, question::RawQuestion};
 
 use super::*;
 use crate::ErrorKind;

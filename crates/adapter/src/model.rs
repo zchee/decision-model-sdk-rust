@@ -21,12 +21,12 @@
 
 use std::{borrow::Cow, fmt};
 
+use decision_model_sdk::PreparedQuestions;
 use serde::{
     Deserialize, Deserializer,
     de::{MapAccess, Visitor},
 };
 use serde_json::value::RawValue;
-use typesafe_sdk::PreparedQuestions;
 
 use crate::error::Error;
 

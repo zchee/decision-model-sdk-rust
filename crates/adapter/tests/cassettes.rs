@@ -79,9 +79,9 @@ fn vendor(name: &str) -> Option<&str> {
 /// `Provider::type_name()`.
 fn public_path(vendor: &str) -> &'static str {
     match vendor {
-        "openai" => "system_one_adapter::OpenAiProvider",
-        "anthropic" => "system_one_adapter::AnthropicProvider",
-        "gemini" => "system_one_adapter::GeminiProvider",
+        "openai" => "decision_model_adapter::OpenAiProvider",
+        "anthropic" => "decision_model_adapter::AnthropicProvider",
+        "gemini" => "decision_model_adapter::GeminiProvider",
         other => panic!("no built-in provider of the vendor `{other}`"),
     }
 }
@@ -172,7 +172,7 @@ fn expected_response_equals_itself_and_its_wire_form() {
         attempt["llm_response"] =
             serde_json::from_slice(&cassette.response.body).expect("a JSON body");
         attempt["debug_info"]["provider"] =
-            json!(format!("system_one_adapter::provider::{vendor}::Provider"));
+            json!(format!("decision_model_adapter::provider::{vendor}::Provider"));
         assert_eq!(expected::compare(&found, &response), Ok(()), "{name}: the wire form");
 
         // A built-in provider names its public path instead: the same
@@ -238,7 +238,7 @@ fn expected_response_change_names_first_pointer() {
     assert_eq!(
         difference(&|found| {
             found["debug"]["llm_attempts"][0]["debug_info"]["provider"] =
-                json!("system_one_adapter::provider::openai::OpenAi");
+                json!("decision_model_adapter::provider::openai::OpenAi");
         }),
         Err("/debug/llm_attempts/0/debug_info/provider".to_owned()),
     );
@@ -266,7 +266,7 @@ fn expected_response_change_names_first_pointer() {
         json!("system_one_adapter.providers.gemini.AsyncGeminiProvider");
     let mut found = response.clone();
     found["debug"]["llm_attempts"][0]["debug_info"]["model_name"] =
-        json!("system_one_adapter::provider::gemini::Provider");
+        json!("decision_model_adapter::provider::gemini::Provider");
     assert_eq!(
         expected::compare(&found, &expected_form).map_err(|difference| difference.pointer),
         Err("/debug/llm_attempts/0/debug_info/model_name".to_owned()),
@@ -549,7 +549,7 @@ struct ScratchDir(PathBuf);
 impl ScratchDir {
     fn new(test: &str) -> Self {
         let path = std::env::temp_dir()
-            .join(format!("typesafe-sdk-rust-adapter-{test}-{}", std::process::id()));
+            .join(format!("decision-model-adapter-{test}-{}", std::process::id()));
         std::fs::create_dir(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         Self(path)
     }

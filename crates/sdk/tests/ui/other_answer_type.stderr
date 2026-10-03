@@ -2,10 +2,10 @@ error[E0308]: mismatched types
   --> tests/ui/other_answer_type.rs:10:11
    |
 10 |     spam: NoulAnswer,
-   |           ^^^^^^^^^^ expected `NoulAnswer`, found `typesafe_sdk::NoulAnswer`
+   |           ^^^^^^^^^^ expected `NoulAnswer`, found `decision_model_sdk::NoulAnswer`
    |
-   = note: `typesafe_sdk::NoulAnswer` and `NoulAnswer` have similar names, but are actually distinct types
-note: `typesafe_sdk::NoulAnswer` is defined in crate `typesafe_sdk`
+   = note: `decision_model_sdk::NoulAnswer` and `NoulAnswer` have similar names, but are actually distinct types
+note: `decision_model_sdk::NoulAnswer` is defined in crate `decision_model_sdk`
   --> src/response.rs
    |
    | pub struct NoulAnswer {

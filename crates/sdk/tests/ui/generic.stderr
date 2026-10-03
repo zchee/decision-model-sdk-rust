@@ -4,7 +4,7 @@ error: `Typed` cannot be generic: a question set's questions are serialized once
 6 | struct Typed<T> {
   |             ^^^
 
-error: field `other` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)
+error: field `other` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)
   --> tests/ui/generic.rs:10:12
    |
 10 |     other: T,
@@ -16,7 +16,7 @@ error: `Borrowed` cannot be generic: a question set's questions are serialized o
 14 | struct Borrowed<'a> {
    |                ^^^^
 
-error: field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `typesafe_sdk::NoulAnswer` work, a type alias does not)
+error: field `spam` has `#[noul]`, so its type must be `NoulAnswer` (the type is matched by name: `NoulAnswer` and `decision_model_sdk::NoulAnswer` work, a type alias does not)
   --> tests/ui/generic.rs:16:11
    |
 16 |     spam: &'a NoulAnswer,

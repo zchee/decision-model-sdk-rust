@@ -90,10 +90,10 @@ jobs:
       # feature, or only from tests, is dead in this build, and the run above
       # cannot see that: every feature is on there.
       - name: Lints without default features
-        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --exclude typesafe-sdk-rust-adapter-live-tests --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --workspace --exclude decision-model-sdk-live-tests --exclude decision-model-adapter-live-tests --all-targets --no-default-features -- -D warnings
 
       - name: Lints with default features
-        run: cargo clippy --workspace --exclude typesafe-sdk-rust-live-tests --exclude typesafe-sdk-rust-adapter-live-tests --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude decision-model-sdk-live-tests --exclude decision-model-adapter-live-tests --all-targets -- -D warnings
 
       # No `--workspace`: this one runs code. A crate whose tests need a live
       # API key is a workspace member and not a default member, so the default
@@ -105,7 +105,7 @@ jobs:
         run: cargo nextest run --features internals
 
       - name: Tests with unified arbitrary-precision numbers
-        run: env TYPESAFE_SDK_TEST_ARBITRARY_PRECISION=1 cargo nextest run --features internals,serde_json/arbitrary_precision
+        run: env DECISION_MODEL_SDK_TEST_ARBITRARY_PRECISION=1 cargo nextest run --features internals,serde_json/arbitrary_precision
 
       - name: Tests without default features
         run: cargo nextest run --no-default-features
@@ -174,12 +174,12 @@ jobs:
           RUSTDOCFLAGS: -D warnings
 
       - name: Documentation without default features
-        run: cargo doc --no-deps --no-default-features -p typesafe-sdk-rust
+        run: cargo doc --no-deps --no-default-features -p decision-model-sdk
         env:
           RUSTDOCFLAGS: -D warnings
 
       - name: Documentation of the adapter without default features
-        run: cargo doc --no-deps --no-default-features -p typesafe-sdk-rust-adapter
+        run: cargo doc --no-deps --no-default-features -p decision-model-adapter
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -238,14 +238,14 @@ jobs:
       - name: Line coverage
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest -p typesafe-sdk-rust --all-features --no-report
-          cargo llvm-cov nextest -p typesafe-sdk-rust --features internals --no-report
-          cargo llvm-cov report -p typesafe-sdk-rust --fail-under-lines 85
+          cargo llvm-cov nextest -p decision-model-sdk --all-features --no-report
+          cargo llvm-cov nextest -p decision-model-sdk --features internals --no-report
+          cargo llvm-cov report -p decision-model-sdk --fail-under-lines 85
 
       # The derive's entry point runs only inside rustc, never under a test
       # harness, so it counts as unreached; everything it calls is measured.
       - name: Line coverage of the derive
-        run: cargo llvm-cov nextest -p typesafe-sdk-rust-macros --all-features --fail-under-lines 85
+        run: cargo llvm-cov nextest -p decision-model-sdk-macros --all-features --fail-under-lines 85
 
       # The adapter is held to the SDK's threshold on its own. `-p` on the
       # report is what keeps it to the adapter: under the virtual root the
@@ -255,8 +255,8 @@ jobs:
       - name: Line coverage of the adapter
         run: |
           cargo llvm-cov clean --workspace
-          cargo llvm-cov nextest -p typesafe-sdk-rust-adapter --all-features --no-report
-          cargo llvm-cov report -p typesafe-sdk-rust-adapter --fail-under-lines 85
+          cargo llvm-cov nextest -p decision-model-adapter --all-features --no-report
+          cargo llvm-cov report -p decision-model-adapter --fail-under-lines 85
 
   hygiene:
     name: text hygiene
@@ -307,10 +307,10 @@ jobs:
         run: |
           test -d crates/adapter-live-tests
           test -d crates/live-tests
-          if grep -rnwE 'TYPESAFE_API_KEY|API_KEY_ENV|TYPESAFE_LIVE_TESTS' crates/adapter-live-tests; then
+          if grep -rnwE 'TYPESAFE_API_KEY|API_KEY_ENV|DECISION_MODEL_LIVE_TESTS' crates/adapter-live-tests; then
             exit 1
           fi
-          if grep -rnwE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|TYPESAFE_ADAPTER_LIVE_TESTS' crates/live-tests; then
+          if grep -rnwE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|DECISION_MODEL_ADAPTER_LIVE_TESTS' crates/live-tests; then
             exit 1
           fi
           test -s crates/adapter/LICENSE-THIRD-PARTY

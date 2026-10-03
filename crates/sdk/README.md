@@ -1,21 +1,22 @@
-# TypeSafe AI Rust SDK
+# Decision Model Rust SDK
 
-An async Rust client for the [TypeSafe AI](https://typesafe.ai) API: the System One endpoint
-(`POST /v1/systemone`), which answers named questions about a state, and the model listing
-(`GET /v1/models`). It is a port of the official Python SDK,
+An async Rust client for decision models served through the System One API: the System One
+endpoint (`POST /v1/systemone`), which answers named questions about a state, and the model
+listing (`GET /v1/models`). The API and its decision models were first offered by
+[TypeSafe AI](https://typesafe.ai) (Jev), and other vendors serve them too. The crate is a port
+of TypeSafe AI's official Python SDK,
 [typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.2 (commit
 `f078f1e`); the places where it behaves differently on purpose are listed under
 [Deviations from the Python SDK](#deviations-from-the-python-sdk).
 
-The package is published as **`typesafe-sdk-rust`**, because the name `typesafe-sdk` is already
-taken on crates.io. The library it builds is **`typesafe_sdk`**, so code writes
-`use typesafe_sdk::...`.
+The package is **`decision-model-sdk`** and the library it builds is **`decision_model_sdk`**,
+so code writes `use decision_model_sdk::...`.
 
 ## Install
 
 ```toml
 [dependencies]
-typesafe-sdk-rust = "0.2.0"
+decision-model-sdk = "0.1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -24,10 +25,10 @@ The minimum supported Rust version is **1.98**, and the crate uses edition 2024.
 | Feature | Default | What it does |
 | --- | --- | --- |
 | `hyper` | on | The built-in transport (hyper over rustls, OS trust store): `Client::builder()`, `build()`, `from_env()`, `HttpVersion`, `add_root_certificate`, `http_version`, `connect_timeout`. Without it, start from `ClientBuilder::new()` and `build_with_service`; hyper and rustls are not compiled. |
-| `macros` | on | `#[derive(QuestionSet)]`: questions declared as a struct and serialized at compile time, answers decoded straight into its fields. Pulls in the `typesafe-sdk-rust-macros` crate at the exact version this SDK release pins (the two crates are versioned independently). |
+| `macros` | on | `#[derive(QuestionSet)]`: questions declared as a struct and serialized at compile time, answers decoded straight into its fields. Pulls in the `decision-model-sdk-macros` crate at the exact version this SDK release pins (the two crates are versioned independently). |
 | `tracing` | on | Log events through the [`tracing`](https://docs.rs/tracing) crate (see [Logging](#logging)). Without it, every event is compiled out. |
 | `sonic` | off | JSON through sonic-rs (SIMD, carries `unsafe`) instead of serde_json; faster on large bodies (ledger S7); drops the sign of a literal `-0.0`. |
-| `internals` | off | Exposes a hidden `typesafe_sdk::__internals` module used by this repository's allocation tests and benchmarks. It carries **no semver promise**; do not depend on it. |
+| `internals` | off | Exposes a hidden `decision_model_sdk::__internals` module used by this repository's allocation tests and benchmarks. It carries **no semver promise**; do not depend on it. |
 
 serde_json is compiled with `float_roundtrip` and `raw_value`, which Cargo also turns on for the
 application's own serde_json. `arbitrary_precision` from elsewhere in the graph is supported;
@@ -56,10 +57,10 @@ A call asks a set of named questions about a state. The set is validated and ser
 `Questions::prepare`, and the resulting `PreparedQuestions` is reused by every call that asks it.
 
 ```rust,no_run
-use typesafe_sdk::{Choice, Client, Noul, Questions, Score};
+use decision_model_sdk::{Choice, Client, Noul, Questions, Score};
 
 #[tokio::main]
-async fn main() -> Result<(), typesafe_sdk::Error> {
+async fn main() -> Result<(), decision_model_sdk::Error> {
     // Reads TYPESAFE_API_KEY (and optionally TYPESAFE_BASE_URL, TYPESAFE_DEFAULT_MODEL).
     let client = Client::from_env()?;
 
@@ -99,9 +100,9 @@ fields unread and applies only the checks the Python SDK applies to a raw dictio
 a non-empty string, a `choice` or `score` has `criteria`, a `score`'s `criteria` is not empty):
 
 ```rust
-use typesafe_sdk::{Questions, RawQuestion};
+use decision_model_sdk::{Questions, RawQuestion};
 
-fn main() -> Result<(), typesafe_sdk::Error> {
+fn main() -> Result<(), decision_model_sdk::Error> {
     let questions = Questions::new()
         .raw("spam", RawQuestion::new("noul").field("instructions", "Is this spam?"))
         .prepare()?;
@@ -133,7 +134,7 @@ the answer type. The questions JSON is generated at compile time, and the respon
 straight into the fields, without a map in between.
 
 ```rust,no_run
-use typesafe_sdk::{ChoiceAnswer, Client, NoulAnswer, QuestionSet, ScoreAnswer};
+use decision_model_sdk::{ChoiceAnswer, Client, NoulAnswer, QuestionSet, ScoreAnswer};
 
 #[derive(QuestionSet)]
 struct Ticket {
@@ -146,7 +147,7 @@ struct Ticket {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), typesafe_sdk::Error> {
+async fn main() -> Result<(), decision_model_sdk::Error> {
     let client = Client::from_env()?;
     let response = client.ask::<Ticket>("I was charged twice for one order.").send().await?;
     let ticket = response.answers();
@@ -168,7 +169,7 @@ levels, a field whose type does not match its question kind, and an `Option<...A
 ## Models
 
 ```rust,no_run
-use typesafe_sdk::{Client, Error};
+use decision_model_sdk::{Client, Error};
 
 async fn print_models(client: &Client) -> Result<(), Error> {
     let listed = client.models().list().send().await?;
@@ -181,7 +182,7 @@ async fn print_models(client: &Client) -> Result<(), Error> {
 
 ## Errors
 
-Every fallible operation returns `typesafe_sdk::Error`, one pointer wide. `Error::kind()` says
+Every fallible operation returns `decision_model_sdk::Error`, one pointer wide. `Error::kind()` says
 what failed:
 
 | `ErrorKind` | Meaning |
@@ -219,7 +220,7 @@ lossy text (each bad sequence becomes U+FFFD), escaped and cut at 200 characters
 that is not JSON, and `error_type()` is `None`.
 
 ```rust,no_run
-use typesafe_sdk::{ApiErrorKind, Client, ErrorKind, PreparedQuestions};
+use decision_model_sdk::{ApiErrorKind, Client, ErrorKind, PreparedQuestions};
 
 async fn ask(client: &Client, questions: &PreparedQuestions) {
     match client.system_one("hello", questions).send().await {
@@ -281,7 +282,7 @@ of 30 s for the whole call.
 ```rust,no_run
 use std::time::Duration;
 
-use typesafe_sdk::{Client, Error, PreparedQuestions, RetryPolicy, StatusSet};
+use decision_model_sdk::{Client, Error, PreparedQuestions, RetryPolicy, StatusSet};
 
 async fn ask_twice(questions: &PreparedQuestions) -> Result<(), Error> {
     let client = Client::builder()
@@ -332,7 +333,7 @@ retried, the wait before the next attempt, the attempt count and the budget. A r
 does not want retried belongs in the success value, not in the error.
 
 `method` and `uri` only name the request. Before each retry the method and the
-scheme, host, port and path of `uri` are logged at `INFO` to the `typesafe_sdk` target, as
+scheme, host, port and path of `uri` are logged at `INFO` to the `decision_model_sdk` target, as
 `POST https://api.example.com/v1/answers retry 1`; the line exists only when the SDK is built
 with its `tracing` feature. The port is printed only when it is not the scheme's default. The
 query and the userinfo are not printed, but the path is, so `uri` must carry no credential.
@@ -378,10 +379,10 @@ body), and a caller's `X-TypeSafe-Retry-Count` and framing or connection headers
 (see [Security notes](#security-notes)). A base URL's path appears in `Debug`
 and in error messages, so do not put a credential there.
 
-Every request names the SDK in `User-Agent` and `X-TypeSafe-SDK` (`typesafe-sdk-rust/<version>`)
+Every request names the SDK in `User-Agent` and `X-TypeSafe-SDK` (`decision-model-sdk/<version>`)
 and its platform in `X-TypeSafe-Runtime` (`rust (<os>; <arch>)`). Two settings, and nothing
 else, change that. `user_agent_product("my-app/1.2.0")` puts the application's product in front
-of the SDK's in `User-Agent` (`my-app/1.2.0 typesafe-sdk-rust/<version>`); `X-TypeSafe-SDK` still
+of the SDK's in `User-Agent` (`my-app/1.2.0 decision-model-sdk/<version>`); `X-TypeSafe-SDK` still
 names the SDK alone. The product must be `name/version`, both parts RFC 9110 tokens, at most 64
 bytes; anything else is a `Config` error from `build()`. `send_runtime_header(false)` leaves
 `X-TypeSafe-Runtime` out of every request.
@@ -393,7 +394,7 @@ the same value. Neither needs the `hyper` feature.
 
 `ClientBuilder::build_with_service(service)` sends every request through any
 [`tower_service::Service`](https://docs.rs/tower-service) that takes an
-`http::Request<typesafe_sdk::Body>` and answers with an `http::Response` of any
+`http::Request<decision_model_sdk::Body>` and answers with an `http::Response` of any
 [`http_body::Body`](https://docs.rs/http-body): a proxy, a recorder, a middleware stack, or, as
 below, an in-memory answer for a test. The service owns its connections and their timeouts; the
 SDK still applies its own per-attempt deadline and response size limit. The settings only the
@@ -408,7 +409,7 @@ use std::{
 };
 
 use http::{Request, Response};
-use typesafe_sdk::{Body, ClientBuilder, Noul, Questions};
+use decision_model_sdk::{Body, ClientBuilder, Noul, Questions};
 
 /// Answers every request with the same JSON body.
 #[derive(Clone)]
@@ -429,7 +430,7 @@ impl tower_service::Service<Request<Body>> for Canned {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), typesafe_sdk::Error> {
+async fn main() -> Result<(), decision_model_sdk::Error> {
     let answer = r#"{"model":"jev-latest","usage":{},"answers":{"spam":{"type":"noul","noul":0.98}}}"#;
     let client = ClientBuilder::new().api_key("test-key").build_with_service(Canned(answer))?;
     let questions = Questions::new().noul("spam", Noul::new().instructions("Spam?")).prepare()?;
@@ -514,18 +515,18 @@ pings every 30 s.
 - `client.warm_up().await` lists the models once and drops the answer. It checks the API key and
   leaves an open connection in the pool, so call it **before a fan-out**: the first requests
   then pay no TCP or TLS handshake, and a bad key fails once instead of once per request.
-- [`crates/sdk/examples/concurrency.rs`](https://github.com/zchee/typesafe-sdk-rust/blob/main/crates/sdk/examples/concurrency.rs)
+- [`crates/sdk/examples/concurrency.rs`](https://github.com/zchee/decision-model-sdk-rust/blob/main/crates/sdk/examples/concurrency.rs)
   shows a bounded fan-out over several states.
 
 ## Logging
 
 With the `tracing` feature (on by default) the SDK emits [`tracing`](https://docs.rs/tracing)
 events and never installs a subscriber: where the events go is the application's choice. Every
-event has the target `typesafe_sdk`, so one filter directive selects them all, for example with
+event has the target `decision_model_sdk`, so one filter directive selects them all, for example with
 `tracing-subscriber`'s `EnvFilter`:
 
 ```text
-RUST_LOG=typesafe_sdk=info
+RUST_LOG=decision_model_sdk=info
 ```
 
 | Level | What is logged |
@@ -540,7 +541,7 @@ RUST_LOG=typesafe_sdk=info
 is `true`, which keeps the full URL. Errors (`Display`, `ApiError::endpoint()`,
 `ResponseValidationError`) still name the scheme and host, so a caller logging `%error` puts
 the host back. Request and response bodies still print at `TRACE` under the target
-`typesafe_sdk` whatever this flag; cap that target to keep them out. No credential from
+`decision_model_sdk` whatever this flag; cap that target to keep them out. No credential from
 userinfo, query or fragment can reach the default endpoint line, because those URL components
 are refused at build.
 
@@ -598,7 +599,7 @@ data, so bodies appear only at `TRACE`.
 ## Performance notes
 
 The numbers below are measured, not estimated; the method, the machines and every run are in
-[`docs/perf/ledger.md`](https://github.com/zchee/typesafe-sdk-rust/blob/main/docs/perf/ledger.md).
+[`docs/perf/ledger.md`](https://github.com/zchee/decision-model-sdk-rust/blob/main/docs/perf/ledger.md).
 Allocation counts are dhat block counts on the second identical call, 64-bit targets.
 
 - **Allocations, both backends.** Encoding a request body is **1** allocation (2 when the body is kept for a
@@ -645,23 +646,23 @@ SDK in `crates/sdk`, `crates/macros`, `crates/test-support` and the System One a
 
 `crates/live-tests` holds the tests against the live API. It is a workspace member, so `clippy
 --workspace` compiles it, but not a default member. **Its tests make real, billed calls** on the
-key's account when both `TYPESAFE_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are set and a command
+key's account when both `DECISION_MODEL_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are set and a command
 reaches them: `cargo test --workspace`, `cargo nextest run --workspace`, or anything naming
-`-p typesafe-sdk-rust-live-tests`. Without either variable they fail, never skip, before any
+`-p decision-model-sdk-live-tests`. Without either variable they fail, never skip, before any
 request is made, so a key exported for other work does not make `--workspace` bill anyone; it
 makes those tests fail instead. Run them only on purpose:
 
 ```sh
-TYPESAFE_LIVE_TESTS=1 TYPESAFE_API_KEY=... cargo nextest run -p typesafe-sdk-rust-live-tests
+DECISION_MODEL_LIVE_TESTS=1 TYPESAFE_API_KEY=... cargo nextest run -p decision-model-sdk-live-tests
 ```
 
 `crates/adapter-live-tests` is the second billed member: the adapter's tests against the live
 OpenAI, Anthropic and Gemini APIs. It follows the same rules with its own variables: its tests
-make real, billed calls when both `TYPESAFE_ADAPTER_LIVE_TESTS=1` and the provider's key are set,
+make real, billed calls when both `DECISION_MODEL_ADAPTER_LIVE_TESTS=1` and the provider's key are set,
 and fail, never skip, without either. Run them only on purpose:
 
 ```sh
-TYPESAFE_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p typesafe-sdk-rust-adapter-live-tests --no-fail-fast --retries 0
+DECISION_MODEL_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p decision-model-adapter-live-tests --no-fail-fast --retries 0
 ```
 
 `crates/adapter/README.md` documents the adapter: its providers and their variables, its
@@ -699,9 +700,9 @@ command above carries `--no-fail-fast --retries 0`.
 | Unknown fields rejected on typed questions; `RetryPolicy` field types checked at run time | Not representable: builders, `u32`, `Duration`; the jitter range and its finiteness are still checked | The type system does the check. |
 | `str` subclasses and abstract `Mapping` / `Sequence` inputs | `impl Serialize`, `impl AsRef<str>`, `impl Into<Cow<str>>` and iterators | Generics. |
 | Non-finite floats are written as `NaN` and `Infinity` | Written as `null`, as `serde_json` writes them; a `state` that is itself a non-finite float is refused as an `InvalidRequest` | `NaN` and `Infinity` are not JSON. |
-| `TYPESAFE_LOG_LEVEL` sets the logger level | Not read | A library must not configure the application's subscriber; filter the `typesafe_sdk` target instead. |
+| `TYPESAFE_LOG_LEVEL` sets the logger level | Not read | A library must not configure the application's subscriber; filter the `decision_model_sdk` target instead. |
 | DEBUG logs full bodies | `DEBUG` logs the body length; `TRACE` logs the body | A `state` may carry personal data. |
-| `X-TypeSafe-SDK: typesafe-sdk/<version>` | `typesafe-sdk-rust/<version>`, and `X-TypeSafe-Runtime: rust (<os>; <arch>)` | A port must not be counted as the official SDK. |
+| `X-TypeSafe-SDK: typesafe-sdk/<version>` | `decision-model-sdk/<version>`, and `X-TypeSafe-Runtime: rust (<os>; <arch>)` | A port must not be counted as the official SDK. |
 | `User-Agent` names the SDK alone; `X-TypeSafe-Runtime` is always sent | `user_agent_product("name/version")` puts the application's product in front of the SDK's in `User-Agent`, checked when the client is built; `send_runtime_header(false)` leaves `X-TypeSafe-Runtime` out. The defaults are unchanged, and a caller's header of either name is still dropped | An application built on the SDK must be able to name itself, and must be able not to disclose its operating system and architecture to the vendor. |
 | `RetryPolicy.exceptions` | Dropped; `predicate` kept | There are no exception classes; a predicate sees the `Error`. |
 | Raw dict questions | The `RawQuestion` builder, with the same three checks | Forward compatibility with question types this version does not model. |

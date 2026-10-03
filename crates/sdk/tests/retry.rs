@@ -19,14 +19,14 @@ use std::{
 };
 
 use bytes::Bytes;
+use decision_model_sdk::{
+    Client, ClientBuilder, Error, ErrorKind, Noul, PreparedQuestions, Questions, RetryPolicy,
+    StatusSet,
+};
 use http::{HeaderValue, StatusCode};
 use serde::{Serialize, Serializer};
 use test_support::{Protocol, RecordedRequest, TestResponse, TestServer, json_response};
 use tokio::sync::watch;
-use typesafe_sdk::{
-    Client, ClientBuilder, Error, ErrorKind, Noul, PreparedQuestions, Questions, RetryPolicy,
-    StatusSet,
-};
 
 #[cfg(feature = "tracing")]
 #[path = "support/recorder.rs"]
