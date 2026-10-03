@@ -170,7 +170,8 @@ impl GeminiProviderBuilder {
     ///
     /// Returns an [`ErrorKind::Config`](crate::ErrorKind::Config) error for
     /// a setting [`build_with_service`](Self::build_with_service) refuses,
-    /// and when the certificate verifier cannot be built: an added root is
+    /// other than an added root, which this method uses, and when the
+    /// certificate verifier cannot be built: an added root is
     /// not a certificate, or the operating system's roots cannot be loaded.
     /// The settings are checked first, so a missing key is reported as such
     /// and not as a failure to load the roots.
