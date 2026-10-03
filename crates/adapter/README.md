@@ -67,6 +67,8 @@ The first call for a provider name and model builds that provider and reads its 
 environment (see [Providers](#providers)); later calls reuse it.
 
 ```rust,no_run
+# #[cfg(feature = "openai")]
+# mod example {
 use decision_model_adapter::{AnswerMode, Client, Noul, ProviderName, Questions, StructuredOutputs};
 
 #[tokio::main]
@@ -91,6 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:?} input tokens in {:?}", usage.input_tokens_total(), usage.latency());
     Ok(())
 }
+# }
+# fn main() {}
 ```
 
 ## Typed answers
@@ -141,13 +145,15 @@ async fn classify(client: &Client, review: &str) -> Result<(), Error> {
 | `Client::builder(structured_outputs, llm_answer_mode)` | required | `StructuredOutputs::Native` or `Prompted`; `AnswerMode::Probabilities` or `Discrete`. |
 | `provider(ProviderName)` | none | The built-in provider that a model name is given to. |
 | `model(impl Into<String>)` | none | The model name. |
-| `provider_instance(Arc<dyn Provider>)` | none | A provider the caller built or implemented. It is borrowed: the client never caches it. |
+| `provider_instance(Arc<dyn Provider>)` | none | A provider the caller built or implemented. The client shares it (it holds the `Arc`) and never builds or caches anything for it. |
 | `normalize_probabilities(bool)` | `false` | Whether a probability distribution of a choice or score question whose sum is off by more than 1e-6 is rescaled to sum to 1. The trace records the largest error of any distribution's sum, each error beyond 1e-6 and, for a rescaled distribution, the original values. |
 | `n_retry_malformed_structure(u32)` | `0` | How many corrective turns follow a reply that does not fit the answer schema. |
 | `retry(RetryPolicy)` | `RetryPolicy::none()` | The SDK's retry policy for provider failures (see [Retries](#retries)). |
 
-`StructuredOutputs`, `AnswerMode`, `ProviderName`, `OpenAiApi` and `ErrorKind` are
-`#[non_exhaustive]`: a `match` over one of them needs a catch-all arm.
+Every public enum of this crate but `Role` is `#[non_exhaustive]`: `StructuredOutputs`,
+`AnswerMode`, `ProviderName`, `OpenAiApi`, `RetryCategory` and `ErrorKind`, so a `match` over one
+of them needs a catch-all arm. `Role` is exhaustive on purpose: a new role is a protocol change
+that every provider must map, so adding one would be a major release.
 
 A call (`Request`, returned by `system_one` and `ask`) takes `provider`, `model`,
 `provider_instance` and `retry` as overrides. The provider of a call is resolved in this order:
@@ -182,7 +188,8 @@ be built, is therefore reported before an invalid state or question.
 `OpenAiProvider`, `AnthropicProvider` and `GeminiProvider` are built by `ProviderName` and a model
 name through the client, or explicitly through their builders (`OpenAiProvider::builder(model)`
 and so on) and handed to `provider_instance`. A provider is `Clone`; its clones share one
-connection pool. `ProviderName` parses from and prints as `openai`, `anthropic` and `gemini`.
+connection pool. The three builders are `Clone` too. `ProviderName` parses from and prints as
+`openai`, `anthropic` and `gemini`.
 
 | Builder method | OpenAI | Anthropic | Gemini | Default |
 | --- | --- | --- | --- | --- |
@@ -201,7 +208,7 @@ A refused value, a missing key, a key with a byte that is illegal in a header va
 that breaks the rules below and an environment variable that is not UTF-8 are each
 `ErrorKind::Config`, reported when the provider is built and never when a request is sent. An
 added root certificate configures the default transport only: `build_with_service` refuses one as
-`ErrorKind::Config` for OpenAI and Anthropic, and ignores it for Gemini.
+`ErrorKind::Config` for all three providers.
 
 **Keys.** When `api_key` is not called, the key is read from the environment:
 
@@ -234,7 +241,7 @@ model, the base URL's host and the API, never the key. Every request carries
 
 **Base URL.** The rules are the SDK's: an absolute `http` or `https` URL with a host; userinfo, a
 query or a fragment is refused, and no error text repeats the URL. `http://` is accepted, and then
-the key travels in clear text, so use it only for a local proxy or a test server. When `base_url`
+the key is sent unencrypted, so use it only for a local proxy or a test server. When `base_url`
 is not called, `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` decide which host receives the key: check
 them in any environment that also holds a key. Redirects are not followed: a 3xx answer is an API
 error after exactly one request, so a key is never sent to a host a response named.
@@ -254,9 +261,11 @@ upstream recorded no exchange of it, and the code is ported from upstream's synt
 **Response size.** A response body is read under `max_response_bytes` and never past it; a
 declared length over the cap is refused before a byte is read. A success body over the cap is
 `ErrorKind::Provider` holding the SDK's `ResponseTooLarge` error with the limit. A failure status
-with a body over the cap is an API error with its status and its headers; its body is not kept,
-and its message, printed after the status, is
-`The response body was larger than the limit and is not shown.`
+with a body over the cap is an API error with its status and its headers; its body is not kept
+(`ApiError::body()` returns a JSON object the adapter wrote), and its message, printed after the
+status, is `The response body was larger than the limit and is not shown.` When a header name or
+value of that response holds the key, the error keeps the status alone, as "The key in what
+comes back" below describes.
 
 **The default transport.** `Transport` is an opaque HTTP service over a pooled hyper-util client:
 TLS through rustls with the platform's verifier plus the added roots, HTTP/2 or HTTP/1.1 as the
@@ -302,7 +311,8 @@ message is read from, or as the part before the cut. The search is over the whol
 very short key hides text often: with the key `test`, any failure response whose body or headers
 hold that word loses its message, its headers and its request id; over the 26 non-answer reasons
 of this crate's test cases, the key `a` hid 26, `x` 12, `sk` 2, and `ab`, `abc` or `key` none.
-Real bodies are longer, so a short placeholder key against a local server hides more there.
+Real response bodies are longer than these reasons, so a short placeholder key used against a
+local server hides text more often than these counts show.
 
 **A provider of your own.** `Provider` is a dyn-compatible trait with `model_name()`,
 `request(call)` returning a boxed future, and two provided methods, `type_name()` and
@@ -315,15 +325,19 @@ token counts as a `ProviderResult`, a `NonAnswer` when the model declined or did
 `AttemptTrace::default()`, `Schema::from_json` and `Deserialize` for `Message` exist so that such a
 provider can be tested outside a client.
 
-The adapter does not search what a provider of your own returns: give `NonAnswer::new` a fixed
-text, such as the vendor's name and a status, never text from a response, which can hold the key.
+The adapter does not search what a provider of your own returns, and prints it as it is, in its
+error and in the trace: a `NonAnswer`'s message, and the `Display` of a `decision_model_sdk::Error`,
+including the message an `ApiError` built with `ApiError::from_response` reads out of a body. So
+give `NonAnswer::new` a fixed text, such as the vendor's name and a status, never text from a
+response, which can hold the key, and search an SDK error's texts for your key or build it from
+fixed texts.
 
 `log_uri()` names the provider's endpoint in the SDK's retry line (see [Logging](#logging)); the
 client passes it to the retry policy and to nothing else. The default is `None`, and the line
 then names the request as `POST /`; the built-in providers return their log URI. An override
-returns a `Uri` of the `http` crate, version 1, which this crate does not re-export, so its
-crate depends on `http = "1"` itself. The line prints the scheme, the host, the port and the path
-of that URI, never its query or userinfo: put no credential into a path segment.
+returns `Option<&Uri>`, a `Uri` of the `http` crate, version 1, which this crate does not
+re-export, so its crate depends on `http = "1"` itself. The line prints the scheme, the host, the
+port and the path of that URI, never its query or userinfo: put no credential into a path segment.
 
 ```rust,no_run
 use std::sync::Arc;
@@ -424,7 +438,8 @@ with whatever else the vendor put into it. Treat a serialized response or trace 
 made from. `Debug` of `Error`, `Response`, `Trace`,
 `Attempt`, `RetryReason`, `Message`, `ProviderResult`, `AttemptTrace` and `Schema` prints counts
 and kinds only: the model name, the usage, the number of answers, attempts, messages and retry
-reasons, retry categories, roles, `api`, `finish_reason`, `error_type` and byte lengths; never
+reasons, retry categories, roles, `api`, `finish_reason` (escaped and cut at 200 characters, the
+cut marked with U+2026), `error_type` and byte lengths; never
 message content, the schema, request or response text, a retry reason's message or an attempt's
 `error` text. One exception: `ErrorKind::Provider` renders the SDK error by the SDK's own rules
 (the status, the endpoint, the vendor's message escaped and cut at 200 characters, the body as a
@@ -433,9 +448,12 @@ show the key is replaced (see "The key in what comes back" under [Providers](#pr
 
 ## Errors
 
-`Error` is `Send + Sync + 'static`. `kind()` returns the `ErrorKind`, `source()` the SDK error or
-the decode failure behind it, and `debug()` the `Trace` of the attempts made, `None` for an error
-raised before the first attempt.
+`Error` is `Send + Sync + 'static`. `kind()` returns the `ErrorKind`, and `debug()` the `Trace` of
+the attempts made, `None` for an error raised before the first attempt. `source()` returns what
+lies below the text `Display` prints. For `ErrorKind::Provider` the SDK error is the payload of
+`kind()` and `Display` prints it, so `source()` is that SDK error's own cause (`None` for an API
+error). For a malformed reply, or a state that does not serialize, it is the decode or
+serialization failure behind it; for the other kinds it is `None`.
 
 | `ErrorKind` | When |
 | --- | --- |
@@ -530,7 +548,7 @@ or re-recorded fixture must pass `python3 .github/scripts/no-placeholders.py` an
 but not a default member. **Its tests make real, billed calls** to OpenAI, Anthropic and Gemini
 when `DECISION_MODEL_ADAPTER_LIVE_TESTS=1` and the provider's key are both set and a command reaches
 them. Without the variable or without the key a test fails, never skips, before any request is
-made, so a key exported for other work bills nobody. Run them only on purpose:
+made, so a key exported for other work sends no billed request. Run them only on purpose:
 
 ```sh
 DECISION_MODEL_ADAPTER_LIVE_TESTS=1 OPENAI_API_KEY=... ANTHROPIC_API_KEY=... GEMINI_API_KEY=... cargo nextest run -p decision-model-adapter-live-tests --no-fail-fast --retries 0
