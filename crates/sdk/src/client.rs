@@ -574,7 +574,8 @@ impl ClientBuilder {
     /// every header whose name is a secret one (`authorization`,
     /// `proxy-authorization`, `x-api-key`, `api-key`, `cookie`, `set-cookie`,
     /// or any name containing `token` or `secret`) or that is flagged
-    /// sensitive, as it is, as `{:?}` of a `str`, `str::escape_debug`, `{:?}`
+    /// sensitive, and such a value without the spaces or tabs around it,
+    /// each as it is, as `{:?}` of a `str`, `str::escape_debug`, `{:?}`
     /// of a `HeaderValue` and of `Bytes`, and a JSON string write it, and each
     /// of those escaped once more as `{:?}` of a `str` writes it, which is how
     /// a derived `Debug` prints a `String` field holding one. When
@@ -591,7 +592,10 @@ impl ClientBuilder {
     /// with [`Error::connection`] and no cause keeps the message the service
     /// wrote, with every form of a credential listed above replaced by
     /// `***`; it is neither escaped nor cut. One built with a cause is
-    /// searched as that constructor describes. Any other error of the SDK's
+    /// searched as that constructor describes. With or without a cause, a
+    /// message that `{:?}` would print with one of those forms after the
+    /// replacement (a tab before `ok` prints as `\tok`) is replaced by a
+    /// fixed text that names no credential. Any other error of the SDK's
     /// type - an [`ApiError`](crate::ApiError) built from a body the service
     /// chose, a [`timeout`](Error::timeout) - is kept as it is and is not
     /// searched: the service must put no credential into its message, body

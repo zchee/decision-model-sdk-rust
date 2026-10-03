@@ -184,7 +184,11 @@ impl Error {
     /// downcast. When the error has no cause, the message is all the client
     /// can search: every form of a credential of the request in it is
     /// replaced by `***`, and the message is otherwise kept as given, neither
-    /// escaped nor cut. The kind, and so the retry class, stays the same.
+    /// escaped nor cut. With or without a cause, a message that `{:?}` would
+    /// print with a form of a credential after that replacement (a tab
+    /// before `ok` prints as `\tok`) is replaced by a fixed text that names
+    /// no credential, since `Debug` of this error prints the message through
+    /// `{:?}`. The kind, and so the retry class, stays the same.
     /// This adds a way to build an error; it does not change how an existing
     /// transport's errors are classified.
     ///

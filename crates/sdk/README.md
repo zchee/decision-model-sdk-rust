@@ -279,11 +279,13 @@ the cause chain holds one, or the chain is longer than 32 links, the cause is re
 redacted copy that cannot be downcast, and the message is rebuilt from that copy. It checks a
 connection error without a cause too: every form of a credential of the request in its message is
 replaced by `***`, and the message is otherwise kept as the transport wrote it, neither escaped
-nor cut. Any other error of the SDK's own type that a transport returns (an `ApiError` built with
+nor cut. With or without a cause, a message whose `Debug` form would still spell a credential
+(a tab before `ok` prints as `\tok`) is replaced by a fixed text that names none. Any other error
+of the SDK's own type that a transport returns (an `ApiError` built with
 `ApiError::from_response`, `Error::timeout`, `Error::response_too_large`) is kept as it is and is
 not searched, so the transport must put no credential into its message, body or headers. The kind
-and the retry class never change. Outside a `Client` nothing is rewritten. This adds a way to build an
-error; it does not change how an existing transport's errors are classified.
+and the retry class never change. Outside a `Client` nothing is rewritten. This adds a way to
+build an error; it does not change how an existing transport's errors are classified.
 
 ## Retries
 
@@ -465,8 +467,9 @@ async fn main() -> Result<(), decision_model_sdk::Error> {
 
 When a custom service fails with an error of its own type, that error's text becomes the
 `Connection` error's message (escaped and cut at 200 characters), with the request's credentials
-replaced by `***`: a service that prints any other request header into its error puts that
-header's value into the message. An error of the SDK's own type is kept instead (see
+replaced by `***`, or the whole message by a fixed text where its `Debug` form would still spell
+one: a service that prints any other request header into its error puts that header's value
+into the message. An error of the SDK's own type is kept instead (see
 [Errors](#errors)).
 
 ## Connections and concurrency
@@ -597,10 +600,11 @@ data, so bodies appear only at `TRACE`.
   own type that prints the request's credentials, or with a connection error of the SDK's type,
   their values are replaced by `***` first, as the Python SDK does since 0.7.1: the key and every
   secret or sensitive header value, in the forms the documentation of
-  `ClientBuilder::build_with_service` lists. Any other error of the SDK's type that a custom
-  transport returns, an `ApiError` built from a body of its choosing included, is passed through
-  unsearched. An `http://` base URL sends the key unencrypted, so use one only for a local proxy
-  or a test server.
+  `ClientBuilder::build_with_service` lists. A connection error's message whose `Debug` form
+  would still spell one of them is replaced by a fixed text instead. Any other error of the SDK's
+  type that a custom transport returns, an `ApiError` built from a body of its choosing included,
+  is passed through unsearched. An `http://` base URL sends the key unencrypted, so use one only
+  for a local proxy or a test server.
 - **Server text is escaped and cut.** Every message read from a response body (whichever member
   it came from, or the body itself when no member holds one) has its control characters and
   text-hiding format characters written as Rust escapes (`\n`, `\u{1b}`, `\u{202e}`) and is cut
