@@ -1,4 +1,26 @@
+<div align="center">
+
 # Decision Model Rust SDK
+
+**An async Rust SDK for decision models served through the System One API.**
+
+Typed questions in, typed answers out, over one multiplexed HTTP/2 connection, with no vendor built in.
+
+[![CI][ci-badge]][ci]
+[![Coverage][codecov-badge]][codecov]
+[![CodSpeed][codspeed-badge]][codspeed]
+[![docs.rs][docs-badge]][docs]
+[![MSRV][msrv-badge]](#install)
+[![License][license-badge]](LICENSE)
+
+[![decision-model-sdk][sdk-badge]][sdk-crate]
+[![decision-model-sdk-macros][macros-badge]][macros-crate]
+[![decision-model-adapter][adapter-badge]][adapter-crate]
+
+[Install](#install) | [Quickstart](#quickstart) | [Typed answers](#typed-answers) | [Configuration](#configuration) |
+[API reference][docs] | [Adapter][adapter-readme]
+
+</div>
 
 An async Rust client for decision models served through the System One API: the System One endpoint
 (`POST /v1/systemone`), which answers named questions about a state, and the model listing (`GET /v1/models`). The API
@@ -11,7 +33,63 @@ SDK](#deviations-from-the-python-sdk).
 The package is **`decision-model-sdk`** and the library it builds is **`decision_model_sdk`**, so code writes
 `use decision_model_sdk::...`.
 
+## Highlights
+
+- **Typed questions and answers.** Build a question set with the `Questions` builder, or declare it as a struct with
+  `#[derive(QuestionSet)]`: the questions are serialized at compile time and the response decodes straight into the
+  struct's fields.
+- **No vendor built in.** There is no default base URL and no default model, so an API key is sent only to the vendor
+  the caller named.
+- **One connection per client.** Over `https` every request of a client shares one multiplexed HTTP/2 connection; 64
+  concurrent cold calls open exactly one.
+- **Retries under a budget.** The Python SDK's retry defaults, `Retry-After` obeyed, and a 30 s budget for the whole
+  call.
+- **Credentials stay out of the output.** The SDK writes the API key into no `Debug`, `Display` or error message of
+  its own, and redacts secret header values in its log events.
+- **Any transport.** Every request can go through a `tower_service::Service` of the caller's instead of the built-in
+  hyper and rustls transport.
+- **Measured.** Encoding a request body is one allocation; the method and every run are in the
+  [performance ledger][perf-ledger].
+
+## Crates
+
+| Crate | What it is |
+| --- | --- |
+| [`decision-model-sdk`][sdk-crate] | The client this README documents. |
+| [`decision-model-sdk-macros`][macros-crate] | `#[derive(QuestionSet)]`. The SDK re-exports it under its `macros` feature, so most code never names this crate. |
+| [`decision-model-adapter`][adapter-crate] | Asks System One questions of an OpenAI, Anthropic or Gemini model instead of a decision model. It has [a README of its own][adapter-readme]. |
+
+<details>
+<summary><strong>Contents</strong></summary>
+
+- [Install](#install)
+- [Runtime requirement](#runtime-requirement)
+- [Quickstart](#quickstart)
+- [Typed answers](#typed-answers)
+- [Models](#models)
+- [Errors](#errors)
+- [Retries](#retries)
+- [Configuration](#configuration)
+- [Custom transport](#custom-transport)
+- [Connections and concurrency](#connections-and-concurrency)
+- [Logging](#logging)
+- [Security notes](#security-notes)
+- [Performance notes](#performance-notes)
+- [Testing](#testing)
+- [Deviations from the Python SDK](#deviations-from-the-python-sdk)
+- [What is not measured](#what-is-not-measured)
+- [License](#license)
+
+</details>
+
 ## Install
+
+```sh
+cargo add decision-model-sdk
+cargo add tokio --features macros,rt-multi-thread
+```
+
+or, in `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -168,7 +246,7 @@ generated code at a renamed dependency.
 
 ## Models
 
-```rust,no_run
+```rust
 use decision_model_sdk::{Client, Error};
 
 async fn print_models(client: &Client) -> Result<(), Error> {
@@ -216,7 +294,7 @@ status, headers, `retry_after()` and every byte of the body in `body()`; its `me
 (each bad sequence becomes U+FFFD), escaped and cut at 200 characters like any body that is not JSON, and `error_type()`
 is `None`.
 
-```rust,no_run
+```rust
 use decision_model_sdk::{ApiErrorKind, Client, ErrorKind, PreparedQuestions};
 
 async fn ask(client: &Client, questions: &PreparedQuestions) {
@@ -277,7 +355,7 @@ starting at 500 ms, doubling up to 5 s, with up to a quarter of each delay rando
 500-599; connection failures and timeouts retried; `retry-after-ms` / `Retry-After` obeyed, however long they ask for;
 and a **budget** of 30 s for the whole call.
 
-```rust,no_run
+```rust
 use std::time::Duration;
 
 use decision_model_sdk::{Client, Error, PreparedQuestions, RetryPolicy, StatusSet};
@@ -502,7 +580,7 @@ variable changes the trust anchors, and no proxy variable is read on any platfor
 - `client.warm_up().await` lists the models once and drops the answer. It checks the API key and leaves an open
   connection in the pool, so call it **before a fan-out**: the first requests then pay no TCP or TLS handshake, and a
   bad key fails once instead of once per request.
-- [`crates/sdk/examples/concurrency.rs`](https://github.com/zchee/decision-model-sdk-rust/blob/main/crates/sdk/examples/concurrency.rs)
+- [`crates/sdk/examples/concurrency.rs`][concurrency-example]
   shows a bounded fan-out over several states.
 
 ## Logging
@@ -584,7 +662,7 @@ flags `Authorization`). A `state` may carry personal data, so bodies appear only
 ## Performance notes
 
 The numbers below are measured, not estimated; the method, the machines and every run are in
-[`docs/perf/ledger.md`](https://github.com/zchee/decision-model-sdk-rust/blob/main/docs/perf/ledger.md). Allocation
+[`docs/perf/ledger.md`][perf-ledger]. Allocation
 counts are dhat block counts on the second identical call, 64-bit targets.
 
 - **Allocations, both backends.** Encoding a request body is **1** allocation (2 when the body is kept for a retry).
@@ -735,3 +813,23 @@ derive's compile-error texts under any rustc other than the pinned 1.98.1, the r
 This crate is licensed under the Apache License 2.0; see [`LICENSE`](LICENSE). It is a port of typesafe-sdk-python,
 which is MIT-licensed; that license text is reproduced, as the upstream repository ships it, in
 [`LICENSE-THIRD-PARTY`](LICENSE-THIRD-PARTY) and applies to the material derived from it.
+
+[ci]: https://github.com/zchee/decision-model-sdk-rust/actions/workflows/ci.yaml
+[ci-badge]: https://img.shields.io/github/actions/workflow/status/zchee/decision-model-sdk-rust/ci.yaml?branch=main&style=flat-square&logo=github&label=CI
+[codecov]: https://app.codecov.io/gh/zchee/decision-model-sdk-rust
+[codecov-badge]: https://img.shields.io/codecov/c/github/zchee/decision-model-sdk-rust/main?style=flat-square&logo=codecov&label=coverage
+[codspeed]: https://codspeed.io/zchee/decision-model-sdk-rust
+[codspeed-badge]: https://img.shields.io/endpoint?url=https://codspeed.io/badge.json&style=flat-square
+[docs]: https://docs.rs/decision-model-sdk
+[docs-badge]: https://img.shields.io/docsrs/decision-model-sdk?style=flat-square&logo=docs.rs&label=docs.rs
+[msrv-badge]: https://img.shields.io/crates/msrv/decision-model-sdk?style=flat-square&logo=rust&label=MSRV
+[license-badge]: https://img.shields.io/github/license/zchee/decision-model-sdk-rust?style=flat-square&color=blue
+[sdk-crate]: https://crates.io/crates/decision-model-sdk
+[sdk-badge]: https://img.shields.io/crates/v/decision-model-sdk?style=flat-square&logo=rust&label=decision-model-sdk
+[macros-crate]: https://crates.io/crates/decision-model-sdk-macros
+[macros-badge]: https://img.shields.io/crates/v/decision-model-sdk-macros?style=flat-square&logo=rust&label=decision-model-sdk-macros
+[adapter-crate]: https://crates.io/crates/decision-model-adapter
+[adapter-badge]: https://img.shields.io/crates/v/decision-model-adapter?style=flat-square&logo=rust&label=decision-model-adapter
+[adapter-readme]: https://github.com/zchee/decision-model-sdk-rust/blob/main/crates/adapter/README.md
+[concurrency-example]: https://github.com/zchee/decision-model-sdk-rust/blob/main/crates/sdk/examples/concurrency.rs
+[perf-ledger]: https://github.com/zchee/decision-model-sdk-rust/blob/main/docs/perf/ledger.md
