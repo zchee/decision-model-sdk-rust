@@ -31,7 +31,7 @@ adapter needs neither the SDK's transport nor its derive.
 | `gemini` | on | `GeminiProvider`, `ProviderName::Gemini` and the default transport. |
 | `tracing` | on | The adapter's own events, and the SDK's retry line: the feature also turns on the SDK's `tracing` feature (see [Logging](#logging)). Without it, every event is compiled out. |
 | `macros` | off | Turns on the SDK's `macros` feature, so the re-exported `QuestionSet` is also the derive (see [Typed answers](#typed-answers)). It re-exports nothing by itself. |
-| `internals` | off | Exposes a hidden `decision_model_adapter::__internals` module used by this repository's tests and fuzz targets. It carries **no semver promise**; do not depend on it. With it, a provider reads no process environment, so its key and base URL must be given to its builder. |
+| `internals` | off | Exposes a hidden `decision_model_adapter::__internals` module used by this repository's tests and fuzz targets. It carries **no semver promise**; do not depend on it. With it, a provider reads no key or base URL from the process environment, so both must be given to its builder. |
 
 Without any provider feature hyper and rustls are not compiled, `ProviderName` has no variant, and
 a client still takes a provider the caller implements (see [Providers](#providers)).
@@ -208,8 +208,17 @@ added root certificate configures the default transport only: `build_with_servic
 The environment is read once, when a provider is built: by `build()` or `build_with_service` for
 a provider built explicitly, at the first call that uses it for a provider the client owns. A
 variable changed later has no effect on a provider that exists, and an empty variable counts as
-unset. `GOOGLE_GEMINI_BASE_URL`, the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
-`NO_PROXY`) and `SSL_CERT_FILE` are not read. With the `internals` feature no variable is read.
+unset. `GOOGLE_GEMINI_BASE_URL` and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY`, `NO_PROXY`) are not read. With the `internals` feature no variable of the table above
+is read.
+
+**Certificate variables.** On Linux and the other unix targets that are not Apple's, the platform
+verifier loads the trust anchors through `rustls-native-certs`, which reads `SSL_CERT_FILE` and
+`SSL_CERT_DIR` each time a provider's default transport is built (by `build()`, or at the first
+call for a provider the client owns), with or without the `internals` feature. When either is
+set, the certificates they name replace the system's store, and `add_root_certificate` adds to
+them; when they name no certificate and none was added, the build fails with
+`ErrorKind::Config`. On macOS and Windows no variable changes the trust anchors.
 
 The key is sent as `authorization: Bearer` (OpenAI), `x-api-key` with
 `anthropic-version: 2023-06-01` (Anthropic) or `x-goog-api-key` (Gemini). The header value is
@@ -498,7 +507,8 @@ this crate among them. Its tests replay recorded and scripted HTTP exchanges aga
 server and need neither a key nor the network. Several test binaries need a feature:
 `providers_openai`, `providers_anthropic`, `providers_gemini`, `cassettes`, `lifecycle`,
 `parity_schema` and `parity_metrics` need `internals` (with the default providers), under which
-the library reads no process environment, so no test can pick up a key of the machine it runs on;
+the library reads no key or base URL from the process environment, so no test can pick up a key
+of the machine it runs on;
 `typed` needs `macros`. `cargo nextest run -p decision-model-adapter --all-features` runs them
 all, and `--features internals` all but `typed`. `docs/adapter-port-test-matrix.md` maps every
 test of the Python adapter to the Rust tests that cover it, the deviation that explains why none
@@ -528,9 +538,10 @@ two answer modes: 24 cases, each one request with no retry and no corrective tur
 of 120 s. The models are upstream's: `gpt-4o-mini`, `claude-haiku-4-5` and
 `gemini-3.5-flash-lite`. Each case reads its key in the test, gives it to the provider's builder
 through `api_key`, and hands the provider to the client through `provider_instance`; a
-`--workspace` build turns on `internals` for the adapter, which then reads no process
-environment. Each case writes one line to stderr, `live-request <provider> <structured> <mode>
-attempts=<n>`, so the requests a run sent can be counted from its output.
+`--workspace` build turns on `internals` for the adapter, which then reads no key or base URL
+from the process environment. Each case writes one line to stderr,
+`live-request <provider> <structured> <mode> attempts=<n>`, so the requests a run sent can be
+counted from its output.
 
 ## Deviations from the Python adapter
 
@@ -559,7 +570,7 @@ repository.
 | Non-answers and the retry predicate | A non-answer is raised inside the retry loop (`providers/anthropic.py:57-63`). | It travels outside the retry loop, so a caller's `RetryPolicy::predicate` never sees it; a predicate that retried non-answers upstream has no effect here. |
 | Non-finite numbers in the state | `to_json` writes the bare words `NaN`, `Infinity` and `-Infinity` (`_client.py:91`). | `serde_json` writes `null` for each. A state held as a `serde_json::Value` also differs from Python for three inputs: `-0` is written `-0.0`; an integer beyond u64 becomes a float; `1e400` is a parse error in the default build and is written `1e+400` under serde_json's `arbitrary_precision` feature, where Python writes `Infinity`. A typed Rust state is unaffected. |
 | No translation of provider-SDK exceptions | `translating` and `translate_error` map vendor-SDK exceptions; an unknown exception becomes a bare `TypeSafeError` (`providers/base.py:28-41`, `_utils/error_handling.py:72`). | There is no vendor SDK: the HTTP module produces the SDK error directly. `test_translating_context_manager_reraises_translated_error` and `test_unknown_and_sdk_errors_pass_through` have no counterpart. |
-| Proxy and CA variables | httpx2 with `trust_env=True` (`httpx2/_client.py:192`) reads `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (`httpx2/_utils.py:52`) and `SSL_CERT_FILE` (`httpx2/_config.py:35`). | No proxy variable and no CA variable is read; the trust anchors are the platform's roots plus `add_root_certificate`. |
+| Proxy and CA variables | httpx2 with `trust_env=True` (`httpx2/_client.py:192`) reads `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (`httpx2/_utils.py:52`) and `SSL_CERT_FILE` (`httpx2/_config.py:35`). | No proxy variable is read. On Linux and the other unix targets that are not Apple's, `rustls-native-certs` reads `SSL_CERT_FILE` and `SSL_CERT_DIR`, and the certificates they name replace the system's roots; on macOS and Windows no CA variable is read. The trust anchors are the system's roots, or the certificates those variables name, plus `add_root_certificate`. |
 | Redirects | The OpenAI and Anthropic SDK clients follow redirects (`openai/_base_client.py:876,1471`, `anthropic/_base_client.py:906,1584`). | A 3xx answer is an API error after exactly one request. |
 | Connect timeout | OpenAI and Anthropic have a separate 5 s connect timeout (`openai/_constants.py:7`, `anthropic/_constants.py:7`). | No separate connect timeout; connecting counts against the attempt deadline of the row `Timeouts`. |
 | `GOOGLE_GEMINI_BASE_URL` | `google-genai` reads it (`google/genai/_base_url.py:50`). | Not read; Gemini's base URL is set only through the builder. |

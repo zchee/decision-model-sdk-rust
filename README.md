@@ -460,7 +460,11 @@ a clone per task is the intended use. With the `hyper` feature (on by default), 
 transport is hyper over rustls, with the
 operating system's trust store through `rustls-platform-verifier` (plus any
 `add_root_certificate` roots), `TCP_NODELAY`, idle connections kept 90 s and HTTP/2 keep-alive
-pings every 30 s.
+pings every 30 s. On Linux and the other unix targets that are not Apple's, that verifier loads
+the store through `rustls-native-certs`, which reads `SSL_CERT_FILE` and `SSL_CERT_DIR` when
+`build()` builds the transport: when either is set, the certificates they name replace the
+system's store, and `add_root_certificate` adds to them. On macOS and Windows no variable changes
+the trust anchors, and no proxy variable is read on any platform.
 
 - For an `https` base URL the default is `HttpVersion::Http2Only`: all requests of a client share
   one multiplexed HTTP/2 connection. While a client has no connection - before its first request,
