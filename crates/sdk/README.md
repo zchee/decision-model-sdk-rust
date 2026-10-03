@@ -604,10 +604,11 @@ data, so bodies appear only at `TRACE`.
   `Debug` form would still spell one of them is replaced by a fixed text instead. Any other error of
   the SDK's type that a custom transport returns, an `ApiError` built from a body of its choosing
   included, is passed through unsearched. An `ApiError` built from a response is not searched
-  either: its `message()`, and with it its `Display` and `Debug`, holds the server's text escaped
-  and cut at 200 characters, and `body()` and `headers()` return the response as received; only
-  `Debug` reduces the body and the headers to their length and count. An `http://` base URL sends
-  the key unencrypted, so use one only for a local proxy or a test server.
+  either: its `Display` and `Debug` print its `message()`, the server's text escaped and cut at
+  200 characters, and its request id, a response header's text escaped and cut at 128; `body()`
+  and `headers()` return the response as received, and `Debug` shows the body and the headers
+  only as a length and a count. An `http://` base URL sends the key unencrypted, so use one only
+  for a local proxy or a test server.
 - **Server text is escaped and cut.** Every message read from a response body (whichever member
   it came from, or the body itself when no member holds one) has its control characters and
   text-hiding format characters written as Rust escapes (`\n`, `\u{1b}`, `\u{202e}`) and is cut
