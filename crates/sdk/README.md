@@ -559,6 +559,10 @@ event has the target `decision_model_sdk`, so one filter directive selects them 
 RUST_LOG=decision_model_sdk=info
 ```
 
+Before the crates were renamed the target was `typesafe_sdk`. A filter directive written for that
+name matches nothing now, so one that capped it below `TRACE` to keep the bodies out no longer
+does: write it for `decision_model_sdk`.
+
 | Level | What is logged |
 | --- | --- |
 | `INFO` | One line per attempt: `GET https://api.typesafe.ai/v1/models <- 200 in 12ms (request req_1)` for a response of any status, or `... <- timeout` (a fixed word per failure kind, never the error's text) for an attempt that got none; `POST ... retry 1` before a retry. |

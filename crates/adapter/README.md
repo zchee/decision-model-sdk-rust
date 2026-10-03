@@ -526,6 +526,10 @@ the log URI that `Provider::log_uri()` returns (`POST /` for `None`) and the ret
 `tracing` feature, which this crate's `tracing` feature turns on; a build with
 `default-features = false` and no `tracing` has neither the events nor the retry line.
 
+Before the crates were renamed the adapter's target was `system_one_adapter` and the SDK's
+`typesafe_sdk`. A filter directive written for either name matches nothing now: write it for
+`decision_model_adapter` and `decision_model_sdk`.
+
 The log URI is the scheme, the host (and the port when it is not the scheme's default) and the
 fixed path of the operation as the vendor documents it: `/v1/responses`, `/v1/chat/completions`,
 `/v1/messages` or `/v1beta/interactions`. It never holds userinfo, a query, or the path prefix of
