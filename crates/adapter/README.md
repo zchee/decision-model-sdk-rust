@@ -165,6 +165,12 @@ and base URL the environment holds then; concurrent first calls wait for one bui
 that fails is not kept, so the next call that resolves to the pair builds again. The providers are
 dropped with the last clone of the client. There is no `close`.
 
+So each distinct provider name and model is built once and kept for the life of the client and
+its clones, and each provider it keeps has its own connection pool and TLS configuration. Do not
+pass a model name an end user chose without checking it against a list of the models you accept,
+because every new name keeps one more provider; or build the provider yourself and pass it with
+`provider_instance`, on the client or on the call.
+
 Inside `send`, in this order: the provider is resolved, and built if the client owns it and has
 not built it yet; the state is written as JSON, and a state that serializes to `null` or does not
 serialize at all is refused as `ErrorKind::InvalidRequest`; the questions are checked again for
