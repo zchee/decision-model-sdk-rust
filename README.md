@@ -478,8 +478,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use http::{Request, Response};
 use decision_model_sdk::{Body, ClientBuilder, Noul, Questions};
+use http::{Request, Response};
 
 /// Answers every request with the same JSON body.
 #[derive(Clone)]
@@ -501,7 +501,8 @@ impl tower_service::Service<Request<Body>> for Canned {
 
 #[tokio::main]
 async fn main() -> Result<(), decision_model_sdk::Error> {
-    let answer = r#"{"model":"jev-latest","usage":{},"answers":{"spam":{"type":"noul","noul":0.98}}}"#;
+    let answer =
+        r#"{"model":"jev-latest","usage":{},"answers":{"spam":{"type":"noul","noul":0.98}}}"#;
     let client = ClientBuilder::new()
         .api_key("test-key")
         .base_url("https://api.typesafe.ai")
