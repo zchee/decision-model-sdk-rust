@@ -556,7 +556,9 @@ impl ApiError {
     }
 
     /// The response body: exactly as it arrived when the SDK built this error
-    /// from a response, or the body the code that built it supplied to
+    /// from a response, and empty when that body was larger than
+    /// [`max_response_bytes`](crate::ClientBuilder::max_response_bytes) and so
+    /// was not read; or the body the code that built it supplied to
     /// [`from_response`](Self::from_response).
     pub fn body(&self) -> &[u8] {
         &self.body
