@@ -269,8 +269,13 @@ failures and with it their retry class. The `Client` still checks a connection e
 cause, as it checks every attempt error of a transport: when the message, after a leading
 `Connection error: `, holds a credential of the request, the message is rewritten; when a link of
 the cause chain holds one, or the chain is longer than 32 links, the cause is replaced by a
-redacted copy that cannot be downcast, and the message is rebuilt from that copy. The kind and
-the retry class never change. Outside a `Client` nothing is rewritten. This adds a way to build an
+redacted copy that cannot be downcast, and the message is rebuilt from that copy. It checks a
+connection error without a cause too: every form of a credential of the request in its message is
+replaced by `***`, and the message is otherwise kept as the transport wrote it, neither escaped
+nor cut. Any other error of the SDK's own type that a transport returns (an `ApiError` built with
+`ApiError::from_response`, `Error::timeout`, `Error::response_too_large`) is kept as it is and is
+not searched, so the transport must put no credential into its message, body or headers. The kind
+and the retry class never change. Outside a `Client` nothing is rewritten. This adds a way to build an
 error; it does not change how an existing transport's errors are classified.
 
 ## Retries
@@ -449,9 +454,11 @@ async fn main() -> Result<(), decision_model_sdk::Error> {
 }
 ```
 
-When a custom service fails, its error's text becomes the `Connection` error's message (escaped
-and cut at 200 characters): a service that prints a request header into its error puts that
-header's value into the message.
+When a custom service fails with an error of its own type, that error's text becomes the
+`Connection` error's message (escaped and cut at 200 characters), with the request's credentials
+replaced by `***`: a service that prints any other request header into its error puts that
+header's value into the message. An error of the SDK's own type is kept instead (see
+[Errors](#errors)).
 
 ## Connections and concurrency
 
@@ -572,11 +579,14 @@ data, so bodies appear only at `TRACE`.
   `HeaderValue` is `Bytes`-backed and shared by reference count, so it cannot be zeroed on drop.
   Leading and trailing whitespace is stripped from it, as the Python
   SDK strips it; a key that is then empty, or holds whitespace, a control or a non-ASCII
-  character, is refused when the client is built. When a transport fails with an error that
-  prints the request's credentials, their values are replaced by `***` first, as the Python SDK
-  does since 0.7.1: the key and every secret or sensitive header value, in the forms the
-  documentation of `ClientBuilder::build_with_service` lists. An `http://` base URL sends the
-  key unencrypted, so use one only for a local proxy or a test server.
+  character, is refused when the client is built. When a transport fails with an error of its
+  own type that prints the request's credentials, or with a connection error of the SDK's type,
+  their values are replaced by `***` first, as the Python SDK does since 0.7.1: the key and every
+  secret or sensitive header value, in the forms the documentation of
+  `ClientBuilder::build_with_service` lists. Any other error of the SDK's type that a custom
+  transport returns, an `ApiError` built from a body of its choosing included, is passed through
+  unsearched. An `http://` base URL sends the key unencrypted, so use one only for a local proxy
+  or a test server.
 - **Server text is escaped and cut.** Every message read from a response body (whichever member
   it came from, or the body itself when no member holds one) has its control characters and
   text-hiding format characters written as Rust escapes (`\n`, `\u{1b}`, `\u{202e}`) and is cut
