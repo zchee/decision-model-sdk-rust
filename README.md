@@ -591,10 +591,10 @@ data, so bodies appear only at `TRACE`.
 
 - **The API key** is held as a `secrecy::SecretString` until it becomes the `Authorization`
   header value, which is flagged sensitive; no `Debug` or `Display` of this crate prints it, and
-  no error message repeats it. The key is copied once into the `Authorization` header value,
-  which is not zeroed and lives as long as the client and every request built from it;
-  `HeaderValue` is `Bytes`-backed and shared by reference count, so it cannot be zeroed on drop.
-  Leading and trailing whitespace is stripped from it, as the Python
+  no error message repeats it unless a transport put it there (see below). The key is copied
+  once into the `Authorization` header value, which is not zeroed and lives as long as the client
+  and every request built from it; `HeaderValue` is `Bytes`-backed and shared by reference count,
+  so it cannot be zeroed on drop. Leading and trailing whitespace is stripped from it, as the Python
   SDK strips it; a key that is then empty, or holds whitespace, a control or a non-ASCII
   character, is refused when the client is built. When a transport fails with an error of its
   own type that prints the request's credentials, or with a connection error of the SDK's type,
