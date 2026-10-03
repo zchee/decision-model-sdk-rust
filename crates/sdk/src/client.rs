@@ -231,6 +231,11 @@ impl ClientBuilder {
     /// The key is copied once into the `Authorization` header value, which is not zeroed
     /// and lives as long as the client and every request built from it; `HeaderValue`
     /// is `Bytes`-backed and shared by reference count, so it cannot be zeroed on drop.
+    ///
+    /// The host the key is sent to is still the one `DECISION_MODEL_BASE_URL`
+    /// names, read when the client is built, when [`base_url`](Self::base_url)
+    /// is not called: call `base_url` when the key does not come from the same
+    /// environment.
     #[must_use]
     pub fn api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(SecretString::from(key.into()));

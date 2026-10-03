@@ -394,7 +394,9 @@ merged as client defaults < per-call headers < the SDK's own (`Authorization`, `
 `User-Agent`, `X-TypeSafe-SDK`, `X-TypeSafe-Runtime`, and `Content-Type` on a request with a
 body), and a caller's `X-TypeSafe-Retry-Count` and framing or connection headers are dropped
 (see [Security notes](#security-notes)). A base URL's path appears in `Debug`
-and in error messages, so do not put a credential there.
+and in error messages, so do not put a credential there. When `base_url` is not called,
+`DECISION_MODEL_BASE_URL` decides which host receives the key, an explicit `api_key` included:
+call `base_url` when the key does not come from the same environment.
 
 Every request names the SDK in `User-Agent` and `X-TypeSafe-SDK` (`decision-model-sdk/<version>`)
 and its platform in `X-TypeSafe-Runtime` (`rust (<os>; <arch>)`). Two settings, and nothing
