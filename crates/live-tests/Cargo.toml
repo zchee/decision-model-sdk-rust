@@ -3,7 +3,7 @@
 [package]
 name = "decision-model-sdk-live-tests"
 version = "0.0.0"
-description = "Tests of decision-model-sdk against the live TypeSafe AI System One API"
+description = "Tests of decision-model-sdk against the live System One API of the decision-model vendor the environment names"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
