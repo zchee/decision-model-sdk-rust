@@ -536,9 +536,10 @@ impl ApiError {
     /// `authentication_error` here, which is the only way to tell that case
     /// apart from a key that exists and lacks a permission.
     ///
-    /// This is the text unchanged, as [`body`](Self::body) holds it, for a
-    /// caller to compare. It is never part of `Display`; `Debug` shows it escaped and cut at 128
-    /// characters, as it does the request id.
+    /// This is the member's JSON string decoded, its escapes resolved, and
+    /// neither escaped nor cut, for a caller to compare; a member that is not
+    /// a JSON string gives `None`. It is never part of `Display`; `Debug`
+    /// shows it escaped and cut at 128 characters, as it does the request id.
     pub fn error_type(&self) -> Option<&str> {
         self.error_type.as_deref()
     }
