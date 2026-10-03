@@ -206,6 +206,11 @@ jobs:
   coverage:
     name: coverage
     runs-on: ubuntu-26.04
+    # `id-token: write` lets the Codecov upload below authenticate with the
+    # job's OIDC token, so the repository stores no upload token.
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -240,12 +245,19 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest -p decision-model-sdk --all-features --no-report
           cargo llvm-cov nextest -p decision-model-sdk --features internals --no-report
+          cargo llvm-cov report -p decision-model-sdk --lcov --output-path lcov-sdk.info
           cargo llvm-cov report -p decision-model-sdk --fail-under-lines 85
 
       # The derive's entry point runs only inside rustc, never under a test
       # harness, so it counts as unreached; everything it calls is measured.
+      # `--no-report` does not clean, so the first line drops the SDK step's
+      # profiles, which would be merged in.
       - name: Line coverage of the derive
-        run: cargo llvm-cov nextest -p decision-model-sdk-macros --all-features --fail-under-lines 85
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov nextest -p decision-model-sdk-macros --all-features --no-report
+          cargo llvm-cov report -p decision-model-sdk-macros --lcov --output-path lcov-macros.info
+          cargo llvm-cov report -p decision-model-sdk-macros --fail-under-lines 85
 
       # The adapter is held to the SDK's threshold on its own. `-p` on the
       # report is what keeps it to the adapter: under the virtual root the
@@ -256,7 +268,28 @@ jobs:
         run: |
           cargo llvm-cov clean --workspace
           cargo llvm-cov nextest -p decision-model-adapter --all-features --no-report
+          cargo llvm-cov report -p decision-model-adapter --lcov --output-path lcov-adapter.info
           cargo llvm-cov report -p decision-model-adapter --fail-under-lines 85
+
+      # Each step above wrote its crate's lcov report before checking the
+      # threshold, so a crate that falls under it still gets its report to
+      # Codecov; a step that failed earlier leaves its file missing, and the
+      # upload then fails as well. `use_oidc` makes the action authenticate
+      # with the job's OIDC token and ignore any token input; it needs the
+      # Codecov GitHub App installed on the repository. For a pull request
+      # from a fork, which gets no id-token, the action detects the fork,
+      # skips OIDC and uploads without a token, the path Codecov accepts for
+      # public repositories. `disable_search` stops the action from walking
+      # the tree for other coverage files, so the three reports are the only
+      # upload. .codecov.yaml splits them into one component per crate.
+      - uses: codecov/codecov-action@v7
+        if: ${{ !cancelled() }}
+        with:
+          use_oidc: true
+          files: lcov-sdk.info,lcov-macros.info,lcov-adapter.info
+          disable_search: true
+          fail_ci_if_error: true
+          verbose: true
 
   hygiene:
     name: text hygiene

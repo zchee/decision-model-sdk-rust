@@ -1,0 +1,84 @@
+# Codecov configuration for decision-model-sdk-rust.
+# Reference: https://docs.codecov.com/docs/codecovyml-reference
+#
+# Coverage is uploaded by the coverage job of .github/workflows/ci.yaml: one
+# upload per commit, holding one lcov report per published crate, each
+# written by `cargo llvm-cov report -p <crate>`.
+
+# https://docs.codecov.com/docs/codecovyml-reference#codecov
+codecov:
+  allow_coverage_offsets: true
+  require_ci_to_pass: false
+
+# https://docs.codecov.com/docs/codecovyml-reference#coverage
+coverage:
+  precision: 1
+  range: "60...90"
+  # https://docs.codecov.com/docs/commit-status
+  status:
+    # No project-wide status: the three crates are measured apart, by the
+    # component statuses below, so that one crate's lines never pay for
+    # another's in one number. CI holds each crate to its threshold the
+    # same way.
+    project: off
+    patch: off
+    changes: false
+
+# https://docs.codecov.com/docs/components
+#
+# One component per published crate, each with three statuses: the crate at
+# 85 % (blocking, the threshold CI's coverage job enforces), the aim of
+# 90 % (informational) and the lines a change adds or modifies at 90 %
+# (informational; no only_pulls: changes land on main without pull
+# requests).
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        name_prefix: default-
+        target: 85%
+        threshold: 1.0
+        if_not_found: success
+        informational: false
+      - type: project
+        name_prefix: goal-
+        target: 90%
+        if_not_found: success
+        informational: true
+      - type: patch
+        target: 90%
+        if_not_found: success
+        informational: true
+  individual_components:
+    - component_id: sdk
+      name: sdk
+      paths:
+        - crates/sdk/**
+    - component_id: macros
+      name: macros
+      paths:
+        - crates/macros/**
+    - component_id: adapter
+      name: adapter
+      paths:
+        - crates/adapter/**
+
+# https://docs.codecov.com/docs/ignoring-paths
+#
+# These paths hold no shipped behaviour, so they must not move a crate's
+# number if they appear in a report.
+ignore:
+  - crates/test-support/** # Loopback test servers: the code doing the testing.
+  - crates/live-tests/** # Tests against the billed live API; opt-in, never run in CI.
+  - crates/adapter-live-tests/** # Tests against billed provider APIs; opt-in, never run in CI.
+  - crates/*/tests/** # Integration tests and their fixtures.
+  - crates/*/benches/** # Benchmarks.
+  - crates/*/examples/** # Runnable examples; documentation, not library code.
+  - "**/*_tests.rs" # Unit tests, kept in a file beside the module they test.
+  - fuzz/** # Fuzz targets, a workspace of their own.
+
+# https://docs.codecov.com/docs/pull-request-comments
+comment:
+  layout: "header, diff, components, files"
+  hide_comment_details: false
+  show_critical_paths: true
