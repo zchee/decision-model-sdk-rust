@@ -29,7 +29,16 @@ It fails on:
 * per-file counts that differ from the ones the matrix's Counts table states,
   in the columns the upstream's Counts layout names. The rows are held to the
   pin by name and by Cases, so a Counts line whose functions or cases differ
-  from the pin's sums fails through the rows.
+  from the pin's sums fails through the rows;
+* for an upstream with annotated directories (the Python adapter's two
+  crates), an ``// Upstream:`` line in a Rust source under them that is not
+  ``// Upstream: <file>::<function>``, that is not in the block of
+  attributes and comments directly above a test function, that names no
+  row's function, or that sits above a test its row does not list; and a
+  Rust target of a row, under those directories, whose test carries no line
+  naming that row's function. A target outside them (the Python adapter's
+  rows name three tests of the SDK) needs no line. Each of these faults names
+  the file and the line.
 
 A row is one of three kinds: mapped to Rust tests, mapped to a deviation row,
 or excluded with a reason (for the Python SDK, only the functions of the
@@ -70,6 +79,14 @@ EXCLUDED_PREFIX = "Excluded: "
 UPSTREAM_TEST = re.compile(r"^(?:async )?def (test_\w+)\(", re.MULTILINE)
 #: An attribute that makes the function after it a test.
 TEST_ATTRIBUTE = re.compile(r"#\[(?:[\w:]+::)?test\b")
+#: A comment that says which upstream function the Rust test below it ports.
+UPSTREAM_COMMENT = re.compile(r"^\s*// Upstream:")
+#: The one form that comment may take; the upstream file and function.
+UPSTREAM_LINE = re.compile(
+    r"^\s*// Upstream: (tests/(?:utils/)?test_\w+\.py)::(test_\w+)\s*$"
+)
+#: The first line of a function; the name is group 1.
+FUNCTION = re.compile(r"^\s*(?:pub(?:\([\w:]+\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*[(<]")
 #: The upstream test files ``--upstream`` reads, relative to the checkout.
 UPSTREAM_GLOBS = ("tests/test_*.py", "tests/utils/test_*.py")
 #: How each column a Counts table may have reads in a fault message.
@@ -308,6 +325,9 @@ class Upstream:
         excludable: The upstream files whose functions may be excluded.
         counts_columns: The number columns of the Counts table after the file,
             in order, as ``Counts`` field names.
+        annotated: The directories whose Rust tests carry an
+            ``// Upstream: <file>::<function>`` line for the row that names
+            them; empty when the upstream's tests carry none.
     """
 
     name: str
@@ -319,6 +339,7 @@ class Upstream:
     pin_name: str
     excludable: frozenset[str]
     counts_columns: tuple[str, ...]
+    annotated: tuple[Path, ...] = ()
 
     @property
     def functions(self) -> Counter[str]:
@@ -597,6 +618,7 @@ ADAPTER = Upstream(
     pin_name="ADAPTER_TESTS",
     excludable=frozenset(),
     counts_columns=("functions", "cases", "rust", "deviation"),
+    annotated=(Path("crates/adapter"), Path("crates/adapter-live-tests")),
 )
 #: Every upstream whose matrix the checker runs over.
 UPSTREAMS: tuple[Upstream, ...] = (SDK, ADAPTER)
@@ -917,6 +939,171 @@ def check_checkout(upstream: Upstream, checkout: Path) -> list[str]:
     return sorted(faults)
 
 
+@dataclass(frozen=True)
+class Annotation:
+    """One ``// Upstream:`` line of a Rust source.
+
+    Attributes:
+        path: The Rust file.
+        line: The line's number.
+        text: The line, stripped.
+        pair: The upstream file and function it names, or ``None`` when the
+            line is not of the form ``// Upstream: <file>::<function>``.
+        test: The name and the line of the test function whose block of
+            attributes and comments holds it, or ``None`` when no test's does.
+    """
+
+    path: Path
+    line: int
+    text: str
+    pair: tuple[str, str] | None
+    test: tuple[str, int] | None
+
+
+def read_annotations(path: Path) -> tuple[list[Annotation], dict[str, list[int]]]:
+    """The ``// Upstream:`` lines of a Rust file, and its test functions.
+
+    A function's block is found as :func:`defines_test` finds it: the lines
+    directly above it, up to a blank line or the end of the previous item.
+    A comment counts as a test's only inside such a block that holds a test
+    attribute.
+
+    Args:
+        path: A Rust source file.
+
+    Returns:
+        Every ``// Upstream:`` line, and the lines of the test functions by
+        name.
+    """
+    lines = path.read_text(encoding="utf-8").split("\n")
+    holder: dict[int, tuple[str, int]] = {}
+    tests: dict[str, list[int]] = {}
+    for index, line in enumerate(lines):
+        function = FUNCTION.match(line)
+        if not function:
+            continue
+        block: list[int] = []
+        is_test = False
+        above = index - 1
+        while above >= 0:
+            text = lines[above].strip()
+            if not text or text.endswith(("}", ";")):
+                break
+            is_test = is_test or bool(TEST_ATTRIBUTE.match(text))
+            block.append(above)
+            above -= 1
+        if is_test:
+            name = function.group(1)
+            tests.setdefault(name, []).append(index + 1)
+            holder.update(dict.fromkeys(block, (name, index + 1)))
+    annotations = []
+    for index, line in enumerate(lines):
+        if not UPSTREAM_COMMENT.match(line):
+            continue
+        named = UPSTREAM_LINE.match(line)
+        annotations.append(
+            Annotation(
+                path,
+                index + 1,
+                line.strip(),
+                (named.group(1), named.group(2)) if named else None,
+                holder.get(index),
+            )
+        )
+    return annotations, tests
+
+
+def within(path: Path, place: Path) -> bool:
+    """Whether ``path`` is ``place`` or lies under it.
+
+    Args:
+        path: A file or directory, relative to the repository root.
+        place: A file or directory, relative to the repository root.
+
+    Returns:
+        True when ``path`` is ``place`` or one of its descendants.
+    """
+    return path == place or place in path.parents
+
+
+def check_annotations(matrix: Matrix, upstream: Upstream) -> list[str]:
+    """Hold the ``// Upstream:`` lines under the annotated directories to the rows.
+
+    Every such line must name a row's function and sit directly above a test
+    that row lists, and every test a row lists under those directories must
+    carry a line naming the row's function.
+
+    Args:
+        matrix: The parsed matrix.
+        upstream: The upstream; its ``annotated`` directories are read.
+
+    Returns:
+        One message per fault: the lines' faults by file and line, then the
+        rows' missing lines in the order of the rows.
+    """
+    files = sorted(
+        {
+            file
+            for place in upstream.annotated
+            for file in (place.rglob("*.rs") if place.is_dir() else [place])
+        }
+    )
+    annotations: list[Annotation] = []
+    tests: dict[Path, dict[str, list[int]]] = {}
+    for file in files:
+        found, defined = read_annotations(file)
+        annotations.extend(found)
+        tests[file] = defined
+
+    rows: dict[tuple[str, str], Row] = {}
+    for row in matrix.rows:
+        rows.setdefault((row.file, row.name), row)
+    faults: list[str] = []
+    carried: dict[tuple[Path, int], set[tuple[str, str]]] = {}
+    for annotation in annotations:
+        where = f"{annotation.path}:{annotation.line}"
+        if annotation.pair is None:
+            faults.append(
+                f"{where}: {annotation.text!r} is not `// Upstream: <file>::<function>`"
+            )
+            continue
+        if annotation.test is None:
+            faults.append(f"{where}: {annotation.text} is not directly above a test")
+            continue
+        name, line = annotation.test
+        carried.setdefault((annotation.path, line), set()).add(annotation.pair)
+        row = rows.get(annotation.pair)
+        if row is None:
+            faults.append(
+                f"{where}: {annotation.text} names no row of {upstream.matrix}"
+            )
+        elif not any(
+            target == name and within(annotation.path, Path(path))
+            for path, target in RUST_TARGET.findall(row.target)
+        ):
+            faults.append(
+                f"{where}: {annotation.text} is above `{name}`, which the row at "
+                f"{upstream.matrix}:{row.line} does not list"
+            )
+
+    for row in matrix.rows:
+        for path_text, name in RUST_TARGET.findall(row.target):
+            target = Path(path_text)
+            if not any(within(target, place) for place in upstream.annotated):
+                continue
+            for file in files:
+                if not within(file, target):
+                    continue
+                for line in tests[file].get(name, []):
+                    if (row.file, row.name) not in carried.get((file, line), set()):
+                        faults.append(
+                            f"{upstream.matrix}:{row.line}: {row.file}::{row.name}: "
+                            f"`{name}` at {file}:{line} carries no "
+                            f"`// Upstream: {row.file}::{row.name}` line"
+                        )
+    return faults
+
+
 def check_upstream_matrix(upstream: Upstream) -> tuple[list[str], str]:
     """Check one upstream's matrix.
 
@@ -980,6 +1167,8 @@ def check_upstream_matrix(upstream: Upstream) -> tuple[list[str], str]:
         for file in sorted(matrix.counts.keys() - upstream.functions.keys())
     )
     faults.extend(check_names(matrix, upstream))
+    if upstream.annotated:
+        faults.extend(check_annotations(matrix, upstream))
 
     rust = sum(counts.rust for counts in tally.values())
     deviation = sum(counts.deviation for counts in tally.values())

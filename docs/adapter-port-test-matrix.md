@@ -17,10 +17,13 @@ synchronous half is covered, once for all of them, by the README deviation row "
 client" (this crate has no blocking client). A function that is ported in part maps to its Rust
 tests; the README deviation row that explains the rest names it in its text.
 
-Each ported Rust test carries `// Upstream: <file>::<function>` above its `fn`, and every such
-line names a function whose row below lists that test. Tests of the adapter that port no
-upstream function (its security tests, the tests that pin its defaults, the `key_echo_` tests
-of a success response that repeats the key) carry no such line and have no row: the matrix
+Each Rust test of `crates/adapter` and `crates/adapter-live-tests` that a row below names carries
+`// Upstream: <file>::<function>` above its `fn`, naming that row's function, and every such line
+in those two crates names a function whose row lists the test below it; the checker holds both
+directions. The three SDK-side targets (the two tests in `crates/sdk/src/question_tests.rs` and
+`live_questions`) carry no such line. Tests of the adapter that port no upstream function (its
+security tests, the tests that pin its defaults, the `key_echo_` tests of a success response that
+repeats the key) carry no such line and have no row: the matrix
 lists upstream functions, not Rust tests.
 
 ## Counts
@@ -61,8 +64,8 @@ lists upstream functions, not Rust tests.
 
 These tests are billed. The rows of the two vendor functions name the tests of
 `crates/adapter-live-tests`, twelve for each function; each builds its provider with the key
-the test reads and gives it to the call with `provider_instance`, where upstream names the
-provider and the client reads the key from the environment. The TypeSafe row tests the
+the test reads and gives the provider to the client with `provider_instance`, where upstream
+names the provider and the client reads the key from the environment. The TypeSafe row tests the
 TypeSafe API rather than the adapter, so it names the SDK's billed `live_questions`.
 Neither CI nor the gate runs a billed test.
 

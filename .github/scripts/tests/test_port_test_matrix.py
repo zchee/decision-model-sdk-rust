@@ -1220,6 +1220,10 @@ ADAPTER_MATRIX = "docs/adapter-port-test-matrix.md"
 ADAPTER_README = "crates/adapter/README.md"
 CONFIDENCE = "tests/utils/test_confidence_metrics.py"
 EXCLUDED_ROW = "excluded row"
+METRICS_TESTS = "crates/adapter/src/metrics_tests.rs"
+SCHEMA_TESTS = "crates/adapter/src/schema_tests.rs"
+CONFIDENCE_LINE = f"// Upstream: {CONFIDENCE}::test_confidence_metrics"
+LABELS_LINE = "// Upstream: tests/test_schema.py::test_probability_labels_preserve_arbitrary_names"
 #: The summary line of the adapter's page, by its tallies.
 adapter_summary = partial(
     summary, rows=71, rust=63, deviation=8, excluded=0, tests=71, files=12
@@ -1269,6 +1273,14 @@ def adapter(
         f"{ADAPTER_MATRIX}:{line_of(pristine, labels)}: tests/test_schema.py::"
         "test_probability_labels_preserve_arbitrary_names"
     )
+    # The `// Upstream:` lines of the two rows' tests, which a fault in a row
+    # leaves without a row that lists their test.
+    metrics = (repository / METRICS_TESTS).read_text(encoding="utf-8")
+    confidence_line = (
+        f"{METRICS_TESTS}:{line_of(metrics, CONFIDENCE_LINE)}: {CONFIDENCE_LINE}"
+    )
+    schema = (repository / SCHEMA_TESTS).read_text(encoding="utf-8")
+    labels_line = f"{SCHEMA_TESTS}:{line_of(schema, LABELS_LINE)}: {LABELS_LINE}"
 
     def edit_row_and_counts(new_row: str, new_counts: str) -> Edit:
         def edit(text: str) -> str:
@@ -1289,6 +1301,7 @@ def adapter(
                     f"{ADAPTER_MATRIX}: upstream {CONFIDENCE}::"
                     "test_confidence_metrics has no row"
                 ),
+                f"{confidence_line} names no row of {ADAPTER_MATRIX}",
             ),
             adapter_summary(rows=70, rust=62),
         ),
@@ -1300,6 +1313,11 @@ def adapter(
                 (
                     f"{labels_where}: crates/adapter/src/schema_tests.rs has no test "
                     "function `probability_labels_preserve_arbitrary_namez`"
+                ),
+                (
+                    f"{labels_line} is above "
+                    "`probability_labels_preserve_arbitrary_names`, which the row at "
+                    f"{ADAPTER_MATRIX}:{line_of(pristine, labels)} does not list"
                 ),
             ),
             adapter_summary(),
@@ -1323,6 +1341,10 @@ def adapter(
                 (
                     f"{where}: excluded, but no file of system-one-adapter-python "
                     "may be excluded"
+                ),
+                (
+                    f"{confidence_line} is above `metrics_upstream_confidence`, which "
+                    f"the row at {ADAPTER_MATRIX}:{line_of(pristine, row)} does not list"
                 ),
             ),
             adapter_summary(rust=62, excluded=1),
@@ -1392,3 +1414,255 @@ def test_adapter_matrix_refuses_an_excluded_row(adapter: Scenario) -> None:
 def test_adapter_matrix_refuses_a_counts_sum_that_differs(adapter: Scenario) -> None:
     """A Counts line whose Cases differs from the rows' sum fails."""
     assert_planted_fails(adapter, COUNTS_SUM)
+
+
+# The adapter's `// Upstream:` lines, on a copy of the Rust sources the checker
+# reads, so that a line can be planted, changed or removed.
+
+NORMALIZATION = "tests/utils/test_probability_normalization.py"
+
+
+@dataclass(frozen=True)
+class Tree:
+    """A copy of the adapter's page, README and Rust sources to run the checker on.
+
+    Attributes:
+        root: The copy's root, the checker's working directory.
+        run: Runs the checker over the adapter alone and returns its status
+            and standard output.
+        page: The tracked page's text.
+    """
+
+    root: Path
+    run: Callable[[], tuple[int, str]]
+    page: str
+
+    def edit(self, path: str, change: Edit) -> str:
+        """Change one copied file, and return its new text.
+
+        Args:
+            path: The file, relative to the copy's root.
+            change: Turns the file's text into the new one.
+
+        Returns:
+            The new text.
+        """
+        file = self.root / path
+        text = change(file.read_text(encoding="utf-8"))
+        file.write_text(text, encoding="utf-8")
+        return text
+
+
+@pytest.fixture
+def adapter_tree(
+    port_test_matrix: ModuleType,
+    repository: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> Tree:
+    """The adapter's configuration on a copy of every file the checker reads.
+
+    The copy holds the page, the README, every Rust source under the
+    annotated directories and every file a row names, at their tracked paths;
+    the checker runs from the copy's root.
+    """
+    adapter = port_test_matrix.ADAPTER
+    page = (repository / ADAPTER_MATRIX).read_text(encoding="utf-8")
+    matrix = port_test_matrix.read_matrix(page, adapter.counts_columns)
+    sources = {
+        file.relative_to(repository)
+        for place in adapter.annotated
+        for file in (repository / place).rglob("*.rs")
+    }
+    sources.update(
+        Path(path)
+        for row in matrix.rows
+        for path, _ in port_test_matrix.RUST_TARGET.findall(row.target)
+    )
+    root = tmp_path / "tree"
+    for relative in sorted({*sources, Path(ADAPTER_MATRIX), Path(ADAPTER_README)}):
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_bytes((repository / relative).read_bytes())
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(port_test_matrix, "UPSTREAMS", (adapter,))
+
+    def run() -> tuple[int, str]:
+        status = port_test_matrix.main([])
+        return status, capsys.readouterr().out
+
+    return Tree(root, run, page)
+
+
+def fault_row(tree: Tree, row: str) -> str:
+    """The ``<page>:<line>: <file>::<name>`` that starts a fault of a row.
+
+    Args:
+        tree: The copy.
+        row: The upstream function as ``<file>::<name>``.
+
+    Returns:
+        The page and the row's line, then the function.
+    """
+    name = row.split("::")[1]
+    return f"{ADAPTER_MATRIX}:{line_of(tree.page, f'| `{name}` |')}: {row}"
+
+
+def test_adapter_tree_passes_untouched(adapter_tree: Tree) -> None:
+    """The copy of the tracked files passes, every line held to its row."""
+    assert adapter_tree.run() == (0, adapter_summary() + "\n")
+
+
+def test_adapter_matrix_refuses_a_removed_upstream_line(adapter_tree: Tree) -> None:
+    """A test a row names that lost its ``// Upstream:`` line fails."""
+    text = adapter_tree.edit(
+        METRICS_TESTS, lambda text: delete_line(text, CONFIDENCE_LINE)
+    )
+    function = line_of(text, "fn metrics_upstream_confidence()")
+
+    assert adapter_tree.run() == (
+        1,
+        failed(
+            [
+                (
+                    f"{fault_row(adapter_tree, f'{CONFIDENCE}::test_confidence_metrics')}: "
+                    f"`metrics_upstream_confidence` at {METRICS_TESTS}:{function} carries "
+                    f"no `{CONFIDENCE_LINE}` line"
+                )
+            ],
+            adapter_summary(),
+        ),
+    )
+
+
+def test_adapter_matrix_refuses_an_upstream_line_naming_another_function(
+    adapter_tree: Tree,
+) -> None:
+    """A line that names a function whose row lists another test fails, and
+    the test it was taken from has lost its own line."""
+    other = (
+        f"// Upstream: {NORMALIZATION}::test_probability_normalization_and_debug_data"
+    )
+    text = adapter_tree.edit(
+        METRICS_TESTS, lambda text: replace_once(text, CONFIDENCE_LINE, other)
+    )
+    # The tracked file holds the other function's line too, above its own test.
+    line = next(
+        number
+        for number, content in enumerate(text.split("\n"), start=1)
+        if content == other
+    )
+    function = line_of(text, "fn metrics_upstream_confidence()")
+    normalization_row = line_of(
+        adapter_tree.page, "| `test_probability_normalization_and_debug_data` |"
+    )
+
+    assert adapter_tree.run() == (
+        1,
+        failed(
+            [
+                (
+                    f"{METRICS_TESTS}:{line}: {other} is above "
+                    "`metrics_upstream_confidence`, which the row at "
+                    f"{ADAPTER_MATRIX}:{normalization_row} does not list"
+                ),
+                (
+                    f"{fault_row(adapter_tree, f'{CONFIDENCE}::test_confidence_metrics')}"
+                    f": `metrics_upstream_confidence` at {METRICS_TESTS}:{function} "
+                    f"carries no `{CONFIDENCE_LINE}` line"
+                ),
+            ],
+            adapter_summary(),
+        ),
+    )
+
+
+def test_adapter_matrix_refuses_an_upstream_line_above_a_test_no_row_names(
+    adapter_tree: Tree,
+) -> None:
+    """A line above a test that its row does not list fails."""
+    text = adapter_tree.edit(
+        METRICS_TESTS,
+        lambda text: replace_once(
+            text,
+            "#[test]\nfn metrics_tie_mode() {",
+            f"#[test]\n{CONFIDENCE_LINE}\nfn metrics_tie_mode() {{",
+        ),
+    )
+    line = line_of(text, "fn metrics_tie_mode()") - 1
+    confidence_row = line_of(adapter_tree.page, "| `test_confidence_metrics` |")
+
+    assert adapter_tree.run() == (
+        1,
+        failed(
+            [
+                (
+                    f"{METRICS_TESTS}:{line}: {CONFIDENCE_LINE} is above "
+                    f"`metrics_tie_mode`, which the row at {ADAPTER_MATRIX}:"
+                    f"{confidence_row} does not list"
+                )
+            ],
+            adapter_summary(),
+        ),
+    )
+
+
+def test_adapter_matrix_refuses_an_upstream_line_naming_no_row(
+    adapter_tree: Tree,
+) -> None:
+    """A line naming a function that has no row fails."""
+    made_up = f"// Upstream: {CONFIDENCE}::test_made_up"
+    text = adapter_tree.edit(
+        METRICS_TESTS,
+        lambda text: replace_once(
+            text,
+            "#[test]\nfn metrics_tie_mode() {",
+            f"#[test]\n{made_up}\nfn metrics_tie_mode() {{",
+        ),
+    )
+    line = line_of(text, made_up)
+
+    assert adapter_tree.run() == (
+        1,
+        failed(
+            [f"{METRICS_TESTS}:{line}: {made_up} names no row of {ADAPTER_MATRIX}"],
+            adapter_summary(),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("planted", "fault"),
+    [
+        (
+            "// Upstream: test_confidence_metrics",
+            (
+                "'// Upstream: test_confidence_metrics' is not "
+                "`// Upstream: <file>::<function>`"
+            ),
+        ),
+        (
+            f"\n// Upstream: {CONFIDENCE}::test_elsewhere",
+            f"// Upstream: {CONFIDENCE}::test_elsewhere is not directly above a test",
+        ),
+    ],
+    ids=["malformed", "separated by a blank line"],
+)
+def test_adapter_matrix_refuses_an_upstream_line_out_of_place(
+    adapter_tree: Tree, planted: str, fault: str
+) -> None:
+    """A line not of the one form, or not in a test's block, fails."""
+    text = adapter_tree.edit(
+        METRICS_TESTS,
+        lambda text: replace_once(
+            text,
+            "#[test]\nfn metrics_tie_mode() {",
+            f"{planted}\n\n#[test]\nfn metrics_tie_mode() {{",
+        ),
+    )
+    line = line_of(text, planted.strip())
+
+    assert adapter_tree.run() == (
+        1,
+        failed([f"{METRICS_TESTS}:{line}: {fault}"], adapter_summary()),
+    )
