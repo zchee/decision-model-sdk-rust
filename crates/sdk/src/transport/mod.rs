@@ -620,6 +620,21 @@ impl Uncut {
     }
 }
 
+/// The message of a connection error whose own message, printed by `Debug`,
+/// would spell a credential of the request.
+const WITHHELD: &str = "Connection error: the transport's message is not shown, because its Debug form would spell a credential of the request.";
+
+/// `message`, or [`WITHHELD`] when `{:?}` of its part from byte `searched`
+/// on still spells a form of a credential.
+///
+/// `Debug` of an [`Error`] prints its message through `{:?}`, and escaping
+/// can spell what the text does not hold: a tab before `ok` prints as `\tok`.
+/// Replacing every credential in the text by `***` cannot remove such a
+/// spelling, so the message is given up for a fixed one.
+fn unless_debug_spells(message: String, searched: usize, credentials: &Credentials) -> String {
+    if credentials.occur_in_debug(&message[searched..]) { WITHHELD.to_owned() } else { message }
+}
+
 /// `error` with the request's credentials kept out of it.
 ///
 /// Only a connection error is searched. With a cause, the cause is the
@@ -627,10 +642,15 @@ impl Uncut {
 /// none is returned as it is; see [`redact::copy_chain`] for the other two
 /// outcomes. Without one, a custom service built the error with
 /// [`Error::connection`], and its message is all it holds: every form of a
-/// credential in it is replaced by `***`, and nothing else is changed. Any
-/// other kind is returned as it is: an [`ApiError`] a service built keeps the
-/// body and headers it was given. The credentials are read from the headers
-/// the request was built from, and only here, after the attempt failed.
+/// credential in it is replaced by `***`, and nothing else is changed unless
+/// `Debug` would still spell one (below). Any other kind is returned as it
+/// is: an [`ApiError`] a service built keeps the body and headers it was
+/// given. The credentials are read from the headers the request was built
+/// from, and only here, after the attempt failed.
+///
+/// The message is looked at as `Debug` prints it too, after the replacement:
+/// when that still spells a credential, the message becomes [`WITHHELD`],
+/// with or without a cause, and the cause stays what the outcome made it.
 pub(crate) fn redacted(error: Error, exchange: Exchange<'_>) -> Error {
     if !matches!(error.kind(), ErrorKind::Connection) {
         return error;
@@ -643,10 +663,13 @@ pub(crate) fn redacted(error: Error, exchange: Exchange<'_>) -> Error {
     );
     let Some(source) = StdError::source(&error) else {
         let message = error.to_string();
-        if !credentials.occur_in(&message) {
+        if !credentials.occur_in(&message) && !credentials.occur_in_debug(&message) {
             return error;
         }
-        return Error::connection(credentials.redact(&message), None);
+        return Error::connection(
+            unless_debug_spells(credentials.redact(&message), 0, &credentials),
+            None,
+        );
     };
     // The fixed prefix is the SDK's own text: only what follows it came from
     // the transport, as the Python SDK redacts the error before prefixing it.
@@ -657,11 +680,18 @@ pub(crate) fn redacted(error: Error, exchange: Exchange<'_>) -> Error {
         Outcome::MessageOnly => {
             let (_, source) = error.into_parts();
             let redacted = credentials.redact(transport_text);
-            Error::connection(format!("{CONNECTION_PREFIX}{redacted}"), source)
+            let message = format!("{CONNECTION_PREFIX}{redacted}");
+            Error::connection(
+                unless_debug_spells(message, CONNECTION_PREFIX.len(), &credentials),
+                source,
+            )
         }
         Outcome::Replaced(link) => {
             let message = cut(&render_uncut(&link).redacted(&credentials));
-            Error::connection(message, Some(Box::new(link)))
+            Error::connection(
+                unless_debug_spells(message, CONNECTION_PREFIX.len(), &credentials),
+                Some(Box::new(link)),
+            )
         }
     }
 }

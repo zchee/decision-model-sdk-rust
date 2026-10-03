@@ -428,23 +428,30 @@ const SERVICE_KEY: &str = "ts_live_quo'te\"slash\\tail";
 /// The value of the client's secret default header.
 const SERVICE_SECRET: &str = "provider-credential";
 
-/// A custom transport that fails every request with the SDK error `fail`
+/// A custom transport that fails every request with the error `fail`
 /// builds, in `poll_ready` or in `call`.
 #[derive(Clone)]
 struct Failing {
     in_poll_ready: bool,
-    fail: Arc<dyn Fn() -> Error + Send + Sync>,
+    fail: Arc<dyn Fn() -> BoxError + Send + Sync>,
     calls: Arc<AtomicUsize>,
 }
 
 impl Failing {
+    /// Fails with the SDK error `fail` builds.
     fn new(in_poll_ready: bool, fail: impl Fn() -> Error + Send + Sync + 'static) -> Self {
+        Self::foreign(in_poll_ready, move || Box::new(fail()))
+    }
+
+    /// Fails with any error `fail` builds, an error of the transport's own
+    /// type rather than the SDK's.
+    fn foreign(in_poll_ready: bool, fail: impl Fn() -> BoxError + Send + Sync + 'static) -> Self {
         Self { in_poll_ready, fail: Arc::new(fail), calls: Arc::default() }
     }
 
     fn error(&self) -> BoxError {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Box::new((self.fail)())
+        (self.fail)()
     }
 }
 
@@ -746,5 +753,300 @@ async fn a_connection_error_with_a_cause_from_a_service_is_redacted_as_before() 
     assert!(cause.downcast_ref::<io::Error>().is_none(), "{cause:?}");
     for rendering in renderings(&replaced) {
         assert!(!rendering.contains(SERVICE_SECRET), "{rendering}");
+    }
+}
+
+// ------------------------------------- a message that only Debug spells
+
+/// Lists the models through `service` with `key` as the client's only
+/// credential and no retry, and returns the error the call fails with.
+async fn fail_with_key(key: &str, service: Failing) -> Error {
+    ClientBuilder::new()
+        .api_key(key)
+        .base_url("https://api.typesafe.ai")
+        .retry(RetryPolicy::default().max_retries(0))
+        .build_with_service(service)
+        .expect("the client builds")
+        .models()
+        .list()
+        .send()
+        .await
+        .expect_err("the service fails")
+}
+
+/// Asserts that `error` is a connection error whose message is the fixed
+/// [`WITHHELD`] text, and that no rendering of it spells `key` or
+/// `Bearer <key>` in any form.
+fn assert_withheld(error: &Error, key: &str, case: &str) {
+    assert!(matches!(error.kind(), ErrorKind::Connection), "{case}: {error:?}");
+    assert_eq!(error.to_string(), WITHHELD, "{case}");
+    for rendering in renderings(error) {
+        for credential in [key.to_owned(), format!("Bearer {key}")] {
+            for spelling in spellings(&credential) {
+                assert!(!rendering.contains(&spelling), "{case}: {spelling:?} in {rendering}");
+            }
+        }
+    }
+}
+
+/// Asserts that `error` is the cause-less connection error `message`, kept
+/// byte for byte.
+fn assert_kept(error: &Error, message: &str, case: &str) {
+    assert!(matches!(error.kind(), ErrorKind::Connection), "{case}: {error:?}");
+    assert!(error.source().is_none(), "{case}: {error:?}");
+    assert_eq!(error.to_string(), message, "{case}");
+    assert_eq!(
+        format!("{error:?}"),
+        format!("Error {{ kind: Connection, message: {message:?} }}"),
+        "{case}"
+    );
+}
+
+/// A credential that holds a backslash is spelled by `Debug` of a message
+/// that holds the character the backslash escapes instead: `made-up\tkey`
+/// by a message with a tab between `made-up` and `key`. The raw message
+/// holds no form of it, so nothing can be replaced by `***`; the message is
+/// given up for the fixed text, with no cause, still a connection error.
+#[tokio::test]
+async fn a_causeless_message_whose_debug_spells_a_credential_with_a_backslash_is_withheld() {
+    let cases = [
+        ("made-up\\tkey", "made-up\tkey"),
+        ("made-up\\nkey", "made-up\nkey"),
+        ("made-up\\rkey", "made-up\rkey"),
+        ("made-up\\0key", "made-up\0key"),
+        ("made-up\\u{1b}key", "made-up\u{1b}key"),
+        ("made-up\\\"key", "made-up\"key"),
+        ("made-up\\\\key", "made-up\\key"),
+    ];
+    for (key, held) in cases {
+        let message = format!("proxy refused {held} for /v1/models");
+        assert!(!message.contains(key), "the raw message must not hold {key:?}");
+        for in_poll_ready in [false, true] {
+            let case = format!("key {key:?}, message {message:?}, in poll_ready {in_poll_ready}");
+            let built = message.clone();
+            let service =
+                Failing::new(in_poll_ready, move || Error::connection(built.clone(), None));
+            let error = fail_with_key(key, service).await;
+
+            assert_withheld(&error, key, &case);
+            assert!(error.source().is_none(), "{case}: {error:?}");
+            assert_eq!(
+                format!("{error:?}"),
+                format!("Error {{ kind: Connection, message: {WITHHELD:?} }}"),
+                "{case}"
+            );
+        }
+    }
+}
+
+/// A credential that starts with the letter of an escape - `t`, `n`, `r`,
+/// `0`, or the `}` and hex digits that end `\u{..}` - is spelled by `Debug`
+/// of a message that holds the matching character right before the rest of
+/// the credential: a tab before `ok-made-up` prints as `\tok-made-up`.
+#[tokio::test]
+async fn a_causeless_message_whose_debug_completes_a_credential_is_withheld() {
+    let cases = [
+        ("tok-made-up", "\tok-made-up"),
+        ("nonce-made-up", "\nonce-made-up"),
+        ("rk-made-up", "\rk-made-up"),
+        ("0-made-up", "\0-made-up"),
+        ("}made-up", "\u{1b}made-up"),
+        ("1b}made-up", "\u{1b}made-up"),
+    ];
+    for (key, held) in cases {
+        let message = format!("proxy refused {held}");
+        assert!(!message.contains(key), "the raw message must not hold {key:?}");
+        for in_poll_ready in [false, true] {
+            let case = format!("key {key:?}, message {message:?}, in poll_ready {in_poll_ready}");
+            let built = message.clone();
+            let service =
+                Failing::new(in_poll_ready, move || Error::connection(built.clone(), None));
+            let error = fail_with_key(key, service).await;
+
+            assert_withheld(&error, key, &case);
+            assert!(error.source().is_none(), "{case}: {error:?}");
+        }
+    }
+}
+
+/// A message whose `Debug` merely holds a backslash, near a credential but
+/// not spelling it, is kept byte for byte: a newline where the credential
+/// has `\t`, a newline before the rest of a credential that starts with `t`,
+/// and escapes next to nothing that matters.
+#[tokio::test]
+async fn a_causeless_message_whose_debug_only_holds_a_backslash_is_kept() {
+    let cases = [
+        ("made-up\\tkey", "proxy refused made-up\nkey"),
+        ("tok-made-up", "proxy refused \nok-made-up"),
+        ("made-up\\\\key", "proxy refused made-up\\\\\\key"),
+        ("made-up-key", "tab\there \"quoted\" back\\slash \u{1b}[31mred \u{202e}end"),
+    ];
+    for (key, message) in cases {
+        for in_poll_ready in [false, true] {
+            let case = format!("key {key:?}, message {message:?}, in poll_ready {in_poll_ready}");
+            let service = Failing::new(in_poll_ready, move || Error::connection(message, None));
+            let error = fail_with_key(key, service).await;
+
+            assert_kept(&error, message, &case);
+        }
+    }
+}
+
+/// A message that holds a credential as it is and, elsewhere, a spelling
+/// only `Debug` makes: replacing the first by `***` leaves the second, so
+/// the message is withheld. With only the first, the replacement is the
+/// whole change, as before.
+#[tokio::test]
+async fn a_causeless_message_with_both_spellings_is_withheld() {
+    let key = "tok-made-up";
+    let both = Failing::new(false, move || {
+        Error::connection(format!("sent {key}, then\tok-made-up"), None)
+    });
+    assert_withheld(&fail_with_key(key, both).await, key, "both spellings");
+
+    let raw_only = Failing::new(false, move || Error::connection(format!("sent {key}"), None));
+    assert_kept(&fail_with_key(key, raw_only).await, "sent ***", "the raw spelling only");
+}
+
+/// A transport error that prints its text as it is in `Debug` too, without
+/// the escaping a derived `Debug` adds.
+struct Unescaped(&'static str);
+
+impl fmt::Debug for Unescaped {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl fmt::Display for Unescaped {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.0)
+    }
+}
+
+impl StdError for Unescaped {}
+
+/// With a cause, the message is looked at as `Debug` prints it too: the
+/// part after `Connection error: ` of an SDK error a service built, of the
+/// message built from a transport error that holds no credential, and of
+/// the message rebuilt from a redacted copy. Each is withheld when only
+/// `Debug` spells the credential, and the cause stays what it would have
+/// been: the service's own, or the redacted copy.
+#[tokio::test]
+async fn a_message_with_a_cause_whose_debug_spells_a_credential_is_withheld() {
+    let refused =
+        || -> BoxError { Box::new(io::Error::new(io::ErrorKind::ConnectionRefused, "refused")) };
+
+    // An SDK error with a cause, whose message alone would be kept.
+    let key = "tok-made-up";
+    let ours = Failing::new(false, move || {
+        Error::connection("Connection error: sent\tok-made-up", Some(refused()))
+    });
+    let error = fail_with_key(key, ours).await;
+    assert_withheld(&error, key, "an SDK error with a cause");
+    let cause = error.source().and_then(|source| source.downcast_ref::<io::Error>());
+    assert_eq!(cause.map(io::Error::kind), Some(io::ErrorKind::ConnectionRefused), "{error:?}");
+
+    // A transport error that holds no form of the key: the message built
+    // from it keeps the backslash, which `Debug` doubles into the key.
+    let key = "made-up\\\\key";
+    let foreign = Failing::foreign(false, || Box::new(Unescaped("made-up\\key")));
+    let error = fail_with_key(key, foreign).await;
+    assert_withheld(&error, key, "a transport error that holds no form of the key");
+    let cause = error.source().expect("the transport's error is kept");
+    assert!(cause.downcast_ref::<Unescaped>().is_some(), "{cause:?}");
+
+    // A transport error whose derived `Debug` holds the key: the chain is
+    // replaced by a redacted copy, and the message rebuilt from that copy
+    // is withheld too.
+    let foreign = Failing::foreign(false, || Box::new(io::Error::other("made-up\\key")));
+    let error = fail_with_key(key, foreign).await;
+    assert_withheld(&error, key, "a transport error that holds the key");
+    let cause = error.source().expect("a redacted copy of the cause");
+    assert!(cause.downcast_ref::<io::Error>().is_none(), "{cause:?}");
+
+    // A transport error with a backslash that spells nothing is kept.
+    let foreign = Failing::foreign(false, || Box::new(Unescaped("back\\slash")));
+    let error = fail_with_key(key, foreign).await;
+    assert_eq!(error.to_string(), "Connection error: back\\slash");
+    assert!(error.source().and_then(|source| source.downcast_ref::<Unescaped>()).is_some());
+}
+
+/// A transport error whose alternate `Debug` starts a line with `line`, and
+/// whose `Display` and plain `Debug` hold nothing of it.
+struct Pretty(&'static str);
+
+impl fmt::Debug for Pretty {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if formatter.alternate() {
+            write!(formatter, "Pretty {{\n{}\n}}", self.0)
+        } else {
+            formatter.write_str("Pretty")
+        }
+    }
+}
+
+impl fmt::Display for Pretty {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("plain")
+    }
+}
+
+impl StdError for Pretty {}
+
+/// A value that holds an error, as an application's own type would.
+#[derive(Debug)]
+struct Holder {
+    error: Error,
+}
+
+/// A secret header value that starts with spaces is spelled by `{:#?}` of
+/// an error that holds a cause whose alternate `Debug` starts a line with
+/// the rest of it: the pretty printer indents every nested line. So the
+/// value is also looked for without the spaces, the cause is replaced by a
+/// redacted copy, and neither the error's `{:#?}` nor that of a value
+/// holding it spells the secret, with or without its spaces.
+#[tokio::test]
+async fn a_secret_with_spaces_in_front_is_not_spelled_by_an_indented_debug() {
+    let secret = "    tail-made-up";
+    let foreign = || -> BoxError { Box::new(Pretty("tail-made-up")) };
+    type Build = Box<dyn Fn() -> BoxError + Send + Sync>;
+    let cases: [(&str, Build); 2] = [
+        ("a transport error", Box::new(foreign)),
+        (
+            "an SDK error with that cause",
+            Box::new(move || {
+                Box::new(Error::connection("Connection error: plain", Some(foreign())))
+            }),
+        ),
+    ];
+    for (name, build) in cases {
+        let error = ClientBuilder::new()
+            .api_key("made-up-key")
+            .base_url("https://api.typesafe.ai")
+            .default_header("x-made-up-secret", secret)
+            .retry(RetryPolicy::default().max_retries(0))
+            .build_with_service(Failing::foreign(false, build))
+            .expect("the client builds")
+            .models()
+            .list()
+            .send()
+            .await
+            .expect_err("the service fails");
+
+        assert!(matches!(error.kind(), ErrorKind::Connection), "{name}: {error:?}");
+        assert_eq!(error.to_string(), "Connection error: plain", "{name}");
+        let cause = error.source().expect("a redacted copy of the cause");
+        assert!(cause.downcast_ref::<Pretty>().is_none(), "{name}: {cause:?}");
+        let held = Holder { error };
+        let printed = [
+            format!("{:?}", held.error),
+            format!("{:#?}", held.error),
+            format!("{held:?}"),
+            format!("{held:#?}"),
+        ];
+        for text in printed {
+            assert!(!text.contains("tail-made-up"), "{name}: {text}");
+        }
     }
 }

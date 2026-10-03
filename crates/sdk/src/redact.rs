@@ -48,12 +48,13 @@ pub(crate) fn is_secret(name: &HeaderName, value: &HeaderValue) -> bool {
 /// A credential is the value of a header [`is_secret`] matches, and for
 /// `Authorization` and `Proxy-Authorization` also the part after the scheme,
 /// split as Python's `str.split(maxsplit=1)` splits it. Empty values are
-/// skipped. Each credential is looked for as it is and as `{:?}` of a `str`,
-/// `str::escape_debug`, `{:?}` of an `http::HeaderValue`, `{:?}` of a
-/// `bytes::Bytes` and a JSON string write it, each without its quotes. Each
-/// of those forms is also looked for as `{:?}` of a `str` writes it once
-/// more, without the quotes: that is how a derived `Debug` prints a `String`
-/// field that already holds an escaped form.
+/// skipped, and one that starts or ends with spaces or tabs is also a
+/// credential without them. Each credential is looked for as it is and as
+/// `{:?}` of a `str`, `str::escape_debug`, `{:?}` of an `http::HeaderValue`,
+/// `{:?}` of a `bytes::Bytes` and a JSON string write it, each without its
+/// quotes. Each of those forms is also looked for as `{:?}` of a `str`
+/// writes it once more, without the quotes: that is how a derived `Debug`
+/// prints a `String` field that already holds an escaped form.
 ///
 /// The matcher is a plain left-to-right scan that tries the longest form
 /// first, as the Python SDK's regular expression alternation does.
@@ -91,6 +92,16 @@ impl Credentials {
     /// Whether any form of a credential occurs in `text`.
     pub(crate) fn occur_in(&self, text: &str) -> bool {
         self.next_match(text, 0).is_some()
+    }
+
+    /// Whether any form of a credential occurs in `{:?}` of `text`, quotes
+    /// included, which is how the `Debug` of an error prints its message.
+    ///
+    /// Escaping can spell a credential the text does not hold: a tab followed
+    /// by `ok` prints as `\tok`, and a credential that holds a backslash
+    /// followed by `t` is found there.
+    pub(crate) fn occur_in_debug(&self, text: &str) -> bool {
+        self.occur_in(&format!("{text:?}"))
     }
 
     /// `text` with every form of a credential replaced by `***`.
@@ -147,8 +158,25 @@ fn after_scheme(value: &[u8]) -> Option<&[u8]> {
     Some(&rest[credential_start..])
 }
 
-/// Adds every form of the credential `bytes` to `variants`.
+/// Adds every form of the credential `bytes` to `variants`, and when it
+/// starts or ends with spaces or tabs, every form of it without them.
+///
+/// HTTP drops that whitespace from a field value, so what the server reads
+/// is the trimmed value. And a pretty-printing `Debug` (`{:#?}`) puts spaces
+/// in front of every line of a nested value: an error's alternate `Debug`
+/// with a line that starts with the rest of such a credential spells all of
+/// it once it is printed inside another value, at any depth, while the
+/// error's own rendering does not.
 fn push_variants(variants: &mut Vec<String>, bytes: &[u8]) {
+    let trimmed = bytes.trim_ascii();
+    if !trimmed.is_empty() && trimmed.len() != bytes.len() {
+        push_forms(variants, trimmed);
+    }
+    push_forms(variants, bytes);
+}
+
+/// Adds every form of `bytes` to `variants`.
+fn push_forms(variants: &mut Vec<String>, bytes: &[u8]) {
     let text = String::from_utf8_lossy(bytes);
     let quoted_debug = format!("{text:?}");
     // A sensitive value prints `Sensitive`; this one is not flagged, so it
@@ -156,7 +184,7 @@ fn push_variants(variants: &mut Vec<String>, bytes: &[u8]) {
     let header_debug = format!(
         "{:?}",
         HeaderValue::from_bytes(bytes)
-            .expect("invariant: the bytes are a header value's, or a part of one after a space")
+            .expect("invariant: the bytes are a header value's, or a part of one")
     );
     let bytes_debug = format!("{:?}", Bytes::copy_from_slice(bytes));
     let forms = [
@@ -213,9 +241,10 @@ pub(crate) enum Outcome {
     /// No rendering of any link, nor the message, holds a credential: the
     /// original chain and message are kept.
     Kept,
-    /// No link holds a credential, but the message built from the chain does:
-    /// escaping is not reversible, so a link's tab written as `\t` can spell a
-    /// credential no link holds. The message is replaced; the chain is kept.
+    /// No link holds a credential, but the message built from the chain, or
+    /// `{:?}` of it, does: escaping is not reversible, so a link's tab written
+    /// as `\t` can spell a credential no link holds. The message is replaced;
+    /// the chain is kept.
     MessageOnly,
     /// A link holds a credential, or the chain is longer than
     /// [`MAX_SCANNED_LINKS`]: the chain is replaced by this redacted copy.
@@ -251,7 +280,11 @@ pub(crate) fn copy_chain(
         link = current.source();
     }
     if !found {
-        return if credentials.occur_in(message) { Outcome::MessageOnly } else { Outcome::Kept };
+        return if credentials.occur_in(message) || credentials.occur_in_debug(message) {
+            Outcome::MessageOnly
+        } else {
+            Outcome::Kept
+        };
     }
     let mut below = None;
     for [display, debug, alternate_debug] in texts.into_iter().rev() {

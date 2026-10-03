@@ -508,3 +508,32 @@ fn a_redacted_link_prints_its_redacted_debug_and_keeps_the_chain_order() {
         assert_no_variant(&error, &credentials);
     }
 }
+
+/// A credential with spaces or tabs around it is also looked for without
+/// them, in every form, and a value of nothing but whitespace adds no empty
+/// form.
+#[test]
+fn a_credential_with_whitespace_around_it_is_also_found_without_it() {
+    let credentials = Credentials::new(&headers(&[
+        ("x-made-up-secret", "    tail-made-up"),
+        ("x-made-up-token", "\tlead\\made-up \t"),
+        ("x-other-secret", "   "),
+    ]));
+
+    for form in [
+        "    tail-made-up",
+        "tail-made-up",
+        "\tlead\\made-up \t",
+        "lead\\made-up",
+        "lead\\\\made-up",
+    ] {
+        assert!(
+            credentials.variants.contains(&form.to_owned()),
+            "{form:?}: {:?}",
+            credentials.variants
+        );
+    }
+    assert!(credentials.variants.iter().all(|form| !form.is_empty()));
+    assert_eq!(credentials.redact("Pretty {\ntail-made-up\n}"), "Pretty {\n***\n}");
+    assert_eq!(credentials.redact("sent lead\\made-up"), "sent ***");
+}
