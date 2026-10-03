@@ -39,6 +39,13 @@ through another serializer rounds integers beyond `u64`/`i64` to `f64`, as serde
 without `arbitrary_precision`. Cargo features are additive: enabling `sonic` anywhere in the
 graph selects sonic-rs for the SDK.
 
+A `serde_json::value::RawValue` inside a value the SDK writes for the caller (a state, an
+`extra_body` member, `Content::json`, `RawJson::from_value`) is written as its text with either
+backend. Two other raw forms are not: with `arbitrary_precision` and `sonic` together, a
+`serde_json::Number`, and so any number inside a `serde_json::Value`, is written as an object
+such as `{"$serde_json::private::Number":"1"}`; with the default backend, a `sonic_rs::LazyValue`
+or `sonic_rs::RawNumber` is written as an object such as `{"$sonic_rs::LazyValue":"[1]"}`.
+
 ## Runtime requirement
 
 Every network operation is `async` and runs on the caller's [Tokio](https://tokio.rs) runtime,
