@@ -589,22 +589,25 @@ data, so bodies appear only at `TRACE`.
 
 ## Security notes
 
-- **The API key** is held as a `secrecy::SecretString` until it becomes the `Authorization`
-  header value, which is flagged sensitive; no `Debug` or `Display` of this crate prints it, and
-  no error message repeats it unless a transport put it there (see below). The key is copied
-  once into the `Authorization` header value, which is not zeroed and lives as long as the client
-  and every request built from it; `HeaderValue` is `Bytes`-backed and shared by reference count,
-  so it cannot be zeroed on drop. Leading and trailing whitespace is stripped from it, as the Python
-  SDK strips it; a key that is then empty, or holds whitespace, a control or a non-ASCII
-  character, is refused when the client is built. When a transport fails with an error of its
-  own type that prints the request's credentials, or with a connection error of the SDK's type,
-  their values are replaced by `***` first, as the Python SDK does since 0.7.1: the key and every
-  secret or sensitive header value, in the forms the documentation of
-  `ClientBuilder::build_with_service` lists. A connection error's message whose `Debug` form
-  would still spell one of them is replaced by a fixed text instead. Any other error of the SDK's
-  type that a custom transport returns, an `ApiError` built from a body of its choosing included,
-  is passed through unsearched. An `http://` base URL sends the key unencrypted, so use one only
-  for a local proxy or a test server.
+- **The API key** is held as a `secrecy::SecretString` until it becomes the `Authorization` header
+  value, which is flagged sensitive. The SDK writes it into no `Debug`, `Display` or error message
+  of its own; text from outside the SDK, a transport's error or a server's response that repeats the
+  key, can carry it (see below). The key is copied once into the `Authorization` header value, which
+  is not zeroed and lives as long as the client and every request built from it; `HeaderValue` is
+  `Bytes`-backed and shared by reference count, so it cannot be zeroed on drop. Leading and trailing
+  whitespace is stripped from it, as the Python SDK strips it; a key that is then empty, or holds
+  whitespace, a control or a non-ASCII character, is refused when the client is built. When a
+  transport fails with an error of its own type that prints the request's credentials, or with a
+  connection error of the SDK's type, their values are replaced by `***` first, as the Python SDK
+  does since 0.7.1: the key and every secret or sensitive header value, in the forms the
+  documentation of `ClientBuilder::build_with_service` lists. A connection error's message whose
+  `Debug` form would still spell one of them is replaced by a fixed text instead. Any other error of
+  the SDK's type that a custom transport returns, an `ApiError` built from a body of its choosing
+  included, is passed through unsearched. An `ApiError` built from a response is not searched
+  either: its `message()`, and with it its `Display` and `Debug`, holds the server's text escaped
+  and cut at 200 characters, and `body()` and `headers()` return the response as received; only
+  `Debug` reduces the body and the headers to their length and count. An `http://` base URL sends
+  the key unencrypted, so use one only for a local proxy or a test server.
 - **Server text is escaped and cut.** Every message read from a response body (whichever member
   it came from, or the body itself when no member holds one) has its control characters and
   text-hiding format characters written as Rust escapes (`\n`, `\u{1b}`, `\u{202e}`) and is cut
