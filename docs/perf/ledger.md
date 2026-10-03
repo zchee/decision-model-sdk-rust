@@ -9,7 +9,7 @@ its acceptance criteria, risks, tasks and revisions.
 
 The crates were renamed on 2026-10-03 and their versions restarted at 0.1.0. The commands below name the packages and
 the environment variables by their current names; a version named in an entry written before that date is a release
-made under the earlier names, and the tags such an entry names are tags of that time.
+made under the earlier names.
 
 ## Environment
 
@@ -27,7 +27,7 @@ Measurement rules followed: no benchmark ran in parallel with another benchmark 
 `target-cpu`; allocation numbers are taken on the **second identical call**, after one warm-up call of the same shape;
 every dhat scenario is its own process, because dhat attributes the whole process to one profiler.
 
-Reproduce everything from a checkout of the tag `v0.1.0` (`git worktree add ../spikes-v0.1.0 v0.1.0`), which keeps the
+Reproduce everything from a checkout of commit `2ef9682` (`git worktree add ../spikes-2ef9682 2ef9682`), which keeps the
 five spike crates this ledger names (`spikes/sonic-probe`, `spikes/encode-buffer`, `spikes/transport-probe`,
 `spikes/alloc-inventory`, `spikes/deps-probe`); none of them is kept on `main`:
 
