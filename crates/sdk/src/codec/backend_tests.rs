@@ -5,7 +5,9 @@
 //! caller value takes (`Content::json`, a request's state and extra members,
 //! a question field), and compared with what serde_json writes for it. With
 //! the default engine that comparison is the engine against itself; with
-//! `sonic` it is the parity the bridge exists for.
+//! `sonic` it is the parity the bridge exists for. The last tests compare
+//! the bridge with the engine it wraps on values without a raw value: the
+//! bridge passes every other call on unchanged.
 
 use std::collections::BTreeMap;
 
@@ -237,4 +239,139 @@ proptest! {
         prop_assert_eq!(sdk_encoded(&value), text.clone());
         prop_assert_eq!(sdk_encoded(&nested), serde_json_encoded(&nested));
     }
+}
+
+#[derive(Serialize)]
+struct Newtype<'a>(&'a RawValue);
+
+#[derive(Serialize)]
+struct Pair<'a>(u8, &'a RawValue);
+
+/// A map written one key and one value at a time, as a hand-written
+/// `Serialize` may write it; the standard maps write whole entries.
+struct SplitEntry<'a>(&'a RawValue);
+
+impl Serialize for SplitEntry<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_key("k")?;
+        map.serialize_value(self.0)?;
+        map.end()
+    }
+}
+
+#[test]
+fn a_raw_value_in_a_newtype_a_tuple_struct_or_a_split_map_entry_is_written_as_serde_json_writes_it()
+{
+    for text in every_kind() {
+        let value = raw(&text);
+        assert_eq!(serde_json_encoded(&Newtype(&value)), text, "serde_json, newtype struct");
+        assert_eq!(sdk_encoded(&Newtype(&value)), text, "the SDK, newtype struct");
+
+        let pair = format!("[7,{text}]");
+        assert_eq!(serde_json_encoded(&Pair(7, &value)), pair, "serde_json, tuple struct");
+        assert_eq!(sdk_encoded(&Pair(7, &value)), pair, "the SDK, tuple struct");
+
+        let split = format!(r#"{{"k":{text}}}"#);
+        assert_eq!(serde_json_encoded(&SplitEntry(&value)), split, "serde_json, split entry");
+        assert_eq!(sdk_encoded(&SplitEntry(&value)), split, "the SDK, split entry");
+    }
+}
+
+/// `value` written through `to_writer`, the bridge included under `sonic`.
+fn bridged<T: Serialize + ?Sized>(value: &T) -> Result<String, String> {
+    let mut buffer = Vec::new();
+    super::to_writer(&mut buffer, value).map_err(|error| error.to_string())?;
+    Ok(String::from_utf8(buffer).expect("the codec emits UTF-8"))
+}
+
+/// `value` written by the engine's own serializer, with no bridge.
+fn unbridged<T: Serialize + ?Sized>(value: &T) -> Result<String, String> {
+    let mut buffer = Vec::new();
+    let mut serializer = super::Serializer::new(&mut buffer);
+    value.serialize(&mut serializer).map_err(|error| error.to_string())?;
+    Ok(String::from_utf8(buffer).expect("the engine emits UTF-8"))
+}
+
+/// A value written through `Serializer::collect_str`.
+struct Collected<D>(D);
+
+impl<D: std::fmt::Display> Serialize for Collected<D> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
+/// A `Display` that writes its text in pieces that need escaping.
+struct Pieces;
+
+impl std::fmt::Display for Pieces {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for piece in ["say ", "\"", "caf\u{e9}", "\"", "\n", "\u{1}"] {
+            formatter.write_str(piece)?;
+        }
+        Ok(())
+    }
+}
+
+/// A `Display` that writes part of its text and then fails, which breaks the
+/// contract of `Display`: the engines panic on it.
+struct Failing;
+
+impl std::fmt::Display for Failing {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("partial")?;
+        Err(std::fmt::Error)
+    }
+}
+
+#[test]
+fn a_value_without_a_raw_value_is_written_as_the_engine_itself_writes_it() {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+    let address = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
+    let socket = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8080);
+    let cases = [
+        ("address", bridged(&address), unbridged(&address)),
+        ("socket", bridged(&socket), unbridged(&socket)),
+        ("i128 min", bridged(&i128::MIN), unbridged(&i128::MIN)),
+        ("i128 max", bridged(&i128::MAX), unbridged(&i128::MAX)),
+        ("u128 max", bridged(&u128::MAX), unbridged(&u128::MAX)),
+        ("collected", bridged(&Collected(Pieces)), unbridged(&Collected(Pieces))),
+        ("in a list", bridged(&[address]), unbridged(&[address])),
+    ];
+    for (label, bridged, unbridged) in cases {
+        assert_eq!(bridged, unbridged, "{label}");
+    }
+
+    // Both engines are human-readable, so an address is its text; a
+    // serializer that says otherwise is given the octets instead.
+    assert_eq!(bridged(&address).as_deref(), Ok(r#""192.0.2.1""#));
+    assert_eq!(bridged(&socket).as_deref(), Ok(r#""[::1]:8080""#));
+    // Both engines write integers wider than 64 bits as numbers; serde's
+    // fallback for a serializer that has no such method refuses them.
+    assert_eq!(bridged(&i128::MIN), Ok(i128::MIN.to_string()));
+    assert_eq!(bridged(&u128::MAX), Ok(u128::MAX.to_string()));
+    // Built at run time, as in `every_kind`; the non-ASCII letter is written
+    // as it is and the control character as a six-character escape.
+    let escaped = format!(r#""say {b}"caf{e}{b}"{b}n{b}u0001""#, b = '\\', e = '\u{e9}');
+    assert_eq!(bridged(&Collected(Pieces)), Ok(escaped));
+}
+
+#[test]
+fn a_display_that_fails_panics_as_it_does_in_the_engine_itself() {
+    fn panic_text(encode: impl FnOnce() -> Result<String, String>) -> Option<String> {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(encode)).err()?;
+        payload
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+    }
+
+    // The engine's own text, not the standard library's for a failing
+    // `to_string`: the bridge hands the `Display` to the engine's writer.
+    let unbridged = panic_text(|| unbridged(&Collected(Failing)));
+    assert!(unbridged.is_some(), "the engine panics on a failing Display");
+    assert_eq!(panic_text(|| bridged(&Collected(Failing))), unbridged);
 }
