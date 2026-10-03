@@ -307,7 +307,7 @@ jobs:
         run: |
           test -d crates/adapter-live-tests
           test -d crates/live-tests
-          if grep -rnwE 'TYPESAFE_API_KEY|API_KEY_ENV|DECISION_MODEL_LIVE_TESTS' crates/adapter-live-tests; then
+          if grep -rnwE 'DECISION_MODEL_API_KEY|API_KEY_ENV|DECISION_MODEL_LIVE_TESTS' crates/adapter-live-tests; then
             exit 1
           fi
           if grep -rnwE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|DECISION_MODEL_ADAPTER_LIVE_TESTS' crates/live-tests; then

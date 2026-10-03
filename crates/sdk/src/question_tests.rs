@@ -851,7 +851,11 @@ struct Spam {
 #[cfg(all(feature = "macros", feature = "hyper"))]
 #[test]
 fn ask_is_system_one_with_the_sets_questions() {
-    let client = Client::builder().api_key("test-key").build().expect("the client builds");
+    let client = Client::builder()
+        .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
+        .build()
+        .expect("the client builds");
     let asked = client.ask::<Spam>("state").model("jev-2").header("x-team", "billing");
     let built = client
         .system_one("state", Spam::prepared())

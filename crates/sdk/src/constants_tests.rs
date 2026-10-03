@@ -6,17 +6,17 @@
 
 use super::*;
 
+/// The Python SDK's names with this crate's prefix, which names no vendor:
+/// see the README's deviations.
 #[test]
-fn environment_variable_names_match_the_python_sdk() {
-    assert_eq!(API_KEY_ENV, "TYPESAFE_API_KEY");
-    assert_eq!(BASE_URL_ENV, "TYPESAFE_BASE_URL");
-    assert_eq!(DEFAULT_MODEL_ENV, "TYPESAFE_DEFAULT_MODEL");
+fn environment_variable_names_carry_the_decision_model_prefix() {
+    assert_eq!(API_KEY_ENV, "DECISION_MODEL_API_KEY");
+    assert_eq!(BASE_URL_ENV, "DECISION_MODEL_BASE_URL");
+    assert_eq!(DEFAULT_MODEL_ENV, "DECISION_MODEL_DEFAULT_MODEL");
 }
 
 #[test]
 fn defaults_match_the_python_sdk_and_the_documented_cap() {
-    assert_eq!(DEFAULT_BASE_URL, "https://api.typesafe.ai");
-    assert_eq!(DEFAULT_MODEL, "jev-latest");
     assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(10));
     assert_eq!(DEFAULT_MAX_RESPONSE_BYTES, 16_777_216);
 }

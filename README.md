@@ -3,7 +3,8 @@
 An async Rust client for decision models served through the System One API: the System One
 endpoint (`POST /v1/systemone`), which answers named questions about a state, and the model
 listing (`GET /v1/models`). The API and its decision models were first offered by
-[TypeSafe AI](https://typesafe.ai) (Jev), and other vendors serve them too. The crate is a port
+[TypeSafe AI](https://typesafe.ai) (Jev), and other vendors serve them too; a client talks to the
+vendor whose base URL it is given, and the crate has no default one. The crate is a port
 of TypeSafe AI's official Python SDK,
 [typesafe-sdk-python](https://github.com/typesafe-ai/typesafe-sdk-python) 0.7.2 (commit
 `f078f1e`); the places where it behaves differently on purpose are listed under
@@ -61,7 +62,8 @@ use decision_model_sdk::{Choice, Client, Noul, Questions, Score};
 
 #[tokio::main]
 async fn main() -> Result<(), decision_model_sdk::Error> {
-    // Reads TYPESAFE_API_KEY (and optionally TYPESAFE_BASE_URL, TYPESAFE_DEFAULT_MODEL).
+    // Reads DECISION_MODEL_API_KEY and DECISION_MODEL_BASE_URL (and optionally
+    // DECISION_MODEL_DEFAULT_MODEL).
     let client = Client::from_env()?;
 
     let questions = Questions::new()
@@ -187,7 +189,7 @@ what failed:
 
 | `ErrorKind` | Meaning |
 | --- | --- |
-| `Config` | The client could not be built: no API key, a key that is blank or holds whitespace, a control or a non-ASCII character once trimmed, a base URL that is not an absolute `http`/`https` URL without userinfo, query or fragment, a zero deadline or size limit, an environment variable that is not UTF-8, a default header that cannot be sent. |
+| `Config` | The client could not be built: no API key, a key that is blank or holds whitespace, a control or a non-ASCII character once trimmed, no base URL, a base URL that is not an absolute `http`/`https` URL without userinfo, query or fragment, a zero deadline or size limit, an environment variable that is not UTF-8, a default header that cannot be sent. Or a request named no model on a client without a default model; it was never sent. |
 | `InvalidRequest` | The request was never sent: a header that is not a valid header, a zero deadline, a `state` that encodes as a number, a boolean or `null`, a value that cannot be encoded as JSON, an invalid question set. |
 | `Api(ApiError)` | The server answered with a status outside 2xx. |
 | `Connection` | No HTTP response was read: the connection failed, was refused, or broke. `source()` leads to the transport's error, or to a redacted copy of its chain when that chain printed a credential of the request. |
@@ -344,14 +346,17 @@ cancels the attempt in flight and every retry after it.
 
 ## Configuration
 
-`Client::from_env()` is `Client::builder().build()`. Every builder setting is optional; the
-first three fall back to the environment, then to a default:
+`Client::from_env()` is `Client::builder().build()`. The first three settings fall back to the
+environment and have no default beyond it: a client is built only with an API key and a base URL,
+and a client without a default model sends only the requests that name their model with
+`.model(...)`; any other request fails with a `Config` error before anything is sent. Every
+other setting is optional:
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
-| `api_key` | `TYPESAFE_API_KEY` | none: building fails |
-| `base_url` | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` |
-| `default_model` | `TYPESAFE_DEFAULT_MODEL` | `jev-latest` |
+| `api_key` | `DECISION_MODEL_API_KEY` | none: building fails |
+| `base_url` | `DECISION_MODEL_BASE_URL` | none: building fails |
+| `default_model` | `DECISION_MODEL_DEFAULT_MODEL` | none: each request names its model |
 | `timeout` / `no_timeout` (per attempt) | - | 10 s |
 | `max_response_bytes` | - | 16 MiB |
 | `default_header(name, value)` | - | none |
@@ -432,7 +437,11 @@ impl tower_service::Service<Request<Body>> for Canned {
 #[tokio::main]
 async fn main() -> Result<(), decision_model_sdk::Error> {
     let answer = r#"{"model":"jev-latest","usage":{},"answers":{"spam":{"type":"noul","noul":0.98}}}"#;
-    let client = ClientBuilder::new().api_key("test-key").build_with_service(Canned(answer))?;
+    let client = ClientBuilder::new()
+        .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
+        .default_model("jev-latest")
+        .build_with_service(Canned(answer))?;
     let questions = Questions::new().noul("spam", Noul::new().instructions("Spam?")).prepare()?;
     let response = client.system_one("Buy now!", &questions).send().await?;
     assert_eq!(response.answers().noul("spam").map(|answer| answer.noul()), Some(0.98));
@@ -646,14 +655,15 @@ SDK in `crates/sdk`, `crates/macros`, `crates/test-support` and the System One a
 
 `crates/live-tests` holds the tests against the live API. It is a workspace member, so `clippy
 --workspace` compiles it, but not a default member. **Its tests make real, billed calls** on the
-key's account when both `DECISION_MODEL_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are set and a command
+key's account when both `DECISION_MODEL_LIVE_TESTS=1` and `DECISION_MODEL_API_KEY` are set and a command
 reaches them: `cargo test --workspace`, `cargo nextest run --workspace`, or anything naming
-`-p decision-model-sdk-live-tests`. Without either variable they fail, never skip, before any
-request is made, so a key exported for other work does not make `--workspace` bill anyone; it
+`-p decision-model-sdk-live-tests`. They call TypeSafe AI's API (`https://api.typesafe.ai`,
+model `jev-latest`, both named in the crate), so the key must be one it issued. Without either
+variable they fail, never skip, before any request is made, so a key exported for other work does not make `--workspace` bill anyone; it
 makes those tests fail instead. Run them only on purpose:
 
 ```sh
-DECISION_MODEL_LIVE_TESTS=1 TYPESAFE_API_KEY=... cargo nextest run -p decision-model-sdk-live-tests
+DECISION_MODEL_LIVE_TESTS=1 DECISION_MODEL_API_KEY=... cargo nextest run -p decision-model-sdk-live-tests
 ```
 
 `crates/adapter-live-tests` is the second billed member: the adapter's tests against the live
@@ -687,6 +697,9 @@ command above carries `--no-fail-fast --retries 0`.
 | Python SDK | This crate | Why |
 | --- | --- | --- |
 | Synchronous `TypeSafeClient` | No blocking client; async only | Scope: one client, on Tokio. Upstream runs most client tests against both its clients; this crate ports the async half. |
+| `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` | `DECISION_MODEL_API_KEY`, `DECISION_MODEL_BASE_URL`, `DECISION_MODEL_DEFAULT_MODEL`; the `TYPESAFE_` names are not read, not even as a fallback | The crate serves any vendor's decision model: a variable named after one vendor would be read for a client of another, and its key sent there. |
+| Base URL defaults to `https://api.typesafe.ai` | No default base URL: building fails without `base_url` or `DECISION_MODEL_BASE_URL`, with the same `Config` error as a missing key | The crate serves any vendor's decision model: a default would silently send the key to one vendor. |
+| Model defaults to `jev-latest` | No default model: a request that names none, on a client without `default_model` or `DECISION_MODEL_DEFAULT_MODEL`, fails with a `Config` error before anything is sent | The crate serves any vendor's decision model: a default would silently ask one vendor's model of whichever vendor the base URL names. |
 | Timeout per httpx2 phase; `httpx2.Timeout` objects | One total deadline per attempt (default 10 s), an optional `connect_timeout`, and `no_timeout()` | One timer per attempt. |
 | `http_client.timeout` takes precedence | A custom transport owns its own timeouts; the SDK deadline still wraps each attempt | The transport is the caller's service, configured by the caller. |
 | `http_client=` or `transport=`, mutually exclusive | One builder with two terminal methods: `build()` needs the `hyper` feature (on by default) and gives the default transport, `build_with_service(s)` a custom one; `add_root_certificate`, `http_version` and `connect_timeout` are a `Config` error with a custom one | A client needs a key and a base URL whatever sends the bytes; a setting that cannot apply is refused, never ignored. |

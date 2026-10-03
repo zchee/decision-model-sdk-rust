@@ -10,6 +10,7 @@ use crate::{ErrorKind, Noul, Questions, RawJson, transport::HyperTransport};
 fn client() -> Client<HyperTransport> {
     Client::builder()
         .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
         .default_model("jev-latest")
         .build_with_env(|_: &str| None::<String>)
         .expect("the client builds")

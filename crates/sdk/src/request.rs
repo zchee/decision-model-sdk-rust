@@ -20,6 +20,7 @@ use crate::{
     client::Client,
     codec::{self, EncodeError},
     config::ZERO_TIMEOUT,
+    constants::DEFAULT_MODEL_ENV,
     de::{self, AnswerSet},
     error::Error,
     question::{PreparedQuestions, upsert},
@@ -152,7 +153,9 @@ impl<'a, S, T, A> SystemOne<'a, S, T, A>
 where
     T: ?Sized,
 {
-    /// The model to ask, instead of the client's default.
+    /// The model to ask, instead of the client's default. A client without a
+    /// default model sends only a request that names one, here or as an
+    /// [`extra_body`](Self::extra_body) member named `model`.
     pub fn model(mut self, model: impl Into<Cow<'a, str>>) -> Self {
         self.model = Some(model.into());
         self
@@ -242,6 +245,9 @@ where
     ///
     /// # Errors
     ///
+    /// - [`ErrorKind::Config`](crate::ErrorKind::Config), before anything is
+    ///   sent: the request names no model and the client has no default
+    ///   model.
     /// - [`ErrorKind::InvalidRequest`](crate::ErrorKind::InvalidRequest),
     ///   before anything is sent: a header that is not a valid header, a
     ///   deadline of zero, a `state` that is not a JSON string, object or
@@ -318,6 +324,7 @@ where
         };
 
         let mut state_is_json_content = true;
+        let mut model_is_named = true;
         let body = codec::encode_body(|buffer| {
             buffer.extend_from_slice(br#"{"state":"#);
             match extra(STATE) {
@@ -338,7 +345,13 @@ where
             match (extra(MODEL), &self.model) {
                 (Some(bytes), _) => buffer.extend_from_slice(bytes),
                 (None, Some(model)) => codec::write_json_string(buffer, model),
-                (None, None) => buffer.extend_from_slice(&self.client.shared().model_json),
+                (None, None) => match &self.client.shared().model_json {
+                    Some(default_model) => buffer.extend_from_slice(default_model),
+                    None => {
+                        model_is_named = false;
+                        return Ok(());
+                    }
+                },
             }
             buffer.extend_from_slice(br#","questions":"#);
             buffer.extend_from_slice(extra(QUESTIONS).unwrap_or(self.questions.as_bytes()));
@@ -354,6 +367,12 @@ where
             Ok(())
         });
         let body = body.map_err(|error| encode_failure("the state", &error))?;
+        if !model_is_named {
+            return Err(Error::config(format!(
+                "No model was named. Pass model on the request, or set default_model on the \
+                 client or the {DEFAULT_MODEL_ENV} environment variable."
+            )));
+        }
         if !state_is_json_content {
             return Err(Error::invalid_request(
                 "The state must be a JSON string, object or array; \

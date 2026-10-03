@@ -88,6 +88,65 @@ fn api_error(error: &Error) -> &ApiError {
     }
 }
 
+// ----------------------------------------------------------- the model
+
+/// A client without a default model sends only the requests that name one.
+/// A request that names none fails before anything reaches the server, with
+/// a configuration error naming the request's setter, the builder method and
+/// the variable; a model named on the request, or as an `extra_body` member,
+/// is sent as it is.
+#[tokio::test]
+async fn a_request_naming_no_model_fails_before_any_io_when_the_client_has_none() {
+    const MESSAGE: &str = "No model was named. Pass model on the request, or set \
+                           default_model on the client or the DECISION_MODEL_DEFAULT_MODEL \
+                           environment variable.";
+    for protocol in Protocol::ALL {
+        let server =
+            TestServer::start(protocol, |_| async { json_response(StatusCode::OK, RESULT) })
+                .await
+                .expect("the test server starts");
+        let client = loopback_builder(&server, protocol)
+            .retry(RetryPolicy::default().max_retries(0))
+            .build()
+            .expect("a client without a default model builds");
+        let questions = one_raw_question();
+
+        let error = client
+            .system_one("hi", &questions)
+            .send()
+            .await
+            .expect_err("a request naming no model must fail");
+        assert!(matches!(error.kind(), ErrorKind::Config), "{protocol:?}: {error:?}");
+        assert_eq!(error.to_string(), MESSAGE, "{protocol:?}");
+        assert!(StdError::source(&error).is_none(), "{protocol:?}: {error:?}");
+        assert!(server.requests().is_empty(), "{protocol:?}: a request reached the server");
+        assert!(server.connections().is_empty(), "{protocol:?}: a connection was opened");
+
+        client
+            .system_one("hi", &questions)
+            .model("jev-2")
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{protocol:?}: a model on the request: {error}"));
+        client
+            .system_one("hi", &questions)
+            .extra_body("model", "jev-3")
+            .send()
+            .await
+            .unwrap_or_else(|error| panic!("{protocol:?}: a model as a body member: {error}"));
+        let bodies: Vec<_> =
+            server.requests().iter().map(|request| body_text(request).to_owned()).collect();
+        assert_eq!(
+            bodies,
+            [
+                r#"{"state":"hi","model":"jev-2","questions":{"q":{"type":"noul","instructions":"?"}}}"#,
+                r#"{"state":"hi","model":"jev-3","questions":{"q":{"type":"noul","instructions":"?"}}}"#,
+            ],
+            "{protocol:?}"
+        );
+    }
+}
+
 // --------------------------------------------------------- round trip
 
 /// Upstream `test_round_trip[dataclass|raw|mixed]`: the body, the endpoint,
@@ -1660,6 +1719,7 @@ async fn a_custom_transport_carries_every_request_with_the_sdk_headers() {
     let client = ClientBuilder::new()
         .api_key("test-key")
         .base_url("https://api.typesafe.ai")
+        .default_model("jev-latest")
         .default_header("x-sdk-default", "sdk")
         .default_header("x-call", "sdk")
         .build_with_service(forward.clone())

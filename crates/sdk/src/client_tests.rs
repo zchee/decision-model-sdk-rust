@@ -173,9 +173,9 @@ impl tower_service::Service<http::Request<crate::Body>> for InMemory {
 #[test]
 fn settings_the_builder_leaves_unset_come_from_the_environment() {
     let environment = |name: &str| match name {
-        "TYPESAFE_API_KEY" => Some(OsString::from("env-key")),
-        "TYPESAFE_BASE_URL" => Some(OsString::from("http://127.0.0.1:9/prefix/")),
-        "TYPESAFE_DEFAULT_MODEL" => Some(OsString::from("env-model")),
+        "DECISION_MODEL_API_KEY" => Some(OsString::from("env-key")),
+        "DECISION_MODEL_BASE_URL" => Some(OsString::from("http://127.0.0.1:9/prefix/")),
+        "DECISION_MODEL_DEFAULT_MODEL" => Some(OsString::from("env-model")),
         _ => None,
     };
     let client =
@@ -183,9 +183,9 @@ fn settings_the_builder_leaves_unset_come_from_the_environment() {
     let shared = client.shared();
 
     assert_eq!(shared.config.endpoints().system_one(), "http://127.0.0.1:9/prefix/v1/systemone");
-    assert_eq!(shared.config.default_model(), "env-model");
+    assert_eq!(shared.config.default_model(), Some("env-model"));
     assert_eq!(shared.post_headers["authorization"], "Bearer env-key");
-    assert_eq!(&shared.model_json[..], b"\"env-model\"");
+    assert_eq!(shared.model_json.as_deref(), Some(&b"\"env-model\""[..]));
 }
 
 #[cfg(feature = "hyper")]
@@ -238,7 +238,8 @@ fn a_custom_transport_refuses_the_settings_only_the_default_one_has() {
         ),
     ];
     for (configure, named) in rows {
-        let builder = configure(ClientBuilder::new().api_key("test-key"));
+        let builder =
+            configure(ClientBuilder::new().api_key("test-key").base_url("https://api.typesafe.ai"));
         let error = builder.build_with_service(InMemory).expect_err("it must be refused");
         assert!(matches!(error.kind(), ErrorKind::Config), "{error:?}");
         assert_eq!(
@@ -275,8 +276,12 @@ fn a_default_header_that_cannot_be_sent_is_refused_without_its_value() {
         ),
     ];
     for ((name, value), message) in rows {
-        let rendered =
-            config_error(ClientBuilder::new().api_key("test-key").default_header(name, value));
+        let rendered = config_error(
+            ClientBuilder::new()
+                .api_key("test-key")
+                .base_url("https://api.typesafe.ai")
+                .default_header(name, value),
+        );
         assert_eq!(rendered, message);
         assert!(!rendered.contains(secret));
     }
@@ -285,8 +290,12 @@ fn a_default_header_that_cannot_be_sent_is_refused_without_its_value() {
 #[cfg(feature = "hyper")]
 #[test]
 fn a_zero_connect_timeout_is_refused() {
-    let rendered =
-        config_error(ClientBuilder::new().api_key("test-key").connect_timeout(Duration::ZERO));
+    let rendered = config_error(
+        ClientBuilder::new()
+            .api_key("test-key")
+            .base_url("https://api.typesafe.ai")
+            .connect_timeout(Duration::ZERO),
+    );
     assert_eq!(rendered, "connect_timeout must be a positive number of seconds.");
 }
 
@@ -295,6 +304,7 @@ fn a_zero_connect_timeout_is_refused() {
 fn a_later_default_header_of_a_name_replaces_an_earlier_one() {
     let client = ClientBuilder::new()
         .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
         .default_header("X-Team", "first")
         .default_header("x-team", "second")
         .build_with_env(empty)
@@ -372,7 +382,7 @@ fn a_client_prints_its_settings_and_transport_and_nothing_secret() {
         debug,
         concat!(
             r#"Client { config: Config { endpoints: ["POST https://example.test/prefix/v1/systemone", "#,
-            r#""GET https://example.test/prefix/v1/models"], default_model: "jev-latest", "#,
+            r#""GET https://example.test/prefix/v1/models"], default_model: None, "#,
             r#"timeout: None, max_response_bytes: 16777216, authorization: <redacted>, "#,
             r#"default_headers: ["x-client-secret"] }, "#,
             "transport: HyperTransport { http_version: Http2Only, extra_roots: 0, ",
@@ -387,7 +397,11 @@ fn a_client_prints_its_settings_and_transport_and_nothing_secret() {
 #[cfg(feature = "hyper")]
 #[test]
 fn a_clone_shares_one_client() {
-    let client = ClientBuilder::new().api_key("test-key").build_with_env(empty).expect("it builds");
+    let client = ClientBuilder::new()
+        .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
+        .build_with_env(empty)
+        .expect("it builds");
     let clone = client.clone();
     assert!(std::ptr::eq(client.shared(), clone.shared()));
 }
@@ -420,6 +434,7 @@ fn a_later_user_agent_product_or_runtime_switch_replaces_an_earlier_one() {
     let sdk = format!("decision-model-sdk/{}", env!("CARGO_PKG_VERSION"));
     let client = ClientBuilder::new()
         .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
         .user_agent_product("not a token")
         .user_agent_product("app/2")
         .build_with_env(empty)
@@ -429,6 +444,7 @@ fn a_later_user_agent_product_or_runtime_switch_replaces_an_earlier_one() {
     let rendered = config_error(
         ClientBuilder::new()
             .api_key("test-key")
+            .base_url("https://api.typesafe.ai")
             .user_agent_product("app/2")
             .user_agent_product("app"),
     );
@@ -440,7 +456,8 @@ fn a_later_user_agent_product_or_runtime_switch_replaces_an_earlier_one() {
 
     let rows = [(vec![false], false), (vec![false, true], true), (vec![true, false], false)];
     for (switches, expected) in rows {
-        let mut builder = ClientBuilder::new().api_key("test-key");
+        let mut builder =
+            ClientBuilder::new().api_key("test-key").base_url("https://api.typesafe.ai");
         for send in &switches {
             builder = builder.send_runtime_header(*send);
         }
@@ -459,12 +476,18 @@ fn a_user_agent_product_that_is_not_a_token_fails_either_way_of_building() {
                    (RFC 9110, section 10.1.5): it contains whitespace.";
 
     #[cfg(feature = "hyper")]
-    let built = config_error(ClientBuilder::new().api_key("test-key").user_agent_product(product));
+    let built = config_error(
+        ClientBuilder::new()
+            .api_key("test-key")
+            .base_url("https://api.typesafe.ai")
+            .user_agent_product(product),
+    );
     #[cfg(feature = "hyper")]
     assert_eq!(built, message);
 
     let error = ClientBuilder::new()
         .api_key("test-key")
+        .base_url("https://api.typesafe.ai")
         .user_agent_product(product)
         .build_with_service(InMemory)
         .expect_err("it must be refused");

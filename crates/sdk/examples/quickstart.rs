@@ -1,11 +1,14 @@
 //! Asks three questions - a yes/no, a choice and a score - about one
 //! support message and prints each answer.
 //!
-//! The client is configured by the environment: `TYPESAFE_API_KEY`, and
-//! optionally `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`. Run it with
+//! The client is configured by the environment: `DECISION_MODEL_API_KEY`,
+//! `DECISION_MODEL_BASE_URL` and `DECISION_MODEL_DEFAULT_MODEL`, the vendor's
+//! API and model (there is no default for either). Run it with, for
+//! TypeSafe AI's,
 //!
 //! ```sh
-//! TYPESAFE_API_KEY=... cargo run --example quickstart
+//! DECISION_MODEL_API_KEY=... DECISION_MODEL_BASE_URL=https://api.typesafe.ai \
+//!     DECISION_MODEL_DEFAULT_MODEL=jev-latest cargo run --example quickstart
 //! ```
 //!
 //! Every call is billed by the API.

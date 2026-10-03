@@ -7,9 +7,9 @@ answer. Results that contradict the plan are marked **Contradicts the plan** and
 The plan is the port's plan, which is not part of this repository; identifiers such as AC-P1, R17, T0.1 and v3.5 name
 its acceptance criteria, risks, tasks and revisions.
 
-The crates were renamed on 2026-10-03 and their versions restarted at 0.1.0. The commands below name the packages by
-their current names; a version named in an entry written before that date is a release made under the earlier names,
-and the tags such an entry names are tags of that time.
+The crates were renamed on 2026-10-03 and their versions restarted at 0.1.0. The commands below name the packages and
+the environment variables by their current names; a version named in an entry written before that date is a release
+made under the earlier names, and the tags such an entry names are tags of that time.
 
 ## Environment
 
@@ -1038,7 +1038,7 @@ authenticated idle test.
 ## S3 - request compression
 
 Date: 2026-09-19 (the server's clock read Fri, 18 Sep 2026 21:45 GMT). Made with `curl` against the live API **with**
-an API key, taken from the environment variable `TYPESAFE_API_KEY` and passed on stdin, so it appears in no process
+an API key, taken from the environment variable `DECISION_MODEL_API_KEY` and passed on stdin, so it appears in no process
 argument, file or output. Two API calls in total. The header name and scheme come from upstream
 `src/typesafe_sdk/_core/transport.py` (`Authorization: Bearer <key>`); the request shape comes from the public
 `https://api.typesafe.ai/openapi.json` (`SystemOneRequest`), and `jev-latest` is the only model name its documentation
@@ -1055,11 +1055,11 @@ gzip -9 -n -c small.json > small.json.gz          # 133 -> 123 bytes; gzip -dc g
 # 1: control, uncompressed
 curl -sS -o c1.body -D c1.hdr -w '%{http_code}\n' -X POST https://api.typesafe.ai/v1/systemone \
   -H 'Content-Type: application/json' --data-binary @small.json \
-  -H @- <<< "Authorization: Bearer ${TYPESAFE_API_KEY}"
+  -H @- <<< "Authorization: Bearer ${DECISION_MODEL_API_KEY}"
 # 2: probe, the same bytes gzip-compressed
 curl -sS -o c2.body -D c2.hdr -w '%{http_code}\n' -X POST https://api.typesafe.ai/v1/systemone \
   -H 'Content-Type: application/json' -H 'Content-Encoding: gzip' --data-binary @small.json.gz \
-  -H @- <<< "Authorization: Bearer ${TYPESAFE_API_KEY}"
+  -H @- <<< "Authorization: Bearer ${DECISION_MODEL_API_KEY}"
 ```
 
 | # | Request | Bytes sent | Status | `content-type` | `x-envoy-upstream-service-time` | Response body |
@@ -1806,7 +1806,7 @@ fuzzing done on x86_64, where sonic-rs picks other SIMD paths.
 Since 0.2.0, serde_json 1.0.151 is the default backend; `sonic` selects sonic-rs 0.5.10.
 The implementation measured here is `873f431`. Measurements began at 2026-09-24 03:09:13 JST
 (the measurement command's `date` output), on Darwin arm64 with rustc 1.98.1 and cargo 1.98.1.
-`RUSTFLAGS` and `TYPESAFE_API_KEY` were unset for every cargo invocation. No benchmark ran in
+`RUSTFLAGS` and `DECISION_MODEL_API_KEY` were unset for every cargo invocation. No benchmark ran in
 parallel with these measurements, and no CPU-specific flags were used.
 
 The earlier sonic numbers in S1, S6 and Phase 5 remain unchanged as historical measurements.
@@ -1832,7 +1832,7 @@ for backend in sonic serde; do
   fi
   for round in 1 2 3; do
     for test in alloc_encode alloc_decode alloc_call alloc_derive alloc_level_hint; do
-      env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml \
+      env -u RUSTFLAGS -u DECISION_MODEL_API_KEY cargo --config ~/.config/rust/config.dev.toml \
         test "${features[@]}" --test "$test" -- --nocapture
     done
   done

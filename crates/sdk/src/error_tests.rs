@@ -804,9 +804,9 @@ fn summary_is_one_fixed_sentence_per_kind_and_never_the_message() {
 
 #[test]
 fn each_kind_renders_and_chains_the_way_its_caller_will_read_it() {
-    let config = Error::config("TYPESAFE_API_KEY is not set");
+    let config = Error::config("DECISION_MODEL_API_KEY is not set");
     assert!(matches!(config.kind(), ErrorKind::Config));
-    assert_eq!(config.to_string(), "TYPESAFE_API_KEY is not set");
+    assert_eq!(config.to_string(), "DECISION_MODEL_API_KEY is not set");
     assert!(config.source().is_none());
 
     let invalid = Error::invalid_request("a question set must hold at least one question");
@@ -841,7 +841,7 @@ fn each_kind_renders_and_chains_the_way_its_caller_will_read_it() {
     // it, rather than a bare kind name.
     assert_eq!(
         format!("{config:?}"),
-        r#"Error { kind: Config, message: "TYPESAFE_API_KEY is not set" }"#
+        r#"Error { kind: Config, message: "DECISION_MODEL_API_KEY is not set" }"#
     );
     let shown = format!("{connection:?}");
     let head =

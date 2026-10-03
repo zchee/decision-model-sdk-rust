@@ -4,11 +4,13 @@
 //! `warm_up()` goes first: it checks the API key once and leaves an open
 //! HTTP/2 connection in the client's pool, so the calls that follow share it
 //! instead of each paying a handshake. Each task gets a clone of the client,
-//! which is one reference count; all of them share that one connection. Run
-//! it with
+//! which is one reference count; all of them share that one connection. The
+//! client is configured by the environment, with no default API or model. Run
+//! it with, for TypeSafe AI's,
 //!
 //! ```sh
-//! TYPESAFE_API_KEY=... cargo run --example concurrency
+//! DECISION_MODEL_API_KEY=... DECISION_MODEL_BASE_URL=https://api.typesafe.ai \
+//!     DECISION_MODEL_DEFAULT_MODEL=jev-latest cargo run --example concurrency
 //! ```
 //!
 //! Every call is billed by the API.

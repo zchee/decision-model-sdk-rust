@@ -26,9 +26,13 @@
 //!     .prepare()?;
 //! assert_eq!(questions.names().collect::<Vec<_>>(), ["billing", "tone", "urgency"]);
 //!
-//! // `Client::from_env()` reads the same settings from TYPESAFE_API_KEY and
-//! // friends. Building connects to nothing.
-//! let client = Client::builder().api_key("your-api-key").build()?;
+//! // `Client::from_env()` reads the same settings from DECISION_MODEL_API_KEY,
+//! // DECISION_MODEL_BASE_URL and DECISION_MODEL_DEFAULT_MODEL. There is no
+//! // default base URL or model. Building connects to nothing.
+//! let client = Client::builder()
+//!     .api_key("your-api-key")
+//!     .base_url("https://api.typesafe.ai")
+//!     .build()?;
 //!
 //! let state = "I was charged twice for one order.";
 //! let request = client

@@ -3,10 +3,12 @@
 //!
 //! The questions are serialized at compile time and the response decodes
 //! straight into the struct. It needs the `macros` feature, which is on by
-//! default. Run it with
+//! default. The client is configured by the environment, with no default API
+//! or model. Run it with, for TypeSafe AI's,
 //!
 //! ```sh
-//! TYPESAFE_API_KEY=... cargo run --example typed_answers
+//! DECISION_MODEL_API_KEY=... DECISION_MODEL_BASE_URL=https://api.typesafe.ai \
+//!     DECISION_MODEL_DEFAULT_MODEL=jev-latest cargo run --example typed_answers
 //! ```
 //!
 //! Every call is billed by the API.

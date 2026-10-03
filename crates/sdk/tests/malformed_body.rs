@@ -55,6 +55,7 @@ use loopback_builder::loopback_builder;
 /// A client of `server` that makes one attempt per call.
 fn client_for(server: &TestServer, protocol: Protocol) -> Client {
     loopback_builder(server, protocol)
+        .default_model("jev-latest")
         .retry(RetryPolicy::default().max_retries(0))
         .build()
         .expect("the client builds")

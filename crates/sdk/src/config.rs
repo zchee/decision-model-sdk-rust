@@ -19,14 +19,14 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::{
     constants::{
-        API_KEY_ENV, BASE_URL_ENV, DEFAULT_BASE_URL, DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MODEL,
-        DEFAULT_MODEL_ENV, DEFAULT_TIMEOUT, MODELS_PATH, SDK_IDENTIFIER, SYSTEM_ONE_PATH,
+        API_KEY_ENV, BASE_URL_ENV, DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MODEL_ENV, DEFAULT_TIMEOUT,
+        MODELS_PATH, SDK_IDENTIFIER, SYSTEM_ONE_PATH,
     },
     error::{Error, format_endpoint},
 };
 
 /// The settings a caller passed explicitly. Anything left unset falls back to
-/// its environment variable, then to the SDK's default.
+/// its environment variable, then to the SDK's default where there is one.
 #[derive(Default)]
 pub(crate) struct Explicit {
     pub(crate) api_key: Option<SecretString>,
@@ -53,7 +53,9 @@ pub(crate) struct Explicit {
 pub(crate) struct Config {
     authorization: HeaderValue,
     endpoints: Endpoints,
-    default_model: Box<str>,
+    /// `None` when neither the caller nor the environment names one: each
+    /// request must then name its model.
+    default_model: Option<Box<str>>,
     timeout: Option<Duration>,
     default_headers: HeaderMap,
     max_response_bytes: usize,
@@ -84,7 +86,7 @@ impl Config {
     /// API key is found or the given one is blank, when the trimmed key holds
     /// anything but printable ASCII without whitespace (see
     /// [`validate_api_key`]), when an explicit default model is blank, when
-    /// the base URL is not
+    /// no base URL is found, when the base URL is not
     /// an absolute `http` or `https` URL without credentials, query or
     /// fragment, when the timeout or the response size limit is zero, when the
     /// `User-Agent` product is not a product token (see [`user_agent`]), or
@@ -123,7 +125,14 @@ impl Config {
             Some(url) => Some(url),
             None => from_env(&env, BASE_URL_ENV)?,
         };
-        let mut base_url = base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
+        // No default: the API is served by more than one vendor, and a default
+        // would send the key to one of them without the caller saying so.
+        let Some(mut base_url) = base_url else {
+            return Err(Error::config(format!(
+                "No base URL was provided. \
+                 Pass base_url or set the {BASE_URL_ENV} environment variable."
+            )));
+        };
         base_url.truncate(base_url.trim_end_matches('/').len());
         let mut endpoints = endpoints(&base_url)?;
         if omit_endpoint_host {
@@ -139,8 +148,8 @@ impl Config {
                      environment variable."
                 )));
             }
-            Some(model) => model,
-            None => from_env(&env, DEFAULT_MODEL_ENV)?.unwrap_or_else(|| DEFAULT_MODEL.to_owned()),
+            Some(model) => Some(model),
+            None => from_env(&env, DEFAULT_MODEL_ENV)?,
         };
 
         let timeout = timeout.unwrap_or(Some(DEFAULT_TIMEOUT));
@@ -163,7 +172,7 @@ impl Config {
         Ok(Self {
             authorization,
             endpoints,
-            default_model: default_model.into_boxed_str(),
+            default_model: default_model.map(String::into_boxed_str),
             timeout,
             default_headers,
             max_response_bytes,
@@ -185,9 +194,10 @@ impl Config {
         &self.endpoints
     }
 
-    /// The model a request names when the call names none.
-    pub(crate) fn default_model(&self) -> &str {
-        &self.default_model
+    /// The model a request names when the call names none, if the client
+    /// has one.
+    pub(crate) fn default_model(&self) -> Option<&str> {
+        self.default_model.as_deref()
     }
 
     /// The deadline of each attempt, or `None` for no deadline.

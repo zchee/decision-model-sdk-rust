@@ -1,5 +1,7 @@
 //! The names and defaults the SDK's behaviour is pinned to: the environment
-//! variables, headers, API paths and defaults.
+//! variables, headers, API paths and defaults. There is no default base URL
+//! and no default model: the API is served by more than one vendor, and
+//! either default would pick one of them for a caller who named none.
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -20,23 +22,15 @@ pub(crate) const RETRY_AFTER_MS_HEADER: &str = "retry-after-ms";
 
 /// The environment variable a client reads its API key from when none is
 /// passed explicitly.
-pub const API_KEY_ENV: &str = "TYPESAFE_API_KEY";
+pub const API_KEY_ENV: &str = "DECISION_MODEL_API_KEY";
 
 /// The environment variable a client reads its base URL from when none is
 /// passed explicitly.
-pub const BASE_URL_ENV: &str = "TYPESAFE_BASE_URL";
+pub const BASE_URL_ENV: &str = "DECISION_MODEL_BASE_URL";
 
 /// The environment variable a client reads its default model from when none
 /// is passed explicitly.
-pub const DEFAULT_MODEL_ENV: &str = "TYPESAFE_DEFAULT_MODEL";
-
-/// The API root a client talks to when neither the caller nor
-/// [`BASE_URL_ENV`] names one.
-pub const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
-
-/// The model a request names when neither the call, the client nor
-/// [`DEFAULT_MODEL_ENV`] names one.
-pub const DEFAULT_MODEL: &str = "jev-latest";
+pub const DEFAULT_MODEL_ENV: &str = "DECISION_MODEL_DEFAULT_MODEL";
 
 /// The deadline each attempt of a request gets when the caller sets none.
 ///

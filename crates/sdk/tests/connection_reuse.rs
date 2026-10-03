@@ -74,6 +74,7 @@ fn builder_for(server: &TestServer) -> ClientBuilder {
     Client::builder()
         .api_key("test-key")
         .base_url(server.base_url())
+        .default_model("jev-latest")
         .add_root_certificate(certificate.to_vec())
 }
 
@@ -96,6 +97,7 @@ fn one_attempt_client(base_url: &str, version: HttpVersion) -> Client {
     Client::builder()
         .api_key("test-key")
         .base_url(base_url)
+        .default_model("jev-latest")
         .http_version(version)
         .retry(RetryPolicy::default().max_retries(0))
         .build()
@@ -850,6 +852,7 @@ async fn a_waiting_call_fails_with_the_bound_of_a_connect_its_starter_left() {
         let builder = Client::builder()
             .api_key("test-key")
             .base_url(format!("https://{}", server.addr()))
+            .default_model("jev-latest")
             .http_version(HttpVersion::Http2Only)
             .retry(RetryPolicy::default().max_retries(0));
         let client = if with_connect_timeout {

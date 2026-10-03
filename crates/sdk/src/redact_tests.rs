@@ -50,6 +50,7 @@ fn failed(
     let config = Config::resolve(
         Explicit {
             api_key: Some("test-key".into()),
+            base_url: Some("https://api.typesafe.ai".into()),
             max_response_bytes: Some(1024),
             ..Explicit::default()
         },

@@ -7,10 +7,10 @@ on macOS arm64 with rustc 1.98.1 and cargo-llvm-cov:
 ```sh
 export CARGO_TARGET_DIR="$HOME/.cache/rust/target-main"
 export CARGO_LLVM_COV_TARGET_DIR="$CARGO_TARGET_DIR/llvm-cov"
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov clean --workspace
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --all-features --no-report
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --features internals --no-report
-env -u RUSTFLAGS -u TYPESAFE_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report -p decision-model-sdk --fail-under-lines 85 --show-missing-lines
+env -u RUSTFLAGS -u DECISION_MODEL_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov clean --workspace
+env -u RUSTFLAGS -u DECISION_MODEL_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --all-features --no-report
+env -u RUSTFLAGS -u DECISION_MODEL_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov nextest -p decision-model-sdk --features internals --no-report
+env -u RUSTFLAGS -u DECISION_MODEL_API_KEY cargo --config ~/.config/rust/config.dev.toml llvm-cov report -p decision-model-sdk --fail-under-lines 85 --show-missing-lines
 ```
 
 The files are named by their present paths (at `873f431` they are `src/...` at

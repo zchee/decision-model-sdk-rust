@@ -680,7 +680,11 @@ where
     ///     spam: NoulAnswer,
     /// }
     ///
-    /// let client = Client::builder().api_key("your-api-key").build()?;
+    /// let client = Client::builder()
+    ///     .api_key("your-api-key")
+    ///     .base_url("https://api.typesafe.ai")
+    ///     .default_model("jev-latest")
+    ///     .build()?;
     /// let request = client.ask::<Spam>("Buy now!").timeout(Duration::from_secs(2));
     /// // `request.send().await?` needs a Tokio runtime and returns a
     /// // `SystemOneResponse<Spam>`, whose `answers().spam` is the answer.

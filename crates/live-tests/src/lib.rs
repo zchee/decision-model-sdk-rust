@@ -1,7 +1,7 @@
 //! What the tests against the live TypeSafe API share.
 //!
 //! **These tests make real, billed calls.** They run only when BOTH
-//! `DECISION_MODEL_LIVE_TESTS=1` and `TYPESAFE_API_KEY` are in the environment; then
+//! `DECISION_MODEL_LIVE_TESTS=1` and `DECISION_MODEL_API_KEY` are in the environment; then
 //! `cargo test --workspace`, `cargo nextest run --workspace` or any command
 //! naming `-p decision-model-sdk-live-tests` sends requests to the live API on
 //! that key's account. A key alone is not enough, so a contributor who has one
@@ -24,16 +24,24 @@ use decision_model_sdk::{Client, constants::API_KEY_ENV};
 /// clients 120 seconds, far more than a System One answer takes.
 pub const LIVE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The API the live tests call: TypeSafe AI's, named here because the SDK
+/// has no default base URL.
+pub const LIVE_BASE_URL: &str = "https://api.typesafe.ai";
+
+/// The model the live tests ask, named here because the SDK has no default
+/// model.
+pub const LIVE_MODEL: &str = "jev-latest";
+
 /// The variable that opts in to the live tests; it must be exactly `1`.
 pub const LIVE_TESTS_ENV: &str = "DECISION_MODEL_LIVE_TESTS";
 
-/// A client for the live API, configured from the environment as
-/// [`Client::from_env`] configures one, with [`LIVE_TIMEOUT`] as its
-/// deadline.
+/// A client for the live API at [`LIVE_BASE_URL`], asking [`LIVE_MODEL`] by
+/// default, with the key from the environment as [`Client::from_env`] reads
+/// it and [`LIVE_TIMEOUT`] as its deadline.
 ///
 /// # Panics
 ///
-/// When `DECISION_MODEL_LIVE_TESTS` is not `1` or `TYPESAFE_API_KEY` is unset or
+/// When `DECISION_MODEL_LIVE_TESTS` is not `1` or `DECISION_MODEL_API_KEY` is unset or
 /// empty - checked before the client is built, with a message naming both
 /// variables and never the key's value - and when the client cannot be built
 /// for another reason, with the SDK's own configuration error.
@@ -53,7 +61,12 @@ pub fn live_client() -> Client {
              {API_KEY_ENV} set; {missing} missing, so they fail rather than skip"
         );
     }
-    match Client::builder().timeout(LIVE_TIMEOUT).build() {
+    match Client::builder()
+        .base_url(LIVE_BASE_URL)
+        .default_model(LIVE_MODEL)
+        .timeout(LIVE_TIMEOUT)
+        .build()
+    {
         Ok(client) => client,
         Err(error) => panic!("the live client could not be built from the environment: {error}"),
     }

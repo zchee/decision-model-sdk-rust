@@ -62,8 +62,9 @@ pub(crate) struct Shared<S> {
     pub(crate) get_headers: HeaderMap,
     /// The headers of a request with a JSON body, built once.
     pub(crate) post_headers: HeaderMap,
-    /// The default model as a JSON string, escaped once.
-    pub(crate) model_json: Bytes,
+    /// The default model as a JSON string, escaped once; `None` when the
+    /// client has no default model.
+    pub(crate) model_json: Option<Bytes>,
     /// The retry policy of every call that does not bring its own.
     pub(crate) retry: RetryPolicy,
 }
@@ -91,19 +92,21 @@ impl<S: fmt::Debug> fmt::Debug for Client<S> {
 #[cfg_attr(docsrs, doc(cfg(feature = "hyper")))]
 impl Client<HyperTransport> {
     /// A builder for a client; every setting it leaves unset comes from the
-    /// environment, then from the SDK's default.
+    /// environment, then from the SDK's default where there is one.
     #[must_use]
     pub fn builder() -> ClientBuilder {
         ClientBuilder::default()
     }
 
-    /// A client configured by the environment alone: `TYPESAFE_API_KEY`, and
-    /// optionally `TYPESAFE_BASE_URL` and `TYPESAFE_DEFAULT_MODEL`.
+    /// A client configured by the environment alone: `DECISION_MODEL_API_KEY`
+    /// and `DECISION_MODEL_BASE_URL`, and optionally
+    /// `DECISION_MODEL_DEFAULT_MODEL`.
     ///
     /// # Errors
     ///
     /// Returns an [`ErrorKind::Config`](crate::ErrorKind::Config) error when
-    /// no API key is set, a value is unusable, or a variable is not UTF-8.
+    /// no API key or no base URL is set, a value is unusable, or a variable
+    /// is not UTF-8.
     pub fn from_env() -> Result<Self, Error> {
         Self::builder().build()
     }
@@ -114,15 +117,18 @@ impl<S> Client<S> {
     fn assemble(config: Config, retry: RetryPolicy, service: S) -> Self {
         let get_headers = transport::base_headers(&config, false);
         let post_headers = transport::base_headers(&config, true);
-        let mut model = Vec::with_capacity(config.default_model().len() + 2);
-        codec::write_json_string(&mut model, config.default_model());
+        let model_json = config.default_model().map(|model| {
+            let mut json = Vec::with_capacity(model.len() + 2);
+            codec::write_json_string(&mut json, model);
+            Bytes::from(json)
+        });
         Self {
             shared: Arc::new(Shared {
                 service,
                 config,
                 get_headers,
                 post_headers,
-                model_json: Bytes::from(model),
+                model_json,
                 retry,
             }),
         }
@@ -177,11 +183,13 @@ where
 
 /// Configures a [`Client`].
 ///
-/// Every setting is optional. The API key, base URL and default model fall
-/// back to `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL` and
-/// `TYPESAFE_DEFAULT_MODEL`, then to the SDK's defaults (no key, which fails;
-/// `https://api.typesafe.ai`; `jev-latest`). The methods never fail: what
-/// they are given is checked by `build()` (with the `hyper` feature) or
+/// The API key, base URL and default model fall back to
+/// `DECISION_MODEL_API_KEY`, `DECISION_MODEL_BASE_URL` and
+/// `DECISION_MODEL_DEFAULT_MODEL`, and to nothing after that: building fails
+/// without a key or a base URL, and a client without a default model sends
+/// only requests that name their model. Every other setting has a default.
+/// The methods never fail: what they are given is checked by `build()` (with
+/// the `hyper` feature) or
 /// [`build_with_service`](ClientBuilder::build_with_service).
 #[derive(Default)]
 pub struct ClientBuilder {
@@ -230,7 +238,8 @@ impl ClientBuilder {
     }
 
     /// The API root, such as `https://api.typesafe.ai`; trailing slashes are
-    /// removed and a path prefix is kept.
+    /// removed and a path prefix is kept. Required: without it, or
+    /// `DECISION_MODEL_BASE_URL`, building fails.
     ///
     /// It must be an absolute `http` or `https` URL without userinfo, query or
     /// fragment. An `http://` base URL sends the API key unencrypted; use it
@@ -243,7 +252,9 @@ impl ClientBuilder {
         self
     }
 
-    /// The model a request names when the call does not name one.
+    /// The model a request names when the call does not name one. Without
+    /// it, or `DECISION_MODEL_DEFAULT_MODEL`, every request must name its
+    /// model with [`SystemOne::model`].
     #[must_use]
     pub fn default_model(mut self, model: impl Into<String>) -> Self {
         self.default_model = Some(model.into());
@@ -425,12 +436,14 @@ impl ClientBuilder {
     /// // Building connects to nothing.
     /// let client = Client::builder()
     ///     .api_key("your-api-key")
+    ///     .base_url("https://api.typesafe.ai")
     ///     .user_agent_product("my-app/1.2.0")
     ///     .build()?;
     /// # drop(client);
     ///
     /// let error = Client::builder()
     ///     .api_key("your-api-key")
+    ///     .base_url("https://api.typesafe.ai")
     ///     .user_agent_product("my app")
     ///     .build()
     ///     .expect_err("a product with a space is refused");
@@ -454,7 +467,11 @@ impl ClientBuilder {
     /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
-    /// let client = Client::builder().api_key("your-api-key").send_runtime_header(false).build()?;
+    /// let client = Client::builder()
+    ///     .api_key("your-api-key")
+    ///     .base_url("https://api.typesafe.ai")
+    ///     .send_runtime_header(false)
+    ///     .build()?;
     /// # drop(client);
     /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
@@ -482,7 +499,11 @@ impl ClientBuilder {
     /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
-    /// let client = Client::builder().api_key("your-api-key").log_endpoint_host(false).build()?;
+    /// let client = Client::builder()
+    ///     .api_key("your-api-key")
+    ///     .base_url("https://api.typesafe.ai")
+    ///     .log_endpoint_host(false)
+    ///     .build()?;
     /// # drop(client);
     /// # Ok::<(), decision_model_sdk::Error>(())
     /// ```
@@ -501,8 +522,8 @@ impl ClientBuilder {
     ///
     /// Returns an [`ErrorKind::Config`](crate::ErrorKind::Config) error when
     /// no API key is found or the key is empty after trimming or holds
-    /// whitespace, a control or a non-ASCII character; when
-    /// the base URL is not an absolute `http` or `https` URL without
+    /// whitespace, a control or a non-ASCII character; when no base URL is
+    /// found, or the base URL is not an absolute `http` or `https` URL without
     /// userinfo, query or fragment; when the default model is blank; when a
     /// deadline or the response limit is zero; when a default header is not a
     /// valid header; when the [`user_agent_product`](Self::user_agent_product)
