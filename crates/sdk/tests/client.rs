@@ -1155,11 +1155,25 @@ async fn held(protocol: Protocol, body: &'static [u8]) -> Held {
 /// past its deadline is a timeout carrying that deadline. (README deviation
 /// row "Timeout per httpx2 phase; `httpx2.Timeout` objects": one deadline covers
 /// the whole attempt, not each httpx2 phase.)
+///
+/// A first, answered call opens the connection, so the deadline covers only
+/// the held response: a new connection's TLS handshake costs the first
+/// certificate check of the process, which on macOS can take most of the
+/// deadline. The deadline over a handshake that never ends is tested in
+/// `connection_reuse.rs`.
 #[tokio::test]
 async fn an_attempt_past_its_deadline_is_a_timeout_with_that_deadline() {
     for protocol in Protocol::ALL {
         let held = held(protocol, br#"{"models":[]}"#).await;
-        let error = client_for(&held.server, protocol)
+        let client = client_for(&held.server, protocol);
+        let answer = async {
+            held.arrived.notified().await;
+            held.release.notify_one();
+        };
+        let (opened, ()) = tokio::join!(client.models().list().send(), answer);
+        opened.unwrap_or_else(|error| panic!("{protocol:?}: the first call is answered: {error}"));
+
+        let error = client
             .models()
             .list()
             .timeout(Duration::from_millis(125))
@@ -1173,7 +1187,12 @@ async fn an_attempt_past_its_deadline_is_a_timeout_with_that_deadline() {
         );
         assert_eq!(error.to_string(), "Request timed out (timeout=0.125s).");
         assert!(error.source().is_none());
-        assert_eq!(held.server.request_count(), 1, "{protocol:?}: the request reached the server");
+        assert_eq!(held.server.request_count(), 2, "{protocol:?}: the request reached the server");
+        assert_eq!(
+            held.server.accepted_connections(),
+            1,
+            "{protocol:?}: over the first call's connection"
+        );
         held.release.notify_waiters();
     }
 }
