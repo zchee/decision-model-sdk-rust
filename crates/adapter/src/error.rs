@@ -32,7 +32,11 @@ pub(crate) type Cause = Box<dyn StdError + Send + Sync>;
 /// [`kind`](Error::kind), as the payload of [`ErrorKind::Provider`].
 /// `Display` already prints it, so [`source`](StdError::source) skips it and
 /// returns the SDK error's own cause: a reporter that walks the chain prints
-/// the SDK's message once.
+/// the SDK's message once. One case still repeats text: for a connection
+/// error whose cause is the error a built-in provider's HTTP service failed
+/// with, the SDK's message already holds the messages of that error's chain,
+/// and `source()` leads to the same chain, so such a reporter prints the
+/// transport's text twice.
 pub struct Error(Box<Inner>);
 
 /// The heap half of [`Error`].

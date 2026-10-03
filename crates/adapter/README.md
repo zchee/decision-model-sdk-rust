@@ -453,7 +453,11 @@ the attempts made, `None` for an error raised before the first attempt. `source(
 lies below the text `Display` prints. For `ErrorKind::Provider` the SDK error is the payload of
 `kind()` and `Display` prints it, so `source()` is that SDK error's own cause (`None` for an API
 error). For a malformed reply, or a state that does not serialize, it is the decode or
-serialization failure behind it; for the other kinds it is `None`.
+serialization failure behind it; for the other kinds it is `None`. A reporter that walks the
+chain (`{:#}` of an `anyhow::Error`, say) therefore prints the SDK's message once, with one
+exception: for a connection error whose cause is the error a built-in provider's HTTP service
+failed with, the SDK's message already holds the messages of that error's chain, and `source()`
+leads to the same chain, so the reporter prints the transport's text twice.
 
 | `ErrorKind` | When |
 | --- | --- |
