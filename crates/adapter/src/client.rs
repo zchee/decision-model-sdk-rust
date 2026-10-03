@@ -44,6 +44,14 @@ const PROVIDER_REQUIRED: &str = "A provider is required: set provider='openai', 
 /// tries again. Clones share these providers; they are dropped with the last
 /// clone.
 ///
+/// So each distinct provider name and model is built once and kept for the
+/// life of the client and its clones, and each provider it keeps has its own
+/// connection pool and TLS configuration. Do not pass a model name an end
+/// user chose without checking it against a list of the models you accept,
+/// because every new name keeps one more provider; or build the provider
+/// yourself and pass it with [`ClientBuilder::provider_instance`] or
+/// [`Request::provider_instance`].
+///
 /// `Debug` prints the options, the provider name and the model, for a
 /// provider instance only its type name, and the provider name and model of
 /// each provider the client built; never a provider's fields.
@@ -299,7 +307,9 @@ impl ClientBuilder {
     }
 
     /// The name of the model to ask, which needs a
-    /// [`provider`](Self::provider). Default: none.
+    /// [`provider`](Self::provider). Default: none. The client builds and
+    /// keeps a provider for each name it is given: see [`Client`] before
+    /// passing a name an end user chose.
     #[must_use]
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.settings.target.model = Some(model.into());
@@ -386,7 +396,9 @@ impl<T: ?Sized, A> Request<'_, T, A> {
     }
 
     /// The name of the model this call asks, in the place of the client's
-    /// model or provider instance.
+    /// model or provider instance. The client builds and keeps a provider for
+    /// each name it is given: see [`Client`] before passing a name an end
+    /// user chose.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.target.model = Some(model.into());
         self
