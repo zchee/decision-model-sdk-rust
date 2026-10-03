@@ -564,6 +564,36 @@ async fn a_causeless_connection_error_from_a_service_has_its_credentials_replace
     }
 }
 
+/// A cause-less connection error whose message is far longer than any cut,
+/// holds characters `Debug` would escape, and copies a credential, comes back
+/// with the credential replaced by `***` and every other byte as the service
+/// wrote it: neither escaped nor cut, in `Display` and in `Debug`.
+#[tokio::test]
+async fn a_long_causeless_message_with_a_credential_is_neither_escaped_nor_cut() {
+    let head = format!("tab\there \"quoted\" back\\slash \u{1b}[31mred {}", "x".repeat(300));
+    let tail = format!("{} new\nline \u{202e}end", "y".repeat(250));
+    for credential in service_credentials() {
+        let message = format!("{head} {credential} {tail}");
+        let expected = format!("{head} *** {tail}");
+        for in_poll_ready in [false, true] {
+            let case = format!("{credential:?}, in poll_ready {in_poll_ready}");
+            let built = message.clone();
+            let service =
+                Failing::new(in_poll_ready, move || Error::connection(built.clone(), None));
+            let error = fail_through(service, RetryPolicy::default().max_retries(0)).await;
+
+            assert!(matches!(error.kind(), ErrorKind::Connection), "{case}: {error:?}");
+            assert!(error.source().is_none(), "{case}: {error:?}");
+            assert_eq!(error.to_string(), expected, "{case}");
+            assert_eq!(
+                format!("{error:?}"),
+                format!("Error {{ kind: Connection, message: {expected:?} }}"),
+                "{case}"
+            );
+        }
+    }
+}
+
 /// The replacement keeps the retry class: the built-in rule retries the
 /// redacted connection error exactly while it retries connection errors, and
 /// a caller's rule sees the redacted error, still a connection error.
