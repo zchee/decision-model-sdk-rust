@@ -47,9 +47,10 @@ pub(crate) fn is_secret(name: &HeaderName, value: &HeaderValue) -> bool {
 ///
 /// A credential is the value of a header [`is_secret`] matches, and for
 /// `Authorization` and `Proxy-Authorization` also the part after the scheme,
-/// split as Python's `str.split(maxsplit=1)` splits it. Empty values are
-/// skipped, and one that starts or ends with spaces or tabs is also a
-/// credential without them. Each credential is looked for as it is and as
+/// split as Python's `str.split(maxsplit=1)` splits it. A value that is
+/// empty, or holds only spaces and tabs, is skipped, and one that starts or
+/// ends with spaces or tabs is also a credential without them. Each
+/// credential is looked for as it is and as
 /// `{:?}` of a `str`, `str::escape_debug`, `{:?}` of an `http::HeaderValue`,
 /// `{:?}` of a `bytes::Bytes` and a JSON string write it, each without its
 /// quotes. Each of those forms is also looked for as `{:?}` of a `str`
@@ -159,7 +160,8 @@ fn after_scheme(value: &[u8]) -> Option<&[u8]> {
 }
 
 /// Adds every form of the credential `bytes` to `variants`, and when it
-/// starts or ends with spaces or tabs, every form of it without them.
+/// starts or ends with spaces or tabs, every form of it without them. A value
+/// of nothing but spaces and tabs adds no form.
 ///
 /// HTTP drops that whitespace from a field value, so what the server reads
 /// is the trimmed value. And a pretty-printing `Debug` (`{:#?}`) puts spaces
@@ -167,9 +169,17 @@ fn after_scheme(value: &[u8]) -> Option<&[u8]> {
 /// with a line that starts with the rest of such a credential spells all of
 /// it once it is printed inside another value, at any depth, while the
 /// error's own rendering does not.
+///
+/// A value that is only whitespace is empty to the server, so it hides
+/// nothing; looked for as it is, it would turn every run of spaces in a
+/// message into `***` and make every multi-line `{:#?}` a match, so the
+/// transport's error would be replaced by a copy that cannot be downcast.
 fn push_variants(variants: &mut Vec<String>, bytes: &[u8]) {
     let trimmed = bytes.trim_ascii();
-    if !trimmed.is_empty() && trimmed.len() != bytes.len() {
+    if trimmed.is_empty() {
+        return;
+    }
+    if trimmed.len() != bytes.len() {
         push_forms(variants, trimmed);
     }
     push_forms(variants, bytes);

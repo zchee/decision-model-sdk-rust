@@ -537,3 +537,63 @@ fn a_credential_with_whitespace_around_it_is_also_found_without_it() {
     assert_eq!(credentials.redact("Pretty {\ntail-made-up\n}"), "Pretty {\n***\n}");
     assert_eq!(credentials.redact("sent lead\\made-up"), "sent ***");
 }
+
+/// A secret header whose value is only spaces and tabs is empty to the
+/// server, so it is no credential: it adds no form at all, under a secret
+/// name, a `token` name, or as a sensitive `Authorization` value.
+#[test]
+fn a_value_of_only_spaces_and_tabs_is_not_a_credential() {
+    let mut map = headers(&[
+        ("x-client-secret", " "),
+        ("x-made-up-token", "\t"),
+        ("x-other-secret", " \t  \t"),
+    ]);
+    map.append("authorization", sensitive("   "));
+    let credentials = Credentials::new(&map);
+
+    assert!(credentials.variants.is_empty(), "{:?}", credentials.variants);
+    let text = "Pretty {\n    a   b\t\\t c,\n}";
+    assert!(!credentials.occur_in(text));
+    assert!(!credentials.occur_in_debug(text));
+    assert_eq!(credentials.redact(text), text);
+}
+
+/// A transport error with runs of spaces in its message, a tab the message
+/// writes as `\t`, and a multi-line `{:#?}` is kept as it is when the request
+/// carries a secret header of only whitespace: no `***`, and the cause can
+/// still be downcast. The real key on the same request is still a
+/// credential.
+#[test]
+fn a_whitespace_only_secret_header_leaves_the_message_and_cause_alone() {
+    let mut base = headers(&[("x-made-up-token", "\t")]);
+    base.insert("authorization", sensitive("Bearer test-key"));
+    let call = [(HeaderName::from_static("x-client-secret"), HeaderValue::from_static(" "))];
+    let cause = || {
+        Link::new(
+            "connect  failed:\tthree   spaces",
+            "Connect { reason: \"refused\" }",
+            "Connect {\n    reason:   \"refused\",\n}",
+            Some(Link::plain("os  error  61", None)),
+        )
+    };
+
+    let error = failed(cause(), &base, &call);
+    assert!(matches!(error.kind(), ErrorKind::Connection), "{error:?}");
+    assert_eq!(
+        error.to_string(),
+        "Connection error: connect  failed:\\tthree   spaces: os  error  61"
+    );
+    let source = StdError::source(&error).expect("a cause");
+    assert!(source.downcast_ref::<Link>().is_some(), "the original is kept: {source:?}");
+    assert_eq!(format!("{source:#?}"), "Connect {\n    reason:   \"refused\",\n}");
+    assert_eq!(source.source().map(ToString::to_string).as_deref(), Some("os  error  61"));
+
+    let unprotected = failed(cause(), &HeaderMap::new(), &[]);
+    assert_eq!(every_rendering(&error), every_rendering(&unprotected));
+
+    let credentials =
+        Credentials::new(base.iter().chain(call.iter().map(|(name, value)| (name, value))));
+    assert!(credentials.variants.contains(&"test-key".to_owned()), "{:?}", credentials.variants);
+    assert!(credentials.variants.iter().all(|form| !form.trim_ascii().is_empty()));
+    assert_no_variant(&error, &credentials);
+}
