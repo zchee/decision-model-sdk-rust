@@ -562,6 +562,36 @@ fn a_name_written_with_an_escape_is_the_name_it_spells() {
     );
 }
 
+/// A name outside ASCII is matched as the characters it holds, written as
+/// they are or as JSON escapes: a question id outside the Basic Multilingual
+/// Plane, which JSON escapes as a surrogate pair, and a label inside it.
+#[test]
+fn a_name_outside_ascii_is_the_name_it_spells() {
+    let backslash = '\\';
+    let one_half = || Ok(DecodedAnswers { answers: vec![DecodedAnswer::Probability(0.5)] });
+
+    let grin = "\u{1f600}";
+    let noul = questions(&format!(r#"{{"{grin}":{{"type":"noul"}}}}"#));
+    let pair = format!("{backslash}ud83d{backslash}ude00");
+    for id in [grin, pair.as_str()] {
+        let reply = format!(r#"{{"answers":{{"{id}":0.5}}}}"#);
+        assert_eq!(decode(&noul, AnswerMode::Probabilities, &reply), one_half(), "{id}");
+    }
+
+    let cafe = "caf\u{e9}";
+    let choice = questions(&format!(
+        r#"{{"answer":{{"type":"choice","criteria":{{"{cafe}":null,"no":null}}}}}}"#
+    ));
+    for label in [cafe.to_owned(), format!("caf{}", escaped('\u{e9}'))] {
+        let reply = format!(r#"{{"answers":{{"answer":"{label}"}}}}"#);
+        assert_eq!(
+            decode(&choice, AnswerMode::Discrete, &reply),
+            Ok(DecodedAnswers { answers: vec![DecodedAnswer::Label(0)] }),
+            "{label}"
+        );
+    }
+}
+
 // A level is an integer text. `serde_json` hands `-0` over as the float
 // -0.0, as it does `-0.0`, `-0e0` and `-1e-400`, so the decoder tells them
 // apart by their text. Each verdict is pydantic's (measured on CPython
