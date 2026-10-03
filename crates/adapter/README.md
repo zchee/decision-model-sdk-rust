@@ -225,13 +225,14 @@ unset. `GOOGLE_GEMINI_BASE_URL` and the proxy variables (`HTTP_PROXY`, `HTTPS_PR
 `ALL_PROXY`, `NO_PROXY`) are not read. With the `internals` feature no variable of the table above
 is read.
 
-**Certificate variables.** On Linux and the other unix targets that are not Apple's, the platform
-verifier loads the trust anchors through `rustls-native-certs`, which reads `SSL_CERT_FILE` and
-`SSL_CERT_DIR` each time a provider's default transport is built (by `build()`, or at the first
-call for a provider the client owns), with or without the `internals` feature. When either is
-set, the certificates they name replace the system's store, and `add_root_certificate` adds to
-them; when they name no certificate and none was added, the build fails with
-`ErrorKind::Config`. On macOS and Windows no variable changes the trust anchors.
+**Certificate variables.** On the unix targets other than Apple's, Android and WebAssembly (Linux
+among them), the platform verifier loads the trust anchors through `rustls-native-certs`, which
+reads `SSL_CERT_FILE` and `SSL_CERT_DIR` each time a provider's default transport is built (by
+`build()`, or at the first call for a provider the client owns), with or without the `internals`
+feature. When `SSL_CERT_FILE` is set or `SSL_CERT_DIR` lists a path, the certificates they name
+replace the system's store, and `add_root_certificate` adds to them; when they name no
+certificate and none was added, the build fails with `ErrorKind::Config`. On every other target
+no variable changes the trust anchors.
 
 The key is sent as `authorization: Bearer` (OpenAI), `x-api-key` with
 `anthropic-version: 2023-06-01` (Anthropic) or `x-goog-api-key` (Gemini). The header value is
@@ -600,7 +601,7 @@ repository.
 | Non-answers and the retry predicate | A non-answer is raised inside the retry loop (`providers/anthropic.py:57-63`). | It travels outside the retry loop, so a caller's `RetryPolicy::predicate` never sees it; a predicate that retried non-answers upstream has no effect here. |
 | Non-finite numbers in the state | `to_json` writes the bare words `NaN`, `Infinity` and `-Infinity` (`_client.py:91`). | `serde_json` writes `null` for each. A state held as a `serde_json::Value` also differs from Python for three inputs: `-0` is written `-0.0`; an integer beyond u64 becomes a float; `1e400` is a parse error in the default build and is written `1e+400` under serde_json's `arbitrary_precision` feature, where Python writes `Infinity`. A typed Rust state is unaffected. |
 | No translation of provider-SDK exceptions | `translating` and `translate_error` map vendor-SDK exceptions; an unknown exception becomes a bare `TypeSafeError` (`providers/base.py:28-41`, `_utils/error_handling.py:72`). | There is no vendor SDK: the HTTP module produces the SDK error directly. `test_translating_context_manager_reraises_translated_error` and `test_unknown_and_sdk_errors_pass_through` have no counterpart. |
-| Proxy and CA variables | httpx2 with `trust_env=True` (`httpx2/_client.py:192`) reads `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (`httpx2/_utils.py:52`) and `SSL_CERT_FILE` (`httpx2/_config.py:35`). | No proxy variable is read. On Linux and the other unix targets that are not Apple's, `rustls-native-certs` reads `SSL_CERT_FILE` and `SSL_CERT_DIR`, and the certificates they name replace the system's roots; on macOS and Windows no CA variable is read. The trust anchors are the system's roots, or the certificates those variables name, plus `add_root_certificate`. |
+| Proxy and CA variables | httpx2 with `trust_env=True` (`httpx2/_client.py:192`) reads `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` (`httpx2/_utils.py:52`) and `SSL_CERT_FILE` (`httpx2/_config.py:35`). | No proxy variable is read. On the unix targets other than Apple's, Android and WebAssembly (Linux among them), `rustls-native-certs` reads `SSL_CERT_FILE` and `SSL_CERT_DIR`, and when `SSL_CERT_FILE` is set or `SSL_CERT_DIR` lists a path the certificates they name replace the system's roots; on every other target no CA variable is read. The trust anchors are the system's roots, or the certificates those variables name, plus `add_root_certificate`. |
 | Redirects | The OpenAI and Anthropic SDK clients follow redirects (`openai/_base_client.py:876,1471`, `anthropic/_base_client.py:906,1584`). | A 3xx answer is an API error after exactly one request. |
 | Connect timeout | OpenAI and Anthropic have a separate 5 s connect timeout (`openai/_constants.py:7`, `anthropic/_constants.py:7`). | No separate connect timeout; connecting counts against the attempt deadline of the row `Timeouts`. |
 | `GOOGLE_GEMINI_BASE_URL` | `google-genai` reads it (`google/genai/_base_url.py:50`). | Not read; Gemini's base URL is set only through the builder. |
