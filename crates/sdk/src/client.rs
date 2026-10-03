@@ -583,7 +583,9 @@ impl ClientBuilder {
     /// any error below it, the [`source`](std::error::Error::source) is a
     /// redacted copy that cannot be downcast. The message is redacted after
     /// escaping as well, so a covered form the escaping creates by chance is
-    /// `***` too. The value of any other header a service prints stays in the
+    /// `***` too, and a message that `{:?}` would still print with one of
+    /// those forms is replaced by a fixed text that names no credential. The
+    /// value of any other header a service prints stays in the
     /// message, and so does a credential written in a form not listed here:
     /// as a list of byte values, `{:x?}`, percent-encoded or in base64.
     ///
