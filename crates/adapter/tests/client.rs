@@ -1109,96 +1109,28 @@ async fn one_event_per_finished_attempt_with_counts_and_kinds_only() {
     }
 }
 
-/// Every line the SDK logs on its own target while it is the thread's
-/// subscriber; the shared recorder keeps the adapter's events only.
-#[cfg(feature = "tracing")]
-mod sdk_lines {
-    use std::{
-        fmt,
-        sync::{Arc, Mutex},
-    };
-
-    use tracing::{
-        Dispatch, Event, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-        subscriber::{DefaultGuard, NoSubscriber},
-    };
-
-    #[derive(Clone, Default)]
-    pub(crate) struct SdkLines(Arc<Mutex<Vec<String>>>);
-
-    impl SdkLines {
-        /// This recorder as the thread's subscriber until the guard drops. A
-        /// second dispatcher is held with it, so that a callsite another
-        /// test's thread reached first still asks this subscriber.
-        pub(crate) fn install(&self) -> (DefaultGuard, Dispatch) {
-            let second = Dispatch::new(NoSubscriber::default());
-            (tracing::subscriber::set_default(self.clone()), second)
-        }
-
-        pub(crate) fn lines(&self) -> Vec<String> {
-            self.0.lock().expect("not poisoned").clone()
-        }
-    }
-
-    struct Message(String);
-
-    impl Visit for Message {
-        fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-            if field.name() == "message" {
-                self.0 = format!("{value:?}");
-            }
-        }
-    }
-
-    impl Subscriber for SdkLines {
-        fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-            span::Id::from_u64(1)
-        }
-
-        fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-
-        fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-
-        fn event(&self, event: &Event<'_>) {
-            if event.metadata().target() != "typesafe_sdk" {
-                return;
-            }
-            let mut message = Message(String::new());
-            event.record(&mut message);
-            self.0.lock().expect("not poisoned").push(message.0);
-        }
-
-        fn enter(&self, _: &span::Id) {}
-
-        fn exit(&self, _: &span::Id) {}
-    }
-}
-
 /// The retry policy's line names the request by the provider's log URI, and
 /// as `POST /` for a provider that has none.
 #[cfg(feature = "tracing")]
 #[tokio::test]
 async fn the_retry_line_names_the_log_uri_of_the_provider() {
+    use recorder::{Recorder, install};
+    use tracing::Level;
+
     let cases = [
-        (None, vec!["POST / retry 1", "POST / retry 2"]),
+        (None, vec![" message=POST / retry 1", " message=POST / retry 2"]),
         (
             Some("https://vendor.example:8443/v1/operation?key=never-printed"),
             vec![
-                "POST https://vendor.example:8443/v1/operation retry 1",
-                "POST https://vendor.example:8443/v1/operation retry 2",
+                " message=POST https://vendor.example:8443/v1/operation retry 1",
+                " message=POST https://vendor.example:8443/v1/operation retry 2",
             ],
         ),
     ];
 
     for (log_uri, expected) in cases {
-        let lines = sdk_lines::SdkLines::default();
-        let _installed = lines.install();
+        let events = Recorder::default();
+        let _installed = install(&events);
         let mut scripted = Scripted::new(vec![status(503), status(503), reply(ANSWER)]);
         scripted.log_uri = log_uri.map(http::Uri::from_static);
         let scripted = Arc::new(scripted);
@@ -1213,6 +1145,9 @@ async fn the_retry_line_names_the_log_uri_of_the_provider() {
             .await
             .expect("the third attempt answers");
 
-        assert_eq!(lines.lines(), expected);
+        assert_eq!(events.of("typesafe_sdk", Level::INFO), expected, "{:?}", events.all());
+        for level in [Level::ERROR, Level::WARN, Level::DEBUG, Level::TRACE] {
+            assert!(events.of("typesafe_sdk", level).is_empty(), "{:?}", events.all());
+        }
     }
 }

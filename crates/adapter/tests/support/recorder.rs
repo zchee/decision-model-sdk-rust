@@ -47,12 +47,18 @@ impl Recorder {
     /// The adapter's own events at `level`, without the target; the SDK's
     /// and hyper's are left out, and so is every line of a span.
     pub(crate) fn at(&self, level: Level) -> Vec<String> {
+        self.of(TARGET, level)
+    }
+
+    /// The events of `target` at `level`, without the target; every other
+    /// target's events are left out, and so is every line of a span.
+    pub(crate) fn of(&self, target: &str, level: Level) -> Vec<String> {
         let recorded = self.0.lock().expect("not poisoned");
         recorded
             .lines
             .iter()
             .filter(|(kind, _)| *kind == Kind::Event(level))
-            .filter_map(|(_, line)| line.strip_prefix(TARGET))
+            .filter_map(|(_, line)| line.strip_prefix(target))
             .map(str::to_owned)
             .collect()
     }
