@@ -438,6 +438,8 @@ impl ClientBuilder {
     /// the rule, before anything is sent.
     ///
     /// ```
+    /// # #[cfg(feature = "hyper")]
+    /// # fn main() -> Result<(), decision_model_sdk::Error> {
     /// use decision_model_sdk::{Client, ErrorKind};
     ///
     /// // Building connects to nothing.
@@ -455,7 +457,10 @@ impl ClientBuilder {
     ///     .build()
     ///     .expect_err("a product with a space is refused");
     /// assert!(matches!(error.kind(), ErrorKind::Config));
-    /// # Ok::<(), decision_model_sdk::Error>(())
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "hyper"))]
+    /// # fn main() {}
     /// ```
     #[must_use]
     pub fn user_agent_product(mut self, product: impl Into<String>) -> Self {
@@ -471,6 +476,8 @@ impl ClientBuilder {
     /// one.
     ///
     /// ```
+    /// # #[cfg(feature = "hyper")]
+    /// # fn main() -> Result<(), decision_model_sdk::Error> {
     /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
@@ -480,7 +487,10 @@ impl ClientBuilder {
     ///     .send_runtime_header(false)
     ///     .build()?;
     /// # drop(client);
-    /// # Ok::<(), decision_model_sdk::Error>(())
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "hyper"))]
+    /// # fn main() {}
     /// ```
     #[must_use]
     pub fn send_runtime_header(mut self, send: bool) -> Self {
@@ -503,6 +513,8 @@ impl ClientBuilder {
     /// endpoint line, because those URL components are refused at build.
     ///
     /// ```
+    /// # #[cfg(feature = "hyper")]
+    /// # fn main() -> Result<(), decision_model_sdk::Error> {
     /// use decision_model_sdk::Client;
     ///
     /// // Building connects to nothing.
@@ -512,7 +524,10 @@ impl ClientBuilder {
     ///     .log_endpoint_host(false)
     ///     .build()?;
     /// # drop(client);
-    /// # Ok::<(), decision_model_sdk::Error>(())
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(feature = "hyper"))]
+    /// # fn main() {}
     /// ```
     #[must_use]
     pub fn log_endpoint_host(mut self, log: bool) -> Self {

@@ -15,6 +15,8 @@
 //! [`send`](SystemOne::send) sends it and decodes the answers.
 //!
 //! ```
+//! # #[cfg(feature = "hyper")]
+//! # fn main() -> Result<(), decision_model_sdk::Error> {
 //! use std::time::Duration;
 //!
 //! use decision_model_sdk::{Choice, Client, Noul, Questions, Score};
@@ -48,7 +50,10 @@
 //!     Ok(response.answers().noul("billing").map_or(0.0, |answer| answer.noul()))
 //! }
 //! drop(ask(request));
-//! # Ok::<(), decision_model_sdk::Error>(())
+//! # Ok(())
+//! # }
+//! # #[cfg(not(feature = "hyper"))]
+//! # fn main() {}
 //! ```
 //!
 //! # Runtime requirements
