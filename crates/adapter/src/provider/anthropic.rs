@@ -235,8 +235,10 @@ impl AnthropicProviderBuilder {
     }
 
     /// Trusts `der`, a DER-encoded certificate, in addition to the operating
-    /// system's roots: for a corporate CA the system store lacks, or a test
-    /// server's own certificate.
+    /// system's roots, or to the certificates `SSL_CERT_FILE` and
+    /// `SSL_CERT_DIR` name where those replace them (see *Certificate
+    /// variables* in the README): for a corporate CA the system store
+    /// lacks, or a test server's own certificate.
     ///
     /// The default transport only; see
     /// [`build_with_service`](Self::build_with_service).

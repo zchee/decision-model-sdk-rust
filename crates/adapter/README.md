@@ -26,7 +26,7 @@ adapter needs neither the SDK's transport nor its derive.
 
 | Feature | Default | What it does |
 | --- | --- | --- |
-| `openai` | on | `OpenAiProvider`, `ProviderName::OpenAi` and the default transport (hyper-util over hyper-rustls, trust anchors from the operating system). |
+| `openai` | on | `OpenAiProvider`, `ProviderName::OpenAi` and the default transport (hyper-util over hyper-rustls, trust anchors from the operating system, or the certificates `SSL_CERT_FILE` and `SSL_CERT_DIR` name where those replace them: see [Providers](#providers)). |
 | `anthropic` | on | `AnthropicProvider`, `ProviderName::Anthropic` and the default transport. |
 | `gemini` | on | `GeminiProvider`, `ProviderName::Gemini` and the default transport. |
 | `tracing` | on | The adapter's own events, and the SDK's retry line: the feature also turns on the SDK's `tracing` feature (see [Logging](#logging)). Without it, every event is compiled out. |
@@ -200,7 +200,7 @@ connection pool. The three builders are `Clone` too. `ProviderName` parses from 
 | `max_tokens(u32)` | - | yes | - | 4096; 0 is refused |
 | `timeout(Duration)` | yes | yes | yes | 600 s for each whole attempt; zero is refused |
 | `max_response_bytes(usize)` | yes | yes | yes | 16 MiB, the SDK's value; 0 is refused |
-| `add_root_certificate(der)` | yes | yes | yes | none; a certificate is added to the platform's roots and never replaces them; the default transport only |
+| `add_root_certificate(der)` | yes | yes | yes | none; a certificate is added to the platform's roots, or to the certificates `SSL_CERT_FILE` and `SSL_CERT_DIR` name where those replace them (see Certificate variables below), and never replaces either; the default transport only |
 | `build()` | yes | yes | yes | the default transport, `Transport` |
 | `build_with_service(service)` | yes | yes | yes | the caller's HTTP service in place of `Transport` |
 

@@ -276,7 +276,9 @@ impl OpenAiProviderBuilder {
     }
 
     /// Trusts `der`, a DER-encoded certificate, in addition to the operating
-    /// system's roots, never instead of them.
+    /// system's roots, or to the certificates `SSL_CERT_FILE` and
+    /// `SSL_CERT_DIR` name where those replace them (see *Certificate
+    /// variables* in the README), never instead of them.
     ///
     /// The default transport only; see
     /// [`build_with_service`](Self::build_with_service).

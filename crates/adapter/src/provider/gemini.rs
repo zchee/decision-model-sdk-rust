@@ -150,7 +150,9 @@ impl GeminiProviderBuilder {
     }
 
     /// Trusts the DER-encoded certificate `der` in addition to the operating
-    /// system's roots, which it never replaces.
+    /// system's roots, or to the certificates `SSL_CERT_FILE` and
+    /// `SSL_CERT_DIR` name where those replace them (see *Certificate
+    /// variables* in the README), which it never replaces.
     ///
     /// The default transport only:
     /// [`build_with_service`](Self::build_with_service) refuses a builder
